@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -140,10 +140,10 @@ Read these in parallel:
 
 1. **Daily caches** — `.workflow_artifacts/memory/daily/<date>.md` for each day in the range. These are the primary source — they contain completed work, unfinished carry-forwards, decisions, and git summaries.
 
-2. **Session files** — use the shared helper `__QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py`
+2. **Session files** — use the shared helper `${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py`
    with `--lower-bound-source weekly` to enumerate session files in scope:
    ```
-   python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py \
+   python3 ${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py \
      --window <monday>..<saturday> \
      --lower-bound-source weekly
    ```
@@ -266,7 +266,7 @@ Where `WNN` is the ISO week number (e.g., `2026-W12`). Create the `.workflow_art
 Before Step 5 (Present to the user), reconcile the week's rollup — never on a hardcoded
 line number, always immediately before this skill's own final report step.
 
-Run `python3 __QUOIN_HOME__/scripts/verify_claims.py --reconcile-tasks --project-root
+Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --reconcile-tasks --project-root
 <project-root>` (live gh). Before asserting any task "completed" or "merged" in the
 `## Completed Work` section, confirm the reconcile table agrees (`finalized: true` or
 `pr: MERGED`) — never assert completion from the daily-cache narrative alone.
@@ -287,7 +287,7 @@ Then ask:
 
 > "Want me to capture any lessons from this week?"
 
-If yes, append to `.workflow_artifacts/memory/lessons-learned.md` by piping each entry into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed).
+If yes, append to `.workflow_artifacts/memory/lessons-learned.md` by piping each entry into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed).
 
 ## Handling sparse data
 

@@ -16,7 +16,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 # ── Fixture paths ─────────────────────────────────────────────────────────────
 
@@ -223,13 +222,3 @@ def test_bad_path_field_fails():
     )
 
 
-def test_installer_deploys_validator_next_to_generator():
-    """generate_discovery_map.py loads the validator from its own directory on
-    every default run, so the installer must deploy both to core/scripts."""
-    spec = _ilu.spec_from_file_location(
-        "_quoin_installer_vdm_test", _REPO_ROOT / "src" / "quoin" / "installer.py"
-    )
-    mod = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert "generate_discovery_map.py" in mod.CORE_SCRIPTS
-    assert "validate_discovery_map.py" in mod.CORE_SCRIPTS

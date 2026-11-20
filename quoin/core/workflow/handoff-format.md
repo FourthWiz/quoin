@@ -69,7 +69,7 @@ project_root: /abs/project
 profile: Large
 inputs: spec.md | architecture.md
 return: envelope
-spec: __QUOIN_HOME__/core/workflow/handoff-format.md
+spec: ${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md
 [/quoin-handoff]
 <task-specific prose, unchanged>
 ```
@@ -228,4 +228,4 @@ Clamps above).
 
 ## Reference
 
-The checkable-rule table (`H-01` through `H-21`) and the rule interaction cascade move to a companion file: `__QUOIN_HOME__/core/workflow/handoff-format-reference.md`.
+The checkable-rule table (`H-01` through `H-21`) and the rule interaction cascade move to a companion file: `${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format-reference.md`.

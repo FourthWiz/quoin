@@ -16,7 +16,6 @@ Run from project root:
 """
 
 import glob
-import os
 import re
 import subprocess
 import sys
@@ -356,19 +355,6 @@ def test_resolver_grandfathers_each_inflight_task_per_production_shape(snapshot_
 # ---------------------------------------------------------------------------
 # Case (f): install.sh deploys path_resolve.py
 # ---------------------------------------------------------------------------
-
-
-def test_install_sh_lists_path_resolve():
-    """installer.py DEPLOYED_SCRIPTS must include path_resolve.py."""
-    import sys as _sys
-    _sys.path.insert(0, str(PROJECT_ROOT / "src"))
-    from quoin import installer  # noqa: PLC0415
-
-    assert "path_resolve.py" in installer.DEPLOYED_SCRIPTS, (
-        "installer.DEPLOYED_SCRIPTS does not contain 'path_resolve.py'. "
-        "The Python installer (which replaced the install.sh for-loop) must include "
-        "path_resolve.py in its DEPLOYED_SCRIPTS constant."
-    )
 
 
 # ---------------------------------------------------------------------------

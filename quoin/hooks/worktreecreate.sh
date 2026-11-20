@@ -67,14 +67,11 @@ AUDIT="$AUDIT_DIR/worktree-hook-audit.log"
 mkdir -p "$AUDIT_DIR" 2>/dev/null || true
 
 # ── resolve nested git root ───────────────────────────────────────────────────
-# Find the git_root_for_dispatch.py script (deployed next to this hook or in scripts/)
+# Find git_root_for_dispatch.py in the scripts/ folder next to this hook's folder
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 GIT_ROOT_SCRIPT=""
 
-# Try the deployed scripts location first
-if [[ -f "$HOME/.claude/scripts/git_root_for_dispatch.py" ]]; then
-    GIT_ROOT_SCRIPT="$HOME/.claude/scripts/git_root_for_dispatch.py"
-elif [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/../scripts/git_root_for_dispatch.py" ]]; then
+if [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/../scripts/git_root_for_dispatch.py" ]]; then
     GIT_ROOT_SCRIPT="$(cd "$SCRIPT_DIR/../scripts" && pwd)/git_root_for_dispatch.py"
 fi
 

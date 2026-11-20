@@ -9,19 +9,26 @@ Eleven cases, lettered per the plan: (a), (b), (b2), (c), (d), (e), (f), (g),
 """
 import argparse
 import json
-from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-QUOIN_SRC = REPO_ROOT / "quoin"
 
 from quoin.cli import _autocompact_window_type, _validate_autocompact_args  # noqa: E402
 from quoin.installer import (  # noqa: E402
     _clear_env,
     _merge_env,
-    deploy_hooks,
+    apply_autocompact_env,
 )
+
+
+def _install(dest, autocompact_pct=None, autocompact_window=None, clear_autocompact_env=False):
+    """What `quoin install` does to settings.json for the autocompact flags."""
+    settings = dest / "settings.json"
+    if not settings.exists():
+        settings.write_text("{}\n")
+    apply_autocompact_env(
+        dest, pct=autocompact_pct, window=autocompact_window, clear=clear_autocompact_env
+    )
 
 
 def _make_args(pct=None, window=None, clear=False) -> argparse.Namespace:
@@ -38,7 +45,7 @@ class TestAutocompactEnvInstall:
     def test_default_install_writes_no_env_key(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest)
+        _install(dest)
         settings = json.loads((dest / "settings.json").read_text())
         assert "env" not in settings, (
             f"Expected no 'env' key on a default install, got {settings.get('env')!r}"
@@ -75,7 +82,7 @@ class TestAutocompactEnvInstall:
     def test_opt_in_both_values_written_as_strings(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75, autocompact_window=500000)
+        _install(dest, autocompact_pct=75, autocompact_window=500000)
         settings = json.loads((dest / "settings.json").read_text())
         env = settings["env"]
         assert env == {
@@ -89,7 +96,7 @@ class TestAutocompactEnvInstall:
     def test_pct_only_leaves_window_key_absent(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
+        _install(dest, autocompact_pct=75)
         env = json.loads((dest / "settings.json").read_text())["env"]
         assert env == {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"}
         assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in env
@@ -97,7 +104,7 @@ class TestAutocompactEnvInstall:
     def test_window_only_leaves_pct_key_absent(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_window=500000)
+        _install(dest, autocompact_window=500000)
         env = json.loads((dest / "settings.json").read_text())["env"]
         assert env == {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "500000"}
         assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in env
@@ -106,9 +113,9 @@ class TestAutocompactEnvInstall:
     def test_opt_in_idempotent_on_reinstall(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75, autocompact_window=500000)
+        _install(dest, autocompact_pct=75, autocompact_window=500000)
         first = json.loads((dest / "settings.json").read_text())["env"]
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75, autocompact_window=500000)
+        _install(dest, autocompact_pct=75, autocompact_window=500000)
         second = json.loads((dest / "settings.json").read_text())["env"]
         assert first == second
         assert len(second) == 2
@@ -117,16 +124,16 @@ class TestAutocompactEnvInstall:
     def test_default_reinstall_stays_env_free(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest)
-        deploy_hooks(QUOIN_SRC, dest)
+        _install(dest)
+        _install(dest)
         settings = json.loads((dest / "settings.json").read_text())
         assert "env" not in settings
 
     def test_default_reinstall_after_opt_in_preserves_it(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
-        deploy_hooks(QUOIN_SRC, dest)  # plain reinstall, no autocompact flags
+        _install(dest, autocompact_pct=75)
+        _install(dest)  # plain reinstall, no autocompact flags
         env = json.loads((dest / "settings.json").read_text())["env"]
         assert env == {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"}
 
@@ -135,7 +142,7 @@ class TestAutocompactEnvInstall:
         dest = tmp_path / ".claude"
         dest.mkdir()
         (dest / "settings.json").write_text(json.dumps({"env": {"FOO": "bar"}}))
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
+        _install(dest, autocompact_pct=75)
         env = json.loads((dest / "settings.json").read_text())["env"]
         assert env["FOO"] == "bar"
         assert env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "75"
@@ -146,7 +153,7 @@ class TestAutocompactEnvInstall:
         (dest / "settings.json").write_text(
             json.dumps({"env": {"FOO": "bar", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"}})
         )
-        deploy_hooks(QUOIN_SRC, dest, clear_autocompact_env=True)
+        _install(dest, clear_autocompact_env=True)
         env = json.loads((dest / "settings.json").read_text())["env"]
         assert env == {"FOO": "bar"}
 
@@ -154,8 +161,8 @@ class TestAutocompactEnvInstall:
     def test_clear_removes_only_quoin_keys(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75, autocompact_window=500000)
-        deploy_hooks(QUOIN_SRC, dest, clear_autocompact_env=True)
+        _install(dest, autocompact_pct=75, autocompact_window=500000)
+        _install(dest, clear_autocompact_env=True)
         settings = json.loads((dest / "settings.json").read_text())
         assert "env" not in settings  # emptied dict is dropped entirely
 
@@ -198,19 +205,23 @@ class TestAutocompactEnvInstall:
     def test_env_merge_does_not_disturb_other_sections(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
+        before = {
+            "hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "x"}]}]},
+            "permissions": {"deny": ["Bash(rm -rf:*)"]},
+            "model": "opus",
+        }
+        (dest / "settings.json").write_text(json.dumps(before))
+        _install(dest, autocompact_pct=75)
         settings = json.loads((dest / "settings.json").read_text())
-        stanza_count = sum(len(v) for v in settings["hooks"].values())
-        assert stanza_count == 9
-        assert "skillOverrides" in settings
-        assert "deny" in settings["permissions"]
+        assert settings.pop("env") == {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"}
+        assert settings == before
 
     # (j) non-dict env tolerance
     def test_opt_in_tolerates_null_env_and_warns(self, tmp_path, capsys):
         dest = tmp_path / ".claude"
         dest.mkdir()
         (dest / "settings.json").write_text(json.dumps({"env": None}))
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
+        _install(dest, autocompact_pct=75)
         settings = json.loads((dest / "settings.json").read_text())
         assert settings["env"] is None  # byte-unchanged value
         err = capsys.readouterr().err
@@ -220,7 +231,7 @@ class TestAutocompactEnvInstall:
         dest = tmp_path / ".claude"
         dest.mkdir()
         (dest / "settings.json").write_text(json.dumps({"env": "FOO=bar"}))
-        deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
+        _install(dest, autocompact_pct=75)
         settings = json.loads((dest / "settings.json").read_text())
         assert settings["env"] == "FOO=bar"
         err = capsys.readouterr().err

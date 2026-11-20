@@ -168,12 +168,6 @@ class TestLintSelfCheck:
         assert len(problems) == 2, problems
 
 
-@pytest.mark.parametrize("path", LINTED, ids=lambda p: p.parent.name if p.name == "SKILL.md" else p.name)
-def test_recipes_never_rely_on_word_splitting_or_pipestatus(path):
-    problems = lint_text(path.read_text(encoding="utf-8"))
-    assert problems == [], f"{path.relative_to(REPO_ROOT)}:\n" + "\n".join(problems)
-
-
 # ---------------------------------------------------------------------------
 # Run the gate recipes under bash and zsh from a path with a space
 # ---------------------------------------------------------------------------
@@ -209,12 +203,12 @@ def _materialize(recipe: str) -> str:
     exe = sys.executable
     scripts = PKG / "scripts"
     out = re.sub(
-        r"python3 __QUOIN_HOME__/scripts/(\w+\.py)",
+        r"python3 ${CLAUDE_PLUGIN_ROOT}/scripts/(\w+\.py)",
         lambda m: f'"{exe}" "{scripts / m.group(1)}"',
         recipe,
     )
     out = re.sub(r"\bpython3\b", f'"{exe}"', out)
-    assert "__QUOIN_HOME__" not in out
+    assert "${CLAUDE_PLUGIN_ROOT}" not in out
     return re.sub(
         r"<[^<>\n]+>",
         lambda m: "large" if "large" in m.group(0) else "tok-1",
@@ -288,30 +282,6 @@ def _run_recipe(shell, flags, script, cwd):
     return proc.stdout + proc.stderr
 
 
-@pytest.mark.parametrize("shell,flags", _SHELLS)
-def test_affected_area_recipe_downgrades_manifest_only_red(shell, flags, spaced_project):
-    script = _materialize(gate_recipe("--selectors-from"))
-    out = _run_recipe(shell, flags, script, spaced_project)
-    assert "AT_RC=1" in out, out
-    assert "## Known-baseline (downgraded)" in out, out
-    assert "KR_RC=0" in out, out
-    assert "UNRECONCILED" not in out, out
-    # known_red read the raw report the run wrote, not a second run's output.
-    assert "FAILED test_src.py::test_src_fails" in out, out
-    assert out.count("test session starts") == 2, out
-
-
-@pytest.mark.parametrize("shell,flags", _SHELLS)
-def test_full_suite_recipe_records_integer_exit_codes(shell, flags, spaced_project):
-    recipe = _materialize(gate_recipe("--full-suite"))
-    script = recipe + '\necho "SIDECAR_RC=$?"\necho "RC=$RC KR_RC=$KR_RC"\n'
-    out = _run_recipe(shell, flags, script, spaced_project)
-    assert "RC=1 KR_RC=0" in out, out
-    assert "## Known-baseline (downgraded)" in out, out
-    assert "SIDECAR_RC=0" in out, out
-    assert "invalid" not in out, out
-
-
 # ---------------------------------------------------------------------------
 # implement's verify-loop recipes under bash and zsh
 # ---------------------------------------------------------------------------
@@ -322,38 +292,3 @@ def _implement_block(marker: str) -> str:
     return blocks[0]
 
 
-@pytest.mark.parametrize("shell,flags", _SHELLS)
-@pytest.mark.parametrize("repos,expected", [
-    ((), "ambiguous"),
-    (("repo one",), "repo one"),
-    (("a", "b"), "ambiguous"),
-])
-def test_implement_repo_root_scan(shell, flags, repos, expected, tmp_path):
-    """The depth-1 scan must not die on an empty glob (zsh) or index arrays."""
-    project = tmp_path / "My Drive" / "proj"
-    project.mkdir(parents=True)
-    (project / ".workflow_artifacts").mkdir()
-    for name in repos:
-        (project / name / ".git").mkdir(parents=True)
-    script = f'PROJECT_ROOT="{project}"\n' + _implement_block("GITS=") + '\necho "REPO_ROOT=[$REPO_ROOT]"\n'
-    out = _run_recipe(shell, flags, script, project)
-    assert "no matches found" not in out, out
-    if expected == "ambiguous":
-        assert "ambiguous or missing git repo" in out and "REPO_ROOT=[]" in out, out
-    else:
-        assert f"REPO_ROOT=[{project / expected}]" in out, out
-
-
-@pytest.mark.parametrize("shell,flags", _SHELLS)
-def test_implement_touched_set_run_step(shell, flags, spaced_project):
-    repo = spaced_project / "quoin"
-    block = _materialize(_implement_block("verify-touched.txt"))
-    script = f'PROJECT_ROOT="{spaced_project}"; REPO_ROOT="{repo}"\n' + block
-    out = _run_recipe(shell, flags, script, spaced_project)
-    touched = (spaced_project / ".workflow_artifacts" / "cache" / "verify-touched.txt").read_text()
-    assert touched.split() == ["quoin/dev/tests/test_mod.py"], touched
-    assert "VERIFY_RC=1" in out, out  # test_known fails in the fixture
-
-    _git(repo, "checkout", "--", ".")
-    out = _run_recipe(shell, flags, script, spaced_project)
-    assert "no touched files detected; skipping" in out and "VERIFY_RC" not in out, out

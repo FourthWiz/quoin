@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -217,7 +217,7 @@ shared helper script is unavailable for any reason, also skip Step 0a and fall t
 
 1. Run (dry-run — the script makes no writes for this flag):
    ```bash
-   python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py --reconcile-covered --project-root <root>
+   python3 ${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py --reconcile-covered --project-root <root>
    ```
    Parse two labelled lists from stdout: `COVERED:` (sessions with `end_of_day_due: yes` whose
    slug — via the same guarded base-slug derivation `find_orphans()` uses — is already present in
@@ -244,7 +244,7 @@ shared helper script is unavailable for any reason, also skip Step 0a and fall t
    here is never re-surfaced as an orphan later in the same `--recover-orphans` invocation.
 
 **One-time validation before relying on this by default:** run
-`python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py --reconcile-covered
+`python3 ${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py --reconcile-covered
 --project-root <root>` (dry-run, no writes) against the real backlog and eyeball the
 `COVERED:`/`UNCOVERED:` partition, confirming `-orchestrator.md` files classify correctly. From
 the same pass, count the `UNCOVERED:` files that are phase/stage-suffixed (`-review`,
@@ -265,7 +265,7 @@ residual visible.
    `json-discovery-map-review`. This prevents false-positive "covered" verdicts caused by
    prefix collisions.
 4. Partition orphans by file date: **RECENT** (file_date >= today - 7 days) and **HISTORICAL**
-   (older). The shared helper `__QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py`'s
+   (older). The shared helper `${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py`'s
    `find_orphans()` implements this procedure exactly.
 5. If no orphans → print "No orphaned sessions detected." then proceed with normal EOD (Step 1).
 6. If RECENT orphans → print a numbered list (file_date + slug for each), then prompt:
@@ -288,7 +288,7 @@ Write session-state files in v3 format per the §5.4 Class A writer mechanism (r
 
 **If there is active work in this session**, create or update a session file at `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`.
 
-The session file follows the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule); rewrite the whole file and keep the fields and accumulated lists the schema says to preserve.
+The session file follows the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule); rewrite the whole file and keep the fields and accumulated lists the schema says to preserve.
 - Status: the active task's status. Current stage: that task's stage token. Next command: unchanged.
 
 ### Step 2: Update git-log.md
@@ -296,7 +296,7 @@ The session file follows the fixed schema in `__QUOIN_HOME__/memory/session-sche
 **First, compute this run's processing window (once, shared with Step 3).** Run the shared helper — this is the AUTHORITATIVE, single invocation for the whole `/end_of_day` run; do not hand-compute the window and do not run it a second time in Step 3:
 
 ```bash
-python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py --lower-bound-source daily --project-root <root> --show-window --include-finalized-marked
+python3 ${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py --lower-bound-source daily --project-root <root> --show-window --include-finalized-marked
 ```
 
 Parse the first output line `WINDOW: <lower_bound>..<today>` for `lower_bound` and `today` — the script derives both itself, so no manual date arithmetic is required. **Stdout parse rule:** lines prefixed neither `WINDOW:` nor `FINALIZED:` are `script_file_list`, reused in Step 3. Lines prefixed `FINALIZED: <path>` are `finalized_marked` — in-window sessions that a prior `/end_of_task` run already flipped to `end_of_day_due: no` via its `--flip-finalized-task` step (see end_of_task SKILL.md Sub-phase B), but which still belong in THIS run's "Completed today" digest. Do NOT fold `FINALIZED:` lines into `script_file_list`; the prefix makes them invalid paths.
@@ -480,7 +480,7 @@ Check for insights files `daily/insights-<DATE>.md` for every DATE in the proces
 
 **Pass 3 — Tier 3 check:**
 - Any entry with `Applies to: workflow` or type `workflow-friction` is a Tier 3 candidate
-- Append those to `.workflow_artifacts/memory/workflow-suggestions.md` through `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/workflow-suggestions.md"` (stdin, quoted heredoc; no prior Read) in this format:
+- Append those to `.workflow_artifacts/memory/workflow-suggestions.md` through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/workflow-suggestions.md"` (stdin, quoted heredoc; no prior Read) in this format:
   ```markdown
   ## <date> — <source-task>
   **Suggestion:** <what should change in the workflow>
@@ -511,7 +511,7 @@ AskUserQuestion(
 )
 ```
 
-After the user responds, append confirmed entries to `.workflow_artifacts/memory/lessons-learned.md` through `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (feed the entry on stdin with a quoted heredoc, `<<'ENTRY'` … `ENTRY` on their own lines, as in `/capture_insight`; no prior Read needed, never the Write/Edit tools):
+After the user responds, append confirmed entries to `.workflow_artifacts/memory/lessons-learned.md` through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (feed the entry on stdin with a quoted heredoc, `<<'ENTRY'` … `ENTRY` on their own lines, as in `/capture_insight`; no prior Read needed, never the Write/Edit tools):
 
 ```markdown
 ## <date> — <task-name>
@@ -602,11 +602,11 @@ Also: if any tasks were rolled back today, or if the critic-revise loop ran more
 Run ground-truth reconciliation before composing the Step 5 report — never on a hardcoded
 line number, always immediately before this skill's own final report step.
 
-1. Run `python3 __QUOIN_HOME__/scripts/verify_claims.py --check-side-effects --skill end_of_day
+1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --check-side-effects --skill end_of_day
    --project-root <project-root>` (side-effect predicates: daily cache written and non-empty;
    every in-scope session flipped `end_of_day_due: no`; resume-cookie present and unexpired;
    lessons-learned prune handled if oversized).
-2. Run `python3 __QUOIN_HOME__/scripts/verify_claims.py --reconcile-tasks --claims-file
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --reconcile-tasks --claims-file
    <the manifest this skill's own §V Claims manifest step wrote> [--gh-json-file <path> if
    available]` — the in-session model path (live gh, NOT `--finalized-only`; that flag is
    reserved for the SessionEnd hook backstop).

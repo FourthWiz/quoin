@@ -1,7 +1,7 @@
 ---
 generated_by: build_preambles.py
 kind: full
-path: __QUOIN_HOME__/skills/revise-fast/preamble.md
+path: ${CLAUDE_PLUGIN_ROOT}/skills/revise-fast/preamble.md
 source_files:
 - quoin/memory/format-kit.md
 - quoin/memory/glossary.md
@@ -38,7 +38,7 @@ Three rules for situations where the primitive choice is non-obvious:
 This file is the abbreviation whitelist for all quoin skills. It extends `terse-rubric.md`'s "never use abbreviations the reader might not expand correctly" rule: entries here are the *approved* abbreviations; the rubric's rule prevents skills from inventing new ones inline.
 
 **Architecture reference:** artifact-format-architecture v3 §5.2.
-**Deployed copy:** `__QUOIN_HOME__/memory/glossary.md` — overwritten on re-install.
+**Deployed copy:** `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` — overwritten on re-install.
 **Source:** `quoin/memory/glossary.md` (hand-edited Tier 1; do not apply terse-style compression).
 
 ---

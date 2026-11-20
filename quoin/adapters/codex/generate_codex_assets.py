@@ -175,7 +175,6 @@ The generator is optional; `discover` MUST NOT fail if it errors.
 - Key validation commands:
   ```
   python3 -m pytest quoin/dev/tests/
-  python3 quoin/scripts/build_preambles.py --check
   python3 quoin/adapters/codex/verify_codex_readiness.py --project-root .
   python3 quoin/adapters/codex/smoke_codex_workflow.py --project-root .
   ```

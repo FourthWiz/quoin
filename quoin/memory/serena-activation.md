@@ -21,7 +21,7 @@ probe is the only deterministic in-skill detection method. The probe also serves
 load step, so after a successful probe the tools are callable immediately.
 
 **Install-time filesystem pre-check** (used by `/init_workflow` only, not at task start):
-- Plugin `.mcp.json`: `__QUOIN_HOME__/plugins/marketplaces/claude-plugins-official/external_plugins/serena/.mcp.json`
+- Plugin `.mcp.json`: `${CLAUDE_PLUGIN_ROOT}/plugins/marketplaces/claude-plugins-official/external_plugins/serena/.mcp.json`
 - `uvx` on PATH: `command -v uvx`
 If the `.mcp.json` is present and `uvx` is available but the ToolSearch probe fails, Serena
 is installed but not yet loaded — a session restart is required.

@@ -1,6 +1,6 @@
 # Run — reference
 
-*Reference for `/run`, deployed as `__QUOIN_HOME__/skills/run/reference.md`.
+*Reference for `/run`, deployed as `${CLAUDE_PLUGIN_ROOT}/skills/run/reference.md`.
 `/run` reads this file once, with one Read, only when SKILL.md points here: a
 flag or tag beyond the core ones, an isolation result other than `mode: main`,
 a non-Opus session, a lesson to record, or an escalation. Step numbers, phase
@@ -11,7 +11,7 @@ markers and artifacts of SKILL.md apply unchanged.*
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
 `[from-hard]`, `hard:`, `strict:`, `small:`, `parallel:`, `r0:`, `r1:`, `r2:`, `no-switch:`, `isolate:` and the like; a leading `[no-redispatch]` is
-stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
+stripped); when handing off to `run_hard`, always pass the original
 input unchanged apart from removing `hard:`, `r0:`, `r1:` and `r2:` (and `isolate:`),
 except the Escalation switch, which passes its own input.
 
@@ -82,7 +82,7 @@ except the Escalation switch, which passes its own input.
 ## Isolation modes
 
 Step 1 item 2's claim, in full:
-`python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
 (`<repo>` is the main checkout, never `WT`), plus `--isolate` under
 `ISOLATE`. Set `WT` to the `worktree` it prints. `LEAN`/`MEMORY`: no claim,
 `WT` is the checkout.
@@ -106,17 +106,14 @@ task creates the branch in each repo when its first stage there starts (Step
 and the branch. Both stay; `/workspace teardown <task>` removes them after its
 safety checks.
 
-## Implementer tier guard (dispatch)
+## Opus implementer (dispatch)
 
-SKILL.md's guard sent you here because the session is not on Opus
-(`DISPATCH|<tier>`: haiku, sonnet, fable, mythos or unknown; tiers above Opus
-dispatch too). Steps 5–6 and the Step 7 fix pass always run on **opus**.
+The skill itself runs on Opus, so Steps 5–6 normally run inline. A multi-stage
+`PARALLEL` wave sends you here: each stage gets its own Opus implementer.
 Everything else (Steps 0–4, the review spawn, Step 8 and every user question)
-stays in this session, so discovery, the context pack and the review keep
-working: never wrap the whole of `/run` in one subagent. On the plain route
-the guard runs before its step 1.
+stays in this session: never wrap the whole of `/run` in one subagent.
 
-When the implementer tier guard dispatches, you write `implement` before the
+When you dispatch an implementer, you write `implement` before the
 spawn and `review-fixes` before sending it the findings; it writes none. (The
 phase report counts a subagent's messages under the phase that spawned it, so
 fixes made through that implementer show up as `implement`.)
@@ -189,7 +186,7 @@ Step 8 item 3, unless `LEAN`: if the task surfaced a reusable gotcha, record one
 (`## <date> — <task>`, then **What happened**, **Lesson**, **Applies to**).
 Skip it if an entry for this task is already there
 (`grep -q "^## .* — <task>$"`). Otherwise write it to a temp file and run
-`python3 __QUOIN_HOME__/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task> --no-strict-attrib`
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task> --no-strict-attrib`
 (`--no-strict-attrib` so entries from this project's own earlier tasks
 count). Exit 1 means an existing entry is near-verbatim the same (it prints
 that entry's slug): skip the append and name it in the report, or, if this
@@ -198,7 +195,7 @@ task adds something the old entry lacks, append with a first line
 so also skip a lesson you already saw, reworded, in Step 1's relevant
 entries. Any other exit, or a missing script, means append: pipe the temp
 file into
-`python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
 
 For the discovery-dirty marker (written by Step 8's `run_record.py` call), `discovery_dirty.py` holds
 the rules: a top-level directory (not a dot-directory) or a package added,

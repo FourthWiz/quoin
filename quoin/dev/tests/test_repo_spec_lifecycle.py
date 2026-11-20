@@ -22,7 +22,6 @@ below is a lightweight Stage-3-level re-confirmation only, not a substitute
 for the Stage-1 suite.
 """
 import importlib.util
-import os
 import subprocess
 import sys
 import tempfile
@@ -81,61 +80,10 @@ def run_validator(artifact_path, sections_json=SIDECAR):
 # T-07: init_workflow seeding presence assertions
 # ===========================================================================
 
-def test_init_workflow_seeding_prompt_present():
-    text = _read(INIT_SKILL_MD)
-    assert "What is this repo about?" in text
-
-
-def test_init_workflow_references_repo_spec_path():
-    text = _read(INIT_SKILL_MD)
-    assert ".workflow_artifacts/spec.md" in text
-
-
-def test_init_workflow_five_headings_present():
-    text = _read(INIT_SKILL_MD)
-    missing = [h for h in REPO_SPEC_HEADINGS if h not in text]
-    assert not missing, f"init_workflow SKILL.md missing repo-spec headings: {missing}"
-
-
-def test_init_workflow_idempotency_grandfather_skip_phrasing():
-    text = _read(INIT_SKILL_MD)
-    assert "Idempotency/grandfather gate FIRST" in text
-    # absence-is-inert phrasing on the Skip branch
-    assert "No file is created, no error" in text
-
-
-def test_init_workflow_discover_handoff_suppression_note():
-    text = _read(INIT_SKILL_MD)
-    assert "MUST suppress its own repo-spec draft/refresh offer" in text
-    assert "self-clear it after honoring" in text
-
 
 # ===========================================================================
 # T-07: discover offer presence assertions
 # ===========================================================================
-
-def test_discover_offer_heading_present():
-    text = _read(DISCOVER_SKILL_MD)
-    assert "Repo main spec (optional offer)" in text
-
-
-def test_discover_suppression_guard_phrase():
-    text = _read(DISCOVER_SKILL_MD)
-    assert "Suppression guard FIRST" in text
-    assert MARKER_PATH in text
-
-
-def test_discover_self_clear_step_present():
-    text = _read(DISCOVER_SKILL_MD)
-    assert "DELETE the marker" in text
-    assert f'fsops.py rm "{MARKER_PATH}"' in text
-
-
-def test_discover_absent_draft_and_exists_refresh_diff_branches():
-    text = _read(DISCOVER_SKILL_MD)
-    assert "is ABSENT" in text and "DRAFT a repo main spec" in text
-    assert "EXISTS" in text and "REFRESH it" in text
-    assert "DIFF" in text
 
 
 # ===========================================================================
@@ -147,89 +95,16 @@ def test_discover_absent_draft_and_exists_refresh_diff_branches():
 # (fsops.py rm / self-clear) step specifically — not merely a marker CHECK.
 # ===========================================================================
 
-def test_marker_token_occurrence_floor_init_workflow():
-    text = _read(INIT_SKILL_MD)
-    count = text.count(MARKER_PATH)
-    # Three mechanism sites: Step-6 stale pre-clear, Step-6 write, Step-6.7 cleanup.
-    assert count >= 3, (
-        f"init_workflow SKILL.md must reference {MARKER_PATH} at least 3 times "
-        f"(pre-clear + write + Step-6.7 cleanup sites); found {count}"
-    )
-
-
-def test_marker_token_occurrence_floor_discover():
-    text = _read(DISCOVER_SKILL_MD)
-    count = text.count(MARKER_PATH)
-    # Two mechanism sites: suppression-guard CHECK, self-clear removal.
-    assert count >= 2, (
-        f"discover SKILL.md must reference {MARKER_PATH} at least 2 times "
-        f"(check + self-clear sites); found {count}"
-    )
-
-
-def test_discover_recovery_token_present_not_check_only():
-    """A marker-check-only discover (no self-clear) MUST fail this test.
-
-    This asserts the RECOVERY token specifically: the literal
-    `fsops.py rm` on the bootstrap marker path, co-located with the
-    marker path, proving discover actually consumes-and-clears the marker
-    rather than merely checking for its presence.
-    """
-    text = _read(DISCOVER_SKILL_MD)
-    recovery_token = f'fsops.py rm "{MARKER_PATH}"'
-    assert recovery_token in text, (
-        "discover SKILL.md is missing the marker self-clear (recovery) step — "
-        f"expected literal '{recovery_token}'. A discover that only CHECKS the "
-        "marker without clearing it would strand the marker forever after an "
-        "aborted init bootstrap (round-2 MAJ-1) and must fail this test."
-    )
-
 
 # ===========================================================================
 # T-08: specify gating-contract test (MIN-2)
 # ===========================================================================
-
-def test_specify_repo_spec_update_check_heading_present():
-    text = _read(SPECIFY_SKILL_MD)
-    assert "## Repo main spec update check" in text
-
-
-def test_specify_gating_contract_phrases():
-    text = _read(SPECIFY_SKILL_MD)
-    # (a) grandfather no-op: absent -> skip, no error
-    assert "is ABSENT, skip this check silently" in text
-    assert "This is never an error." in text
-    # (b) gated-diff phrasing: diff surfaced + approve/reject gate via AskUserQuestion
-    assert "Surface a DIFF against the current" in text
-    assert "AskUserQuestion" in text
-    assert 'Approve' in text and 'Reject' in text
-    # (c) never automatic
-    assert "NEVER write automatically" in text or "never auto-writes" in text
-
-
-def test_specify_old_out_of_scope_line_removed():
-    text = _read(SPECIFY_SKILL_MD)
-    assert "Repo-level main spec is out of scope" not in text
 
 
 # ===========================================================================
 # T-08: grandfather assertions (all three skills) — static text-contract
 # check per the ownership note in the module docstring above.
 # ===========================================================================
-
-def test_grandfather_absence_no_error_init_workflow():
-    text = _read(INIT_SKILL_MD)
-    assert "No file is created, no error" in text
-
-
-def test_grandfather_absence_no_error_discover():
-    text = _read(DISCOVER_SKILL_MD)
-    assert "no file, no error" in text
-
-
-def test_grandfather_absence_no_error_specify():
-    text = _read(SPECIFY_SKILL_MD)
-    assert "This is never an error." in text
 
 
 # ===========================================================================

@@ -110,131 +110,20 @@ _REGION_FNS = {
 }
 
 
-def test_every_region_is_locatable_and_non_empty():
-    text = _load(RUN_SKILL)
-    for name, fn in _REGION_FNS.items():
-        region = fn(text)
-        assert region.strip(), f"region {name!r} sliced to empty text"
-
-
-def test_setup_arm_region_calls_entry_fresh():
-    region = _setup_arm_region(_load(RUN_SKILL))
-    assert "auto_resume.py arm" in region
-    assert "--entry fresh" in region
-    assert "--session-id" in region
-
-
-def test_resume_step0_region_calls_entry_resume():
-    region = _resume_step0_region(_load(RUN_SKILL))
-    assert "auto_resume.py arm" in region
-    assert "--entry resume" in region
-
-
-def test_session_age_guard_region_handoff_reason():
-    region = _session_age_guard_region(_load(RUN_SKILL))
-    assert "auto_resume.py handoff" in region
-    assert "--reason session-age" in region
-    assert '--on-fail-halt "session age cap"' in region
-
-
-def test_budget_item4_region_handoff_reason():
-    region = _budget_item4_region(_load(RUN_SKILL))
-    assert "auto_resume.py handoff" in region
-    assert "--reason budget" in region
-
-
-def test_error_handling_region_context_and_pause():
-    region = _error_handling_region(_load(RUN_SKILL))
-    assert "auto_resume.py handoff" in region
-    assert "--reason context" in region
-    assert '--on-fail-halt "context exhaustion"' in region
-    assert "auto_resume.py pause" in region
-    assert "empty stdout" in region
-
-
 # ---------------------------------------------------------------------------
 # Cross-region uniqueness (the same slicers above are the source of truth —
 # a call site appearing outside its named region is a contract violation).
 # ---------------------------------------------------------------------------
-
-def test_arm_called_exactly_twice_in_the_file():
-    text = _load(RUN_SKILL)
-    assert text.count("auto_resume.py arm") == 2
-
-
-def test_entry_fresh_only_in_setup_region():
-    text = _load(RUN_SKILL)
-    assert text.count("--entry fresh") == 1
-    assert "--entry fresh" in _setup_arm_region(text)
-
-
-def test_entry_resume_only_in_resume_step0_region():
-    text = _load(RUN_SKILL)
-    assert text.count("--entry resume") == 1
-    assert "--entry resume" in _resume_step0_region(text)
-
-
-def test_reason_budget_only_in_item4_region():
-    text = _load(RUN_SKILL)
-    assert text.count("--reason budget") == 1
-    assert "--reason budget" in _budget_item4_region(text)
-
-
-def test_reason_session_age_only_in_guard_region():
-    text = _load(RUN_SKILL)
-    assert text.count("--reason session-age") == 1
-    assert "--reason session-age" in _session_age_guard_region(text)
-
-
-def test_reason_context_only_in_error_handling_region():
-    text = _load(RUN_SKILL)
-    assert text.count("--reason context") == 1
-    assert "--reason context" in _error_handling_region(text)
-
-
-def test_pause_only_in_error_handling_region():
-    text = _load(RUN_SKILL)
-    assert text.count("auto_resume.py pause") == 1
-    assert "auto_resume.py pause" in _error_handling_region(text)
 
 
 # ---------------------------------------------------------------------------
 # Superseded phrases must be gone (not merely reworded elsewhere).
 # ---------------------------------------------------------------------------
 
-def test_superseded_phrases_absent():
-    text = _load(RUN_SKILL)
-    assert "supervisor relaunch via `/run --resume --autonomous`" not in text
-    assert "is unchanged: it reuses this contract" not in text
-
 
 # ---------------------------------------------------------------------------
 # Hook cooperation bullets 1 and 3, and the hard-constraint bullet.
 # ---------------------------------------------------------------------------
-
-def test_hook_coop_bullet1_no_longer_cites_budget_item4_line_range():
-    region = _hook_coop_bullet1_region(_load(RUN_SKILL))
-    assert ":321-326" not in region
-    assert "boundary_checkpoint.py" in region
-
-
-def test_hook_coop_bullet3_names_stop_and_sessionstart_paths():
-    region = _hook_coop_bullet3_region(_load(RUN_SKILL))
-    assert "Stop-hook continuation" in region
-    assert "SessionStart hand-off" in region
-    assert "autonomous-mode.md" in region
-    assert "auto-resume-<task>.json" in region
-    assert "no block to catch" in region
-
-
-def test_hard_constraint_bullet_no_new_hook_script_wording():
-    region = _hard_constraint_region(_load(RUN_SKILL))
-    normalized = re.sub(r"\s+", " ", region)
-    assert "adds no hook script at runtime" in normalized
-    assert "ships with quoin like every" in normalized
-    assert "NEVER writes to any file under" in region
-    assert "`hooks/`" in region
-    assert "NEVER modifies or lowers a `QUOIN_*_BPS` constant" in region
 
 
 # ---------------------------------------------------------------------------

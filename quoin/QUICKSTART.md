@@ -83,34 +83,23 @@ Optionally, `/expand <path> --save` writes the expansion to `<path>.expanded-<ti
 
 Common use cases: reviewing a terse critic response; reading a compressed cache entry while debugging; spot-checking a session-state file.
 
-## Project-scope install (`--scope project`)
+## Install scope
 
-By default, `bash install.sh` installs quoin globally to `~/.claude/` (user scope).
-For an isolated user install, use `pipx install quoin` (recommended over `pip install --user`).
-Use `--scope project` to install into a project's own `.claude/` directory instead:
+`quoin install` (or `bash quoin/install.sh` from a checkout) installs the quoin
+Claude Code plugin at user scope, so it loads in every session, including
+sessions started inside a repository below a multi-repo project folder. Skills
+are named `/quoin:<skill>`. Restart Claude Code after an install or update.
 
-```bash
-bash quoin/install.sh --scope project           # install into <CWD>/.claude/
-bash quoin/install.sh --scope project:/path     # install into /path/.claude/
-```
-
-When to use project scope:
-- You want different skill versions or settings per project
-- You are working in a shared/CI environment without a personal `~/.claude/`
-- You want to isolate quoin skills from other Claude Code extensions
-
-Notes:
-- **Workspace trust:** Claude Code prompts for workspace trust on first open of a project with `.claude/`. Accept the dialog to activate project-scope skills and hooks.
-- **Restart required:** After creating `.claude/` for the first time, restart Claude Code for the new project-scope to take effect.
-- **Skill precedence:** User scope (`~/.claude/skills/`) overrides project scope (`.claude/skills/`) for same-named skills. A prior home install will shadow project skills — run `quoin doctor --scope project` to detect conflicts.
-- **Manual uninstall:** `rm -rf .claude/` removes the project-scope install. The CLAUDE.md quoin section can be removed with the quoin markers at the project root.
+`--scope project` (or `--scope project:/path`) enables the plugin for one
+project folder instead. It then loads only in sessions started in that folder,
+not in sessions started inside a repository below it.
 
 ## Files
 
-- `~/.claude/CLAUDE.md` — short core rules all skills follow (user-level); the full rules are in `~/.claude/memory/workflow-catalog.md`
+- `~/.local/share/quoin/plugin/` — the staged plugin Claude Code loads: skills, hooks, scripts, memory guides
+- `memory/workflow-catalog.md` in the plugin — every workflow rule; the plugin's SessionStart hook adds the short core rules to each session
 - `.workflow_artifacts/` — all workflow artifacts: memory, task plans, session state (gitignored)
 - `.workflow_artifacts/cache/` — auto-maintained code summary cache (knowledge cache)
-- `~/.claude/skills/` — all workflow skill definitions (user-level)
 
 ## Running benchmarks
 

@@ -46,7 +46,7 @@ CAPS_PATTERNS = [
     r"MUST NOT", r"REQUIRED", r"DO NOT", r"IMPORTANT",
 ]
 
-MEMORY_REF_RE = re.compile(r"__QUOIN_HOME__/memory/([A-Za-z0-9_\-./]+\.md)(?:[^\"\n]{0,40}\"([^\"\n]+)\")?")
+MEMORY_REF_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/memory/([A-Za-z0-9_\-./]+\.md)(?:[^\"\n]{0,40}\"([^\"\n]+)\")?")
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 

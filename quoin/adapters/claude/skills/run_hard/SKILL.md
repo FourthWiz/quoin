@@ -47,7 +47,7 @@ sets `NO_SWITCH=true`. Under `FROM_LIGHT`:
   `light-architecture.md` and `pipeline-switch.md` from the task root, and are told the working
   tree may hold a partial implementation to build on.
 - The light run's claim on the checkout is still held. When this run ends (after Phase 6, or on
-  any stop), release it: `python3 __QUOIN_HOME__/scripts/run_isolation.py release --task "<task>"
+  any stop), release it: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_isolation.py release --task "<task>"
   --repo "<the note's claim: repo>"`.
 
 ### Parse `--autonomous` flag (opt-in, default off)
@@ -69,7 +69,7 @@ there is no need to distinguish fresh-vs-resumed at this site:
 
 ```bash
 printf 'task: <task-name>\ntimestamp: <ISO-8601 now>\nautonomous: true\n' \
-  | python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents ".workflow_artifacts/memory/autonomous-run-<task-name>.marker"
+  | python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py write-atomic --parents ".workflow_artifacts/memory/autonomous-run-<task-name>.marker"
 ```
 
 Plain `/run` (no `--autonomous`, `AUTONOMOUS=false`) never writes this marker — the
@@ -86,7 +86,7 @@ continuation so the Stop hook can nudge this same conversation instead of
 only ever handing off to a detached supervisor:
 
 ```bash
-python3 __QUOIN_HOME__/scripts/auto_resume.py arm --project-root "$(pwd)" \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py arm --project-root "$(pwd)" \
   --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID" --entry fresh || true
 ```
 
@@ -113,7 +113,7 @@ Derive a descriptive kebab-case name from the task description (e.g., `auth-toke
 
 After creating the task folder, initialize the cost ledger:
 
-1. Create `.workflow_artifacts/<task-name>/cost-ledger.md` with the header (format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`):
+1. Create `.workflow_artifacts/<task-name>/cost-ledger.md` with the header (format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`):
    ```
    # Cost Ledger — <task-name>
    ```
@@ -143,7 +143,7 @@ when run from a long-lived session. Before starting the pipeline, check session 
 
 <!-- decision-gate: best-effort site=run-session-age reason=orchestrator-preflight-stops-safely-with-no-session-age-guard-bypass -->
 ```
-python3 __QUOIN_HOME__/scripts/session_age_guard.py --threshold-hours 6.0 --project-root "$(pwd)"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session_age_guard.py --threshold-hours 6.0 --project-root "$(pwd)"
 ```
 
 If exit 1 (`OVER|...`): STOP. Tell the user verbatim:
@@ -155,7 +155,7 @@ If exit 1 (`OVER|...`): STOP. Tell the user verbatim:
   Under `AUTONOMOUS`, replace the verbatim STOP above with a hand-off attempt
   instead — no one is present to open a fresh chat:
   ```bash
-  python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py handoff --project-root "$(pwd)" \
     --task <task-name> --reason session-age --on-fail-halt "session age cap"
   ```
   Print the command's stdout as the pipeline's stop notice and end the turn.
@@ -217,7 +217,7 @@ Under `AUTONOMOUS`, `/run` prefixes the `[autonomous]` sentinel onto EVERY sub-p
 
 When `/run` is NOT autonomous (`AUTONOMOUS` is false), a phase spawned as an Agent subagent
 cannot reach a human — `AskUserQuestion` is not provisioned to subagents (POC finding, see
-`__QUOIN_HOME__/memory/decision-gate-guard.md`). So a decision-gating phase (`/end_of_task`,
+`${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`). So a decision-gating phase (`/end_of_task`,
 `/gate`, `/implement`, `/rollback`) spawned by a non-autonomous `/run` would silently stall or
 proceed on a default. To prevent that, `/run` prefixes the `[no-interactive]` sentinel onto
 EVERY non-autonomous phase-subagent spawn prompt (the same 9 direct sub-phase spawns listed
@@ -289,7 +289,7 @@ Under `AUTONOMOUS`, every hard stop writes a halt-sentinel **before exit**, then
 Under `AUTONOMOUS`, the completion of each of the 9 resumable phases below is recorded by a per-phase completion sentinel, so a future resumed session (or an external supervisor relaunching one) can tell exactly which phases already finished without re-deriving it from session-state prose. This section is the T-05 contract declaration — the entry-marker write (Setup) and the resume-side read/idempotency logic (the later "Resume" section) land in a later Stage-2 task; this section fixes the write-site map they both consume.
 
 - **Directory:** `.workflow_artifacts/memory/autonomous-progress-{task}/` — same OUTSIDE-the-task-folder rationale as the halt-sentinel above.
-- **Write-site map** (phase → completion sentinel, all 9 resumable phases, atomic write `printf '…' | python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`):
+- **Write-site map** (phase → completion sentinel, all 9 resumable phases, atomic write `printf '…' | python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py write-atomic --parents "<f>"`):
   1. **discover** (Phase 1) → writes `autonomous-progress-{task}/discover.done`.
   2. **enrich** (Phase 1.4) → writes `autonomous-progress-{task}/enrich.done`.
   3. **specify** (Phase 1.5) → writes `autonomous-progress-{task}/specify.done`.
@@ -343,7 +343,7 @@ bootstrap) OR `QUOIN_DISABLE_PHASE_BUDGET=1` is set, SKIP the guard entirely
 
 **Run the guard (foreground):**
 ```bash
-_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT")"
+_cbg_out="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT")"
 ```
 - Exit 0 (`OK|...|` or `OK|disabled|`, incl. the `OK|0|` fail-OPEN path) → proceed
   with the phase spawn. On the fail-OPEN/missing-helper `OK|0|` path emit
@@ -353,7 +353,7 @@ _cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-roo
   prompt, NO `AskUserQuestion`, NO decision-gate marker):
   1. ALWAYS save the boundary checkpoint (durable resume point):
      ```bash
-     python3 __QUOIN_HOME__/scripts/boundary_checkpoint.py \
+     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/boundary_checkpoint.py \
        --project-root "$PROJECT_ROOT" --task "<task>" --skill run \
        --sid "$CLAUDE_CODE_SESSION_ID" --branch "<branch>" \
        --resume-command "/run --resume <task>" \
@@ -371,7 +371,7 @@ _cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-roo
      path as (1)-(3). Under `QUOIN_PHASE_BUDGET_BLOCK=1` only: after the boundary
      checkpoint, attempt a hand-off:
      ```bash
-     python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py handoff --project-root "$(pwd)" \
        --task <task-name> --reason budget
      ```
      `HANDOFF|...` → print the notice and end the turn (the Stop hook stands
@@ -428,11 +428,11 @@ plus, only on write failure, a second best-effort-labeled row:
 ```bash
 SID="$CLAUDE_CODE_SESSION_ID"
 _ERR=$(mktemp) || { printf 'cost-attr WARN: %s\n' "mktemp failed"; _ERR=/dev/null; }
-ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
+ATTR="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/agent_transcript_cost.py \
           --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
 [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
 [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
+[ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"
 printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$AID" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" \
   "on-behalf: PHASE via /run" "0" "$ATTR" >> "$LEDGER"
@@ -465,7 +465,7 @@ opt-out-only.
 
 ## Handoff envelope (phase dispatch and return)
 
-The normative contract for the fields, ordering, delimiters, and escaping below is `__QUOIN_HOME__/core/workflow/handoff-format.md`; the checkable rules and their interaction cascade are defined in `__QUOIN_HOME__/core/workflow/handoff-format-reference.md`. An absent or unrecognised envelope degrades to today's free-form prose and never blocks a phase.
+The normative contract for the fields, ordering, delimiters, and escaping below is `${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md`; the checkable rules and their interaction cascade are defined in `${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format-reference.md`. An absent or unrecognised envelope degrades to today's free-form prose and never blocks a phase.
 
 Dispatch template:
 ```text
@@ -504,7 +504,7 @@ end_of_task). The trailing note reads, verbatim:
 this phase's outcome; prefer this phase's own inlined template if its skill
 file has one. This shows the COMPLETE shape only — a fail-closed hard stop
 still emits the decision-gate block, not an envelope. Do not open
-__QUOIN_HOME__/core/workflow/handoff-format.md unless you need other
+${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md unless you need other
 shapes/escaping."
 
 The whole envelope (marker to
@@ -546,7 +546,7 @@ Under `AUTONOMOUS`, also write the phase's completion sentinel `autonomous-progr
 Independent of `AUTONOMOUS` — this write is unconditional in both interactive and autonomous mode, including when Phase 1 itself was skipped (the discovery-freshness check above), so a plain (non-autonomous) `/run` session gets the same phase-boundary resumability record:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "discover" --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -578,7 +578,7 @@ Under `AUTONOMOUS`, also write the phase's completion sentinel `autonomous-progr
 Independent of `AUTONOMOUS` — this write is unconditional in both interactive and autonomous mode, including when enrich itself was skipped, so a plain (non-autonomous) `/run` session gets the same phase-boundary resumability record:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "enrich" --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -610,7 +610,7 @@ branch): independent of `AUTONOMOUS`, write the phase-boundary record immediatel
 across interactive and autonomous mode:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "specify" --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -623,7 +623,7 @@ the same phase-boundary record, so a plain (non-autonomous) `/run` session gets 
 resumability record:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "specify" --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -703,7 +703,7 @@ To hand off, write `<task-root>/pipeline-switch.md` with lines `from: hard`, `to
 branch>` and `evidence: <spec.md | enriched-prompt.md>`; then invoke the `run` skill with
 `[from-hard] <task>` (plus `--autonomous` under `AUTONOMOUS`) and stop. Before invoking it,
 under `AUTONOMOUS`, delete this run's continuation state so the Stop hook does not keep resuming
-it: `python3 __QUOIN_HOME__/scripts/fsops.py rm
+it: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm
 ".workflow_artifacts/memory/autonomous-run-<task>.marker"
 ".workflow_artifacts/memory/run-continue-arm-$CLAUDE_CODE_SESSION_ID.txt" || true`. Light `/run` owns the task
 from here; a later resume of this task reads the switch note first and routes to light `/run`.
@@ -815,7 +815,7 @@ a harder task: `Task profile: <the honestly classified profile>` (unchanged — 
 Large task still gates as Large) and `Review shape: single-pass (fast-path)`.
 
 **Post-write validation (MUST run immediately after the write, before this phase completes).** Run
-`python3 __QUOIN_HOME__/scripts/validate_artifact.py <task_dir>/current-plan.md` against the
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <task_dir>/current-plan.md` against the
 just-written file. `validate_artifact.py` checks frontmatter/headings/sections only — it does NOT
 check task content, so it cannot by itself catch the specific hazard the pending-glyph contract
 above exists to prevent (a `## Tasks` block with zero `⏳` lines, which validates cleanly but makes
@@ -870,7 +870,7 @@ plain (non-autonomous) run never writes this file, in either mode.
 Independent of `AUTONOMOUS` — this write is unconditional in both interactive and autonomous mode, so a plain (non-autonomous) `/run` session gets the same phase-boundary resumability record:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "fast_path_triage" --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -886,7 +886,7 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
   There is no gate to wait for on this branch (none runs), so write the phase-boundary record
   immediately, unconditional on `AUTONOMOUS`:
   ```
-  python3 __QUOIN_HOME__/scripts/run_state.py --write \
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
     --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
     --phase "architect" --phase-index 2 --subphase "" --step "" \
     --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -938,7 +938,7 @@ this point: a session lost between the gate PASS and the checkpoint answer, or a
 confirmed:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "architect" --phase-index 2 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -981,7 +981,7 @@ continuation to implement, and Checkpoint B never fires on this route (see Phase
 below), so there is no later checkpoint to defer this write to:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "thorough_plan" --phase-index 3 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -994,7 +994,7 @@ converge; "Gates are blocking" below applies) — present Checkpoint B:
 **Checkpoint B:**
 ```
 Phase complete: Planning
-Artifact: <task_dir>/current-plan.md (where <task_dir> = `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`; architecture.md ALWAYS at task root per D-03)
+Artifact: <task_dir>/current-plan.md (where <task_dir> = `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`; architecture.md ALWAYS at task root per D-03)
 Profile: <Small|Medium|Large>, <N> round(s), verdict: PASS
 
 Summary:
@@ -1014,7 +1014,7 @@ answer, or a user who answers `no`, must not leave `next_action: start implement
 plan whose continuation was never confirmed:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "thorough_plan" --phase-index 3 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1035,7 +1035,7 @@ Only evaluated under `AUTONOMOUS` — plain `/run` never evaluates this bar and 
 
 ## Phase 4 — Implement
 
-Spawn `/implement` as a subagent session, passing path to `<task_dir>/current-plan.md` (where `<task_dir>` is resolved via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` in Setup §) and all repo paths. Because the user invoked `/run` and confirmed at Checkpoint B (or, on the fast route, at Checkpoint A1 — Checkpoint B never fires on that route), the `/run` exception in `implement/SKILL.md` applies.
+Spawn `/implement` as a subagent session, passing path to `<task_dir>/current-plan.md` (where `<task_dir>` is resolved via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` in Setup §) and all repo paths. Because the user invoked `/run` and confirmed at Checkpoint B (or, on the fast route, at Checkpoint A1 — Checkpoint B never fires on that route), the `/run` exception in `implement/SKILL.md` applies.
 
 Emit the dispatch envelope (above), skill: `implement`, `return: envelope` — placed after the sentinel prefix zone per the fast-route ordering rule below.
 
@@ -1062,7 +1062,7 @@ section below for the honest net-cost direction per profile.
 
 Unless `QUOIN_INLINE_COST_CAPTURE=0`, the on-behalf write per "On-behalf cost capture" above (phase=implement, model=opus on the fast route, sonnet otherwise) runs FIRST. Either way (on-behalf write above, or under opt-out the child's own self-write), THEN verify the cost ledger has a new entry for the `implement` phase. If still not present, append a best-effort entry with `unknown-implement-<timestamp>`.
 
-**Tasks-complete entry.** When the dispatch is skipped, the on-behalf cost write and the ledger-verify step above do not run (no `unknown-implement-…` row for a dispatch that never happened). Condition: `autonomous-progress-{task}/implement.done` is absent AND `python3 __QUOIN_HOME__/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` prints a line beginning `ALLDONE|`. The marker `implement.tasks.done` alone never qualifies; the plan decides, in both directions. Evaluate this at exactly two points:
+**Tasks-complete entry.** When the dispatch is skipped, the on-behalf cost write and the ledger-verify step above do not run (no `unknown-implement-…` row for a dispatch that never happened). Condition: `autonomous-progress-{task}/implement.done` is absent AND `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` prints a line beginning `ALLDONE|`. The marker `implement.tasks.done` alone never qualifies; the plan decides, in both directions. Evaluate this at exactly two points:
 - (a) Phase 4 entry, fresh or resumed. True: skip the `/implement` dispatch and go to the gate below. `PENDING|`: under `AUTONOMOUS` delete a stale `implement.tasks.done`, then dispatch as usual. `UNKNOWN|`, empty output or a missing helper: dispatch as usual and write or delete nothing.
 - (b) After the primary `/implement` dispatch returns, only when the return is COMPLETE or the envelope is missing or unparseable (the lost-envelope case). A NEEDS-DECISION or BLOCKED return keeps its routing (`## Routing a NEEDS-DECISION phase return`, the hard stops) and never reaches this check; a PARTIAL return keeps the within-phase continuation under `## Error handling`, and this check runs only once that continuation ends in COMPLETE or a lost envelope. When the condition is false at this point, proceed exactly as before for that return.
 
@@ -1126,7 +1126,7 @@ implement with no plan to dispatch against):
    plus `autonomous-progress-{task}/implement.tasks.done` and any other `implement.*.done`
    sub-sentinels. Enumerate them python-side, never with a bare shell glob (zsh aborts when
    nothing matches): `python3 -c 'import pathlib,sys; [print(p) for p in pathlib.Path(sys.argv[1]).glob("implement.*.done")]' "<progress dir>"`,
-   then pass each printed path to `python3 __QUOIN_HOME__/scripts/fsops.py rm`.
+   then pass each printed path to `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm`.
    `implement.done` does not exist yet at this site — this escalation offer sits in the gate-FAILED
    branch of Checkpoint C, strictly before Phase 4 writes `implement.done` — so it is not in this
    delete set; the two review-phase escalation sites below (Phase 5) fire AFTER `implement.done`
@@ -1138,7 +1138,7 @@ implement with no plan to dispatch against):
 6. rewind the run-state record so a resumed session re-enters at architect, not wherever
    the run actually halted:
    ```
-   python3 __QUOIN_HOME__/scripts/run_state.py --write \
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
      --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
      --phase fast_path_triage --phase-index 1 --subphase "" --step "" \
      --at-stage-boundary true --route full --profile "{profile}" \
@@ -1149,22 +1149,22 @@ implement with no plan to dispatch against):
 Completed implementation work is preserved. On the full path this option does not exist; the
 existing "fix" / "stop" choice above is unchanged.
 
-Under `AUTONOMOUS`: auto-select "fix" and retry once (retry cap = 1 automatic retry). If the gate still fails after that one retry, this is Hard-stop #2 (Gate FAIL after the retry cap) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop. Never fall back to a silent proceed, and never ask. **On a fast-route run, this same escalation option ALSO routes through the existing NEEDS-DECISION return path** (`needs-decision-{task}.md`), writing it in addition to the halt-sentinel already written above — never instead of it — rather than a silent auto-select — no seventh hard-stop, same NEEDS-DECISION mechanism used elsewhere under `[autonomous]`. **Writer, named:** this NEEDS-DECISION sentinel is not written by a spawned subagent here — the `/run` orchestrator itself, inline, invokes the shared guard directly: `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-checkpoint-c --reason "<gate-failure summary>" --resume-hint "re-run /run --resume <task-name>"`, echoes its `gate-result: NEEDS-DECISION` block, and stops — so an autonomous fast run hitting this branch always leaves a terminal signal on disk, never a silent stall. Once escalation's atomic unit above (route flip, sentinel/stub cleanup) has been performed, this is the durable record of WHY the run stopped and WHERE to resume it.
+Under `AUTONOMOUS`: auto-select "fix" and retry once (retry cap = 1 automatic retry). If the gate still fails after that one retry, this is Hard-stop #2 (Gate FAIL after the retry cap) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop. Never fall back to a silent proceed, and never ask. **On a fast-route run, this same escalation option ALSO routes through the existing NEEDS-DECISION return path** (`needs-decision-{task}.md`), writing it in addition to the halt-sentinel already written above — never instead of it — rather than a silent auto-select — no seventh hard-stop, same NEEDS-DECISION mechanism used elsewhere under `[autonomous]`. **Writer, named:** this NEEDS-DECISION sentinel is not written by a spawned subagent here — the `/run` orchestrator itself, inline, invokes the shared guard directly: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-checkpoint-c --reason "<gate-failure summary>" --resume-hint "re-run /run --resume <task-name>"`, echoes its `gate-result: NEEDS-DECISION` block, and stops — so an autonomous fast run hitting this branch always leaves a terminal signal on disk, never a silent stall. Once escalation's atomic unit above (route flip, sentinel/stub cleanup) has been performed, this is the durable record of WHY the run stopped and WHERE to resume it.
 
 **Automatic-retry budget (autonomous).** The one automatic retry survives a relaunch. Before the retry is dispatched, persist it by rewriting the boundary record as a full boundary write (Checkpoint B form, only `--step` changed). Pass every field: a plain `--write` resets each omitted field to empty, and the merge-on-write mode is reserved for the Resume adoption write.
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "thorough_plan" --phase-index 3 --subphase "" --step gate-retry-1 \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
   --next-action "start implement" --artifact "{task_dir}/current-plan.md" || true
 ```
 
-The record stays at a stage boundary (`thorough_plan`, index 3, `start implement`): the gate has not passed, so a relaunch re-enters Phase 4, whose tasks-complete entry routes to the gate. The fix re-dispatch then proceeds. At any Checkpoint C gate failure, first read `python3 __QUOIN_HOME__/scripts/run_state.py --read --project-root "$PROJECT_ROOT" --task "{task}" --fields step,at_stage_boundary || true`. A `step` of `gate-retry-1` means the retry is already spent (a relaunch never grants a fresh one): go straight to Hard-stop #2 with a reason saying the retry budget was already spent. An absent or stale record reads back empty and counts as an unspent budget, accepted by design because it means no recent relaunch. Clear the budget at Hard-stop #2, right after the halt-sentinel is written (on the fast-route escalation branch skip this clear: the rewind's empty step already clears it, and a clear after the rewind would overwrite its `next_action`), with the same write carrying an empty step (the supervisor never relaunches while the halt-sentinel exists, so the next run is a human's):
+The record stays at a stage boundary (`thorough_plan`, index 3, `start implement`): the gate has not passed, so a relaunch re-enters Phase 4, whose tasks-complete entry routes to the gate. The fix re-dispatch then proceeds. At any Checkpoint C gate failure, first read `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --read --project-root "$PROJECT_ROOT" --task "{task}" --fields step,at_stage_boundary || true`. A `step` of `gate-retry-1` means the retry is already spent (a relaunch never grants a fresh one): go straight to Hard-stop #2 with a reason saying the retry budget was already spent. An absent or stale record reads back empty and counts as an unspent budget, accepted by design because it means no recent relaunch. Clear the budget at Hard-stop #2, right after the halt-sentinel is written (on the fast-route escalation branch skip this clear: the rewind's empty step already clears it, and a clear after the rewind would overwrite its `next_action`), with the same write carrying an empty step (the supervisor never relaunches while the halt-sentinel exists, so the next run is a human's):
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "thorough_plan" --phase-index 3 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1184,7 +1184,7 @@ known, never before it — means a crash between the implement dispatch and this
 leave `next_action: start review` on disk for a gate that in fact FAILED or is still retrying:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "implement" --phase-index 4 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1201,7 +1201,7 @@ Then append a ``[quoin-bundle]`` block to the spawn prompt in two steps:
 
 1. Run via the Bash tool (resolve `<task-name>` to the actual task and `<N>` to the resolved stage number; OMIT `--stage` entirely for single-stage/grandfathered tasks):
    ```bash
-   python3 "__QUOIN_HOME__/scripts/context_bundle.py" --task "<task-name>" --stage <N> --wrap 2>/dev/null || true
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/context_bundle.py" --task "<task-name>" --stage <N> --wrap 2>/dev/null || true
    ```
 2. If the command printed anything, append its stdout VERBATIM — as its own lines, markers included (`--wrap` emits `[quoin-bundle]` / `[/quoin-bundle]` on their own lines) — at the END of the spawn prompt, AFTER the sentinel prefix zone (``[autonomous]`` / ``[no-redispatch]`` / ``[no-interactive]`` / ``[quoin-onbehalf]`` stacking unchanged). If it printed nothing (script absent, task unresolvable, or all members missing), append no block — safe degradation to current wholesale-read behavior.
 
@@ -1230,7 +1230,7 @@ Checkpoint D — "Gates are blocking" below applies.
    branch is about to actually dispatch, not the phase the review request as a whole eventually
    reaches):
    ```
-   python3 __QUOIN_HOME__/scripts/run_state.py --write \
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
      --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
      --phase "review" --phase-index 5 --subphase "" --step "" \
      --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1264,7 +1264,7 @@ THEN rewind the run-state record so a resumed session re-enters at architect, no
 the run actually halted:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase fast_path_triage --phase-index 1 --subphase "" --step "" \
   --at-stage-boundary true --route full --profile "{profile}" \
@@ -1274,7 +1274,7 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
 Only THEN re-enter at the architect phase. Completed
 implementation work is preserved. On the full path this option does not exist.
 
-Under `AUTONOMOUS`: auto-select "fix" at each round — never auto-select "accept". If still CHANGES_REQUESTED after the 3-round cap, this is Hard-stop #3 (Review CHANGES_REQUESTED after 3 rounds) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop. **On a fast-route run, offer "escalate to full" as a third option alongside this halt — same mechanism as the Checkpoint C escalation above**, performed per the atomic unit above; under `[autonomous]` this ALSO routes through the same NEEDS-DECISION return path, writing it in addition to the halt-sentinel already written above — never instead of it — rather than a silent auto-select — named writer (same shared guard as Checkpoint C): `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-changes-requested --reason "<3-round CHANGES_REQUESTED summary>" --resume-hint "re-run /run --resume <task-name>"`. On the full path this branch is unchanged — still a bare halt.
+Under `AUTONOMOUS`: auto-select "fix" at each round — never auto-select "accept". If still CHANGES_REQUESTED after the 3-round cap, this is Hard-stop #3 (Review CHANGES_REQUESTED after 3 rounds) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop. **On a fast-route run, offer "escalate to full" as a third option alongside this halt — same mechanism as the Checkpoint C escalation above**, performed per the atomic unit above; under `[autonomous]` this ALSO routes through the same NEEDS-DECISION return path, writing it in addition to the halt-sentinel already written above — never instead of it — rather than a silent auto-select — named writer (same shared guard as Checkpoint C): `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-changes-requested --reason "<3-round CHANGES_REQUESTED summary>" --resume-hint "re-run /run --resume <task-name>"`. On the full path this branch is unchanged — still a bare halt.
 
 **If BLOCKED:** present the blocking issues. **STOP.** Do not offer to continue. Before stopping,
 write a non-parsing `next_action` marker — never `start end_of_task` and never `start review` (the
@@ -1283,7 +1283,7 @@ that reads this record back sees a `next_action` that fails to match the `start 
 (mirroring the `run complete` terminal marker) and correctly falls through to the pre-T-09
 session-state read rather than resuming into a phase this verdict never cleared:
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "review" --phase-index 5 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1293,15 +1293,15 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
 own `fast_path_triage` rewind — write it here regardless, since the user may choose the bare stop
 instead of escalating.) Tell the user: "Review found blocking
 issues. The workflow cannot continue until these are resolved. Artifacts are preserved at
-`.workflow_artifacts/<task-name>/`." **(fast route only)** this bare stop is the full-path behavior; on the fast route, "escalate to full" is offered alongside it instead — the same atomic unit as the Checkpoint C escalation above, same crash-safe order (in-session `route` flip to `full`; rewrite `triage-decision.md`; strip the stub's `Review shape:` and `Route:` lines per the same provenance-conditioned rule — no outright delete yet; THEN DELETE `autonomous-progress-{task}/architect.done`, `autonomous-progress-{task}/thorough_plan.done`, AND `autonomous-progress-{task}/implement.done` plus `implement.tasks.done` and any `implement.*.done` sub-sentinels, enumerated python-side with `pathlib.Path(...).glob` (never a bare shell glob) as in Checkpoint C step 4, since `implement.done` already exists at this site too; optionally delete the stripped stub outright once the sentinels are gone (provenance-marked stubs only — same condition as Checkpoint C step 5); then rewind the run-state record so a resumed session re-enters at architect, not wherever the run actually halted: `python3 __QUOIN_HOME__/scripts/run_state.py --write --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" --phase fast_path_triage --phase-index 1 --subphase "" --step "" --at-stage-boundary true --route full --profile "{profile}" --next-action "start architect" || true`; only then re-enter at the architect phase). Completed implementation work is preserved.
+`.workflow_artifacts/<task-name>/`." **(fast route only)** this bare stop is the full-path behavior; on the fast route, "escalate to full" is offered alongside it instead — the same atomic unit as the Checkpoint C escalation above, same crash-safe order (in-session `route` flip to `full`; rewrite `triage-decision.md`; strip the stub's `Review shape:` and `Route:` lines per the same provenance-conditioned rule — no outright delete yet; THEN DELETE `autonomous-progress-{task}/architect.done`, `autonomous-progress-{task}/thorough_plan.done`, AND `autonomous-progress-{task}/implement.done` plus `implement.tasks.done` and any `implement.*.done` sub-sentinels, enumerated python-side with `pathlib.Path(...).glob` (never a bare shell glob) as in Checkpoint C step 4, since `implement.done` already exists at this site too; optionally delete the stripped stub outright once the sentinels are gone (provenance-marked stubs only — same condition as Checkpoint C step 5); then rewind the run-state record so a resumed session re-enters at architect, not wherever the run actually halted: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" --phase fast_path_triage --phase-index 1 --subphase "" --step "" --at-stage-boundary true --route full --profile "{profile}" --next-action "start architect" || true`; only then re-enter at the architect phase). Completed implementation work is preserved.
 
-Under `AUTONOMOUS`: this is Hard-stop #1 (Review BLOCKED) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop (no `AskUserQuestion`, no silent proceed). **On a fast-route run, offer escalation rather than a bare stop — same mechanism as the Checkpoint C escalation above**, performed per the atomic unit above; under `[autonomous]` this ALSO routes through the NEEDS-DECISION return path, writing it in addition to the halt-sentinel already written above — never instead of it: the halt-sentinel is what the Stage-2 supervisor reads, and a supervised autonomous fast run hitting review BLOCKED always terminates for a human rather than relaunching unattended into the full path — named writer (same shared guard as Checkpoint C): `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-blocked --reason "<BLOCKED summary>" --resume-hint "re-run /run --resume <task-name>"`. On the full path this branch is unchanged — still a bare stop, since the full path never skipped the phases escalation would recover.
+Under `AUTONOMOUS`: this is Hard-stop #1 (Review BLOCKED) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop (no `AskUserQuestion`, no silent proceed). **On a fast-route run, offer escalation rather than a bare stop — same mechanism as the Checkpoint C escalation above**, performed per the atomic unit above; under `[autonomous]` this ALSO routes through the NEEDS-DECISION return path, writing it in addition to the halt-sentinel already written above — never instead of it: the halt-sentinel is what the Stage-2 supervisor reads, and a supervised autonomous fast run hitting review BLOCKED always terminates for a human rather than relaunching unattended into the full path — named writer (same shared guard as Checkpoint C): `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-blocked --reason "<BLOCKED summary>" --resume-hint "re-run /run --resume <task-name>"`. On the full path this branch is unchanged — still a bare stop, since the full path never skipped the phases escalation would recover.
 
 **Checkpoint D** (after APPROVED or accepted):
 ```
 Phase complete: Review
 Verdict: APPROVED
-Artifact: <task_dir>/review-<N>.md (where <task_dir> = `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`; architecture.md ALWAYS at task root per D-03)
+Artifact: <task_dir>/review-<N>.md (where <task_dir> = `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`; architecture.md ALWAYS at task root per D-03)
 Gate: PASSED
 
 Summary:
@@ -1321,7 +1321,7 @@ checkpoint resume straight into Phase 6's commit-push-archive on a confirmation 
 actually given:
 
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "review" --phase-index 5 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
@@ -1338,7 +1338,7 @@ Emit the dispatch envelope (above), skill: `end_of_task`, `return: envelope`.
 
 Unless `QUOIN_INLINE_COST_CAPTURE=0`, this spawn also follows "On-behalf cost capture" above (phase=end-of-task, model=sonnet) — see the `end_of_task` note in its `## Autonomous mode bootstrap` section (post-`<!-- §0tripleprime-end -->`, not the old `§0-end`-only anchor; no T-06 skip predicate to pair with; this write is additive, not a suppression-replace).
 
-Commit and PR text composed under `/run` follows the same clean-authored-content rule as standalone `/end_of_task`/`/pr` — `/run` composes no commit/PR text itself, only delegates. Full rule: __QUOIN_HOME__/memory/clean-authored-content.md.
+Commit and PR text composed under `/run` follows the same clean-authored-content rule as standalone `/end_of_task`/`/pr` — `/run` composes no commit/PR text itself, only delegates. Full rule: ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md.
 
 **F-09 (known ordering gap, accepted):** this on-behalf `end-of-task` row is appended AFTER the `/end_of_task` subagent returns — but Step 6.4 (cost aggregation) inside that subagent already reads the ledger before this row exists. `/run`'s own final cost report therefore systematically undercounts by exactly one phase (the `end-of-task` row itself) under default-ON. This is pre-existing (was true under opt-in too) and now the default; not fixed this round — note it explicitly in the Checkpoint D / completion report rather than silently under-reporting.
 
@@ -1346,18 +1346,18 @@ Under `AUTONOMOUS`, once `/end_of_task` returns successfully, also write the pha
 
 Independent of `AUTONOMOUS` — these two writes are unconditional in both interactive and autonomous mode. First the boundary write, THEN the clear — in that exact order, because `--clear` sets `active: false` and a `--write` after it would resurrect the record as active:
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --write \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write \
   --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
   --phase "end_of_task" --phase-index 6 --subphase "" --step "" \
   --at-stage-boundary true --route "{route}" --profile "{profile}" \
   --next-action "run complete" --artifact "{task_dir}/current-plan.md" || true
-python3 __QUOIN_HOME__/scripts/run_state.py --clear --project-root "$PROJECT_ROOT" --task "{task}" || true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --clear --project-root "$PROJECT_ROOT" --task "{task}" || true
 ```
 
 
 ### end_of_task failure recovery (inline finish)
 
-If the Phase 6 subagent dies (stream-idle timeout, error return, context exhaustion) or is skipped, the orchestrator MUST — before any archive step — perform the cost aggregation itself, following `end_of_task/SKILL.md` Sub-phase B Steps 4 and 5 as a pointer, never a copy: run `python3 __QUOIN_HOME__/scripts/cost_ledger_summary.py --ledger .workflow_artifacts/<task-name>/cost-ledger.md --project-path "$(pwd)" --out .workflow_artifacts/<task-name>/cost-summary.json` from the project root (falling back to the Sub-phase B manual steps if it is missing or fails), which writes `cost-summary.json` at the identical path Sub-phase B resolves. On any aggregation failure, still write a partial `cost-summary.json` carrying `fallback_used: true` and a non-empty `fallback_note` naming the inline-finish origin. Only then archive. Bounded to the same `~15 tool uses` scope cap Sub-phase B already declares.
+If the Phase 6 subagent dies (stream-idle timeout, error return, context exhaustion) or is skipped, the orchestrator MUST — before any archive step — perform the cost aggregation itself, following `end_of_task/SKILL.md` Sub-phase B Steps 4 and 5 as a pointer, never a copy: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_ledger_summary.py --ledger .workflow_artifacts/<task-name>/cost-ledger.md --project-path "$(pwd)" --out .workflow_artifacts/<task-name>/cost-summary.json` from the project root (falling back to the Sub-phase B manual steps if it is missing or fails), which writes `cost-summary.json` at the identical path Sub-phase B resolves. On any aggregation failure, still write a partial `cost-summary.json` carrying `fallback_used: true` and a non-empty `fallback_note` naming the inline-finish origin. Only then archive. Bounded to the same `~15 tool uses` scope cap Sub-phase B already declares.
 
 After completion, present the final report:
 ```
@@ -1374,7 +1374,7 @@ Cost: $X.XX (N sessions tracked)
 Next: run /pr to create a pull request from the branch.
 ```
 
-The `Cost:` line is mandatory in every report — never silently omitted (AC-7). Its value comes from `python3 __QUOIN_HOME__/scripts/cost_summary.py --format json <task-dir>/cost-summary.json`: nothing priced (`priced_rows` and `estimated_count` both present and both 0, even though `grand_total` is `0.0`) → `Cost: totals unavailable — nothing could be priced`; `estimated_count > 0` → `Cost: ~$X.XX (partial — $Y.YY estimated from token counts) (N sessions tracked)`; total present with `is_partial` true → `Cost: ~$X.XX (partial) (N sessions tracked)`; total present with `is_partial` false → `Cost: $X.XX (N sessions tracked)`; total null, file missing, or aggregation skipped → `Cost: totals unavailable — cost aggregation did not complete`. Carry the F-09 one-phase-undercount note above into this line per its own instruction.
+The `Cost:` line is mandatory in every report — never silently omitted (AC-7). Its value comes from `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_summary.py --format json <task-dir>/cost-summary.json`: nothing priced (`priced_rows` and `estimated_count` both present and both 0, even though `grand_total` is `0.0`) → `Cost: totals unavailable — nothing could be priced`; `estimated_count > 0` → `Cost: ~$X.XX (partial — $Y.YY estimated from token counts) (N sessions tracked)`; total present with `is_partial` true → `Cost: ~$X.XX (partial) (N sessions tracked)`; total present with `is_partial` false → `Cost: $X.XX (N sessions tracked)`; total null, file missing, or aggregation skipped → `Cost: totals unavailable — cost aggregation did not complete`. Carry the F-09 one-phase-undercount note above into this line per its own instruction.
 
 ## Checkpoint interaction protocol
 
@@ -1411,7 +1411,7 @@ state, before checking completion sentinels, before anything else:
   no one is present to answer. Also re-arm the in-session continuation for this
   (resumed) owning session:
   ```bash
-  python3 __QUOIN_HOME__/scripts/auto_resume.py arm --project-root "$(pwd)" \
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py arm --project-root "$(pwd)" \
     --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID" --entry resume || true
   ```
 - If the marker is absent: `AUTONOMOUS` is determined normally from the invocation
@@ -1522,7 +1522,7 @@ directory) for `<task-name>`:
 - If NO `autonomous-progress-{task}/` directory (and no legacy
   `autonomous-progress-{task}-stage-N/` directory) exists for the task (a resume that
   predates the sentinel contract, or a non-autonomous run that never wrote one), check for
-  a fresh active run-state record next: `python3 __QUOIN_HOME__/scripts/run_state.py --read
+  a fresh active run-state record next: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --read
   --project-root "$PROJECT_ROOT" --task "{task}" --max-age-days "$_RUN_STATE_STALE_DAYS"
   --fields active,next_action || true`. If
   that returns `active=true` with a non-empty `next_action` matching the format `start <phase>`
@@ -1540,7 +1540,7 @@ directory) for `<task-name>`:
 
 **Step 1b (`D-53`) — within-sub-phase re-entry.** Read the run-state record once:
 ```
-python3 __QUOIN_HOME__/scripts/run_state.py --read \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --read \
   --project-root "$PROJECT_ROOT" --task "{task}" \
   --max-age-days "$_RUN_STATE_STALE_DAYS" \
   --fields schema,active,phase,phase_index,subphase,step,at_stage_boundary,next_action,notes_path,resume_command,updated_at
@@ -1598,7 +1598,7 @@ older than that window, so a stale record those reads already treated as absent 
 revived by this write (Steps 1/1b are read-only, so running after them changes no input
 they consumed):
 ```bash
-python3 __QUOIN_HOME__/scripts/run_state.py --write --require-existing --adopt-session \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write --require-existing --adopt-session \
   --project-root "$PROJECT_ROOT" --task "{task}" \
   --session-id "$CLAUDE_CODE_SESSION_ID" \
   --max-age-days "$_RUN_STATE_STALE_DAYS" || true
@@ -1624,7 +1624,7 @@ Note: `--resume` is a convention the skill checks for in the input, not a CLI fl
 
 ## Session state tracking
 
-Write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after each phase completes (each phase end is a stage boundary), to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`. Current stage `run: <phase>`; Next command `/run --resume <task>`. Phase outcomes (gate results, review verdicts, rounds taken) go in Completed in this session; a stopped-at checkpoint goes in Unfinished work.
+Write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after each phase completes (each phase end is a stage boundary), to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md`. Current stage `run: <phase>`; Next command `/run --resume <task>`. Phase outcomes (gate results, review verdicts, rounds taken) go in Completed in this session; a stopped-at checkpoint goes in Unfinished work.
 
 ## Subagent session management
 
@@ -1665,13 +1665,13 @@ Rough estimates only — `/end_of_task` computes actual costs from the cost ledg
 - **Context exhaustion:** save state, instruct user to resume with `/run --resume <task-name>`.
   Under `AUTONOMOUS`, attempt a hand-off instead of waiting for the user:
   ```bash
-  python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py handoff --project-root "$(pwd)" \
     --task <task-name> --reason context --on-fail-halt "context exhaustion"
   ```
   `HANDOFF|...` → print the notice and the takeover pointer as the budget site does. On `HANDOFF|...`, arm the child watcher before ending the turn (see Watching a handed-off child under Error handling): 10-minute default cadence, re-armed until a terminal state; it checks the done sentinel, the halt sentinel, the needs-decision sentinel, new `.done` sentinels, new task-branch commits, and supervisor/child liveness.
 - **The user asks to stop an autonomous run:**
   ```bash
-  python3 __QUOIN_HOME__/scripts/auto_resume.py pause --project-root "$(pwd)" \
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py pause --project-root "$(pwd)" \
     --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID"
   ```
   Every `handoff` call site in this file treats empty stdout (the helper is
@@ -1716,12 +1716,12 @@ Rough estimates only — `/end_of_task` computes actual costs from the cost ledg
 ### Watching a handed-off child
 
 1. Scope: an interactive parent that received `HANDOFF|<pid>|...`. A headless child (`QUOIN_HEADLESS_CHILD=1`) never arms a watcher.
-2. Arm: after printing the notice, run `python3 __QUOIN_HOME__/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> [--child-session <uuid>]` in the background (the `Monitor` tool when the session has it, else Bash with `run_in_background: true`; both re-invoke the session when the watcher exits), then end the turn. The session id is only a fallback; the lock's current id wins. Default cadence is 10 minutes (`QUOIN_CHILD_WATCH_INTERVAL_SECS`).
+2. Arm: after printing the notice, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> [--child-session <uuid>]` in the background (the `Monitor` tool when the session has it, else Bash with `run_in_background: true`; both re-invoke the session when the watcher exits), then end the turn. The session id is only a fallback; the lock's current id wins. Default cadence is 10 minutes (`QUOIN_CHILD_WATCH_INTERVAL_SECS`).
 3. Each window checks six signals: the done, halt and needs-decision sentinels, new `.done` sentinels under the progress directory, new commits on the task branch, and supervisor and child liveness.
 4. On re-invocation read the single `WATCH|...` line and act on `next=`. PROGRESS: at most one short chat line, re-arm. ALIVE: re-arm silently. STALL: report, then re-arm. DONE: report success, stop. HALTED, NEEDS_DECISION, DEAD, EXPIRED: report at once with the reason and the `takeover=` hint, stop. ERROR: report, re-arm once with the last good command, stop on a second consecutive ERROR. Also send reports through `PushNotification` when that tool exists.
 5. Observe-only: never resume phase work on a watcher re-invocation, never kill, relaunch or take over; the supervisor lock owns the run.
 6. A message the user types in the parent ends re-arming: answer the user, and re-arm only if asked.
-7. No background-capable tool: print the notice plus `check with: python3 __QUOIN_HOME__/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> --once`.
+7. No background-capable tool: print the notice plus `check with: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> --once`.
 
 ## Hook cooperation (autonomous)
 

@@ -415,29 +415,17 @@ def _install_sh_delegates_to_python_installer(install_sh_content: str) -> bool:
 
 
 def _python_installer_prefers_claude_adapter(repo_root: Path) -> bool:
-    """Return True when src/quoin/installer.py deploys skills from the Claude adapter tree.
+    """Return True when the plugin ships its skills from the Claude adapter tree.
 
-    deploy_skills must enumerate source_dir/adapters/claude/skills/ and copy each
-    skill folder's SKILL.md from there.
+    `quoin install` installs quoin/ as a Claude Code plugin, and the plugin
+    manifest points Claude Code at adapters/claude/skills/.
     """
-    installer_path = repo_root / "src" / "quoin" / "installer.py"
+    manifest_path = repo_root / "quoin" / ".claude-plugin" / "plugin.json"
     try:
-        content = installer_path.read_text(encoding="utf-8")
-    except OSError:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return False
-
-    func_start = content.find("def deploy_skills(")
-    if func_start == -1:
-        return False
-    next_def = content.find("\ndef ", func_start + 1)
-    func_body = content[func_start:next_def] if next_def != -1 else content[func_start:]
-
-    required_tokens = [
-        'src_adapter = source_dir / "adapters" / "claude" / "skills"',
-        "for skill_dir in sorted(src_adapter.iterdir()):",
-        'skill_md = skill_dir / "SKILL.md"',
-    ]
-    return all(token in func_body for token in required_tokens)
+    return isinstance(manifest, dict) and manifest.get("skills") == "./adapters/claude/skills/"
 
 
 # ---------------------------------------------------------------------------

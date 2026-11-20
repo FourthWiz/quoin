@@ -15,7 +15,7 @@ This skill orchestrates the planning convergence loop by invoking sub-skills —
 
 On start:
 1. Read `.workflow_artifacts/memory/lessons-learned.md` for past insights
-2. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `thorough-plan` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+2. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `thorough-plan` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
 
@@ -49,7 +49,7 @@ Before starting the loop, establish the working directory:
     `<task-name>/architecture.md`'s `## Stage decomposition` section.
   - No qualifier → `<stage>` = None (legacy / single-stage layout).
 - Compute the working directory by running:
-    `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`
+    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`
   This returns an absolute path. Create the folder if it doesn't exist:
     `mkdir -p "<task_dir>"`
 - The architecture and cost-ledger always live at the task root, regardless of
@@ -331,11 +331,11 @@ write failure, a second best-effort-labeled row (the embedded F-02 post-check be
 ```
 SID="$CLAUDE_CODE_SESSION_ID"
 _ERR=$(mktemp) || { printf 'cost-attr WARN: %s\n' "mktemp failed"; _ERR=/dev/null; }
-ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
+ATTR="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/agent_transcript_cost.py \
           --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
 [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
 [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
+[ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"
 printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$AID" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" \
   "on-behalf: PHASE via /thorough_plan" "0" "$ATTR" >> "$LEDGER"
@@ -383,7 +383,7 @@ The loop stops when ANY of these is true:
 After reading each critic response, run:
 
 ```
-python3 __QUOIN_HOME__/scripts/classify_critic_issues.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/classify_critic_issues.py \
   --critic-response <task_dir>/critic-response-<N>.md
 ```
 
@@ -424,7 +424,7 @@ resumable on the next `/thorough_plan` invocation:
 
 ```bash
 _MEM="{project-root}/.workflow_artifacts/memory"
-python3 __QUOIN_HOME__/scripts/fsops.py rm "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
 ```
 
 If cleanup fails, log a one-line warning and continue — fail-OPEN. (`$_TPCKPT_SID` is the SID
@@ -434,7 +434,7 @@ Then spawn `/gate` as a subagent session (post-plan boundary — subagent dispat
 
 Present automated checks and a summary to the user.
 
-**Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
+**Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: ${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
 ```text
 [quoin-handoff/1.0 return]
 status: COMPLETE
@@ -505,7 +505,7 @@ Acquire and cache the session UUID and current branch before the planning loop. 
 are fail-OPEN: a slow or failed call falls back to `unknown` and never stalls the loop.
 
 ```bash
-_TPCKPT_SID="$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --phase thorough-plan 2>/dev/null || echo unknown)"
+_TPCKPT_SID="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --phase thorough-plan 2>/dev/null || echo unknown)"
 _TPCKPT_BRANCH="$(git -C {project-root} rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 ```
 
@@ -516,7 +516,7 @@ action of that boundary. The helper always exits 0 (fail-OPEN) and is additional
 `|| true` as defence-in-depth — a checkpoint failure NEVER blocks the planning round.
 
 ```bash
-python3 __QUOIN_HOME__/scripts/thorough_plan_checkpoint.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/thorough_plan_checkpoint.py \
   --project-root {root} --task {task} --round {N} --phase {plan|critic|revise} \
   --sid "$_TPCKPT_SID" --branch "$_TPCKPT_BRANCH" \
   --plan-path {task_dir}/current-plan.md \
@@ -534,7 +534,7 @@ OWN, IVG-98 writer — do NOT call `boundary_checkpoint.py` here, per D-3), ALSO
 the on-demand budget guard, reusing the already-acquired startup SID
 (`$_TPCKPT_SID`) as a best-effort leaf measurement (T-02 spike PASSED):
 ```bash
-_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root {root} \
+_cbg_out="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/context_budget_guard.py --project-root {root} \
   --current-uuid "$_TPCKPT_SID" || true)"
 ```
 Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGET=1`.
@@ -570,7 +570,7 @@ the record keeps its creator's stored id (the writer preserves a non-empty store
 refresh regardless), so the session that created the record still matches the PreCompact
 hook's exact-equality check while planning rounds run:
 ```bash
-python3 __QUOIN_HOME__/scripts/run_state.py --write --require-existing \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_state.py --write --require-existing \
   --project-root "{root}" --task "{task}" \
   --phase thorough_plan --phase-index 3 --subphase "round-{N}-{plan|critic|revise}" \
   --step "round {N} {phase} returned" --at-stage-boundary false \

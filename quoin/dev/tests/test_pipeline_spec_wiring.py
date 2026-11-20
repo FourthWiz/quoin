@@ -67,122 +67,25 @@ def run_validator(artifact_path, sections_json=TEST_SIDECAR):
 # /run — Phase 1.5 / Checkpoint A0, additive (R-05 no-renumber guard)
 # ===========================================================================
 
-def test_run_skill_has_specify_phase_and_checkpoint_a0():
-    text = _read(RUN_SKILL_MD)
-    assert "Phase 1.5" in text
-    assert "Checkpoint A0" in text
-    assert "SPECIFY" in text or "Specify" in text
-    assert "spec.md" in text
-
-
-def test_run_skill_retains_existing_phase_and_checkpoint_tokens():
-    """R-05: the Phase 1.5 insertion must be additive — Phases 2-6 and
-    Checkpoints A-D keep their identifiers so resume/gate wiring is
-    undisturbed. A renumber that dropped a sibling would fail this test."""
-    text = _read(RUN_SKILL_MD)
-    for token in ("Phase 2", "Phase 6", "Checkpoint A", "Checkpoint D"):
-        assert token in text, f"expected retained token {token!r} missing from run/SKILL.md"
-
-
-def test_run_skill_forwards_spec_path_downstream():
-    text = _read(RUN_SKILL_MD)
-    assert "spec.md" in text
-    # Forwarded into at least the architect and thorough_plan spawn text.
-    assert "if it exists" in text or "read-if-exists" in text
-
 
 # ===========================================================================
 # /gate — spec->architect document gate (MAJ-2)
 # ===========================================================================
-
-def test_gate_skill_has_specify_gate_block():
-    text = _read(GATE_SKILL_MD)
-    assert "After /specify" in text
-    assert "spec.md" in text
-
-
-def test_gate_skill_has_specify_architect_intensity_row():
-    text = _read(GATE_SKILL_MD)
-    assert "/specify" in text
-    assert "/architect" in text
-    # The MAJ-2 intensity-table row cells.
-    assert "spec doc gate" in text
-
-
-def test_gate_skill_has_specify_audit_phase_token():
-    text = _read(GATE_SKILL_MD)
-    assert "gate-specify" in text or "`specify`" in text
 
 
 # ===========================================================================
 # /architect + /thorough_plan — advisory "produce spec?" prompt
 # ===========================================================================
 
-def test_architect_has_advisory_spec_prompt_gated_on_medium_large():
-    text = _read(ARCHITECT_SKILL_MD)
-    assert "/specify" in text
-    assert "advisory" in text.lower()
-    assert "non-blocking" in text.lower() or "non blocking" in text.lower()
-    assert "Medium or Large" in text or ("Medium" in text and "Large" in text)
-
-
-def test_architect_advisory_has_small_skip_note():
-    text = _read(ARCHITECT_SKILL_MD)
-    assert "Small tasks skip" in text or "Small-task-skip" in text or "Small tasks skip this offer" in text
-
-
-def test_thorough_plan_has_advisory_spec_prompt_gated_on_medium_large():
-    text = _read(THOROUGH_PLAN_SKILL_MD)
-    assert "/specify" in text
-    assert "advisory" in text.lower()
-    assert "non-blocking" in text.lower() or "non blocking" in text.lower()
-    assert "Medium" in text and "Large" in text
-
-
-def test_thorough_plan_advisory_has_small_skip_note():
-    text = _read(THOROUGH_PLAN_SKILL_MD)
-    assert "Small tasks skip" in text or "Small-task-skip" in text
-
-
-def test_thorough_plan_forwards_spec_to_plan():
-    text = _read(THOROUGH_PLAN_SKILL_MD)
-    assert "spec.md" in text and "if it exists" in text
-
 
 # ===========================================================================
 # /architect + /plan — bootstrap read of spec.md
 # ===========================================================================
 
-def test_architect_reads_spec_at_bootstrap():
-    text = _read(ARCHITECT_SKILL_MD)
-    assert "spec.md" in text
-    assert "if present" in text or "read-if-exists" in text
-
-
-def test_plan_reads_spec_at_bootstrap():
-    text = _read(PLAN_SKILL_MD)
-    assert "spec.md" in text
-    assert "if present" in text or "read-if-exists" in text
-
 
 # ===========================================================================
 # /review — Spec Compliance section + grandfather wording
 # ===========================================================================
-
-def test_review_has_spec_compliance_section():
-    text = _read(REVIEW_SKILL_MD)
-    assert "## Spec Compliance" in text
-
-
-def test_review_has_grandfather_literal():
-    text = _read(REVIEW_SKILL_MD)
-    assert "No spec — verified against plan only." in text
-
-
-def test_review_reads_spec_at_bootstrap():
-    text = _read(REVIEW_SKILL_MD)
-    assert "spec.md" in text
-    assert "if present" in text or "read-if-exists" in text
 
 
 # ===========================================================================

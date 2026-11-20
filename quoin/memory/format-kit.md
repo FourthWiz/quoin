@@ -2,7 +2,7 @@
 
 This file is the v3 content-type-aware writing reference for all quoin skills. It is a Tier 1 hand-edited English file — never apply terse-style compression to it (doing so would break the format-picking guidance it encodes).
 
-**Relationship to `terse-rubric.md`:** The rubric governs prose discipline *inside* prose sections. The format kit picks *which* sections are prose vs. structured. Both files work together: pick a primitive here, then apply the rubric inside prose-shaped primitives. References deployed copy at `__QUOIN_HOME__/memory/terse-rubric.md`.
+**Relationship to `terse-rubric.md`:** The rubric governs prose discipline *inside* prose sections. The format kit picks *which* sections are prose vs. structured. Both files work together: pick a primitive here, then apply the rubric inside prose-shaped primitives. References deployed copy at `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md`.
 
 **Architecture reference:** artifact-format-architecture v3 §5.1 (see `.workflow_artifacts/artifact-format-architecture/architecture.md`).
 
@@ -247,4 +247,4 @@ Concretely:
 - Format kit says: "this section is a markdown table."
 - Rubric does not apply to table cells — structured primitives have their own discipline (column alignment, separator row, bounded cell content).
 
-Reference the deployed copy of the rubric at `__QUOIN_HOME__/memory/terse-rubric.md` when writing prose-shaped sections. The terse-rubric.md and format-kit.md are co-required: reading one without the other gives an incomplete picture of what correct artifact writing looks like.
+Reference the deployed copy of the rubric at `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` when writing prose-shaped sections. The terse-rubric.md and format-kit.md are co-required: reading one without the other gives an incomplete picture of what correct artifact writing looks like.

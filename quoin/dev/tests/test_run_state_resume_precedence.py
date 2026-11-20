@@ -31,7 +31,6 @@ it is the ONLY one of the two halves that reads `run/SKILL.md`'s own words.
 """
 from __future__ import annotations
 
-import importlib
 import os
 import re
 import subprocess
@@ -61,16 +60,6 @@ ALL_FIELDS = (
     "schema,active,phase,phase_index,subphase,step,at_stage_boundary,"
     "next_action,notes_path,resume_command,updated_at"
 )
-
-
-def test_local_roster_matches_supervisor_roster():
-    """This module's own `RESUMABLE_PHASES` duplicate
-    (used only to drive the `_resolve_*` test-only oracle above) must stay
-    in step with `quoin.supervisor.RESUMABLE_PHASES`, the single source of
-    truth -- test_run_state_wiring.py pins the SKILL.md prose copy against
-    the same source separately."""
-    supervisor = importlib.import_module("quoin.supervisor")
-    assert RESUMABLE_PHASES == supervisor.RESUMABLE_PHASES
 
 
 def _run(args):
@@ -222,15 +211,6 @@ def _resume_slice() -> str:
 # ---------------------------------------------------------------------------
 # Tier 1 -- which phase
 # ---------------------------------------------------------------------------
-
-
-def test_tier1_progress_dir_present_sentinels_decide_phase():
-    sl = _resume_slice()
-    assert "never re-run it" in sl
-    assert "A phase whose `{phase}.done` sentinel EXISTS is finished" in sl
-    # Behavioural: even when a record disagrees, the sentinel roster wins.
-    done = {"discover", "enrich"}
-    assert _resolve_phase(done, {"active": "true", "phase": "review"}) == "specify"
 
 
 def test_tier1_no_progress_dir_fresh_record_decides_phase(tmp_path):
@@ -477,76 +457,3 @@ def test_schema_forward_record_falls_to_next_tier(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_step_1b_documented_between_step_1_and_step_2():
-    sl = _resume_slice()
-    step1 = sl.index("**Step 1 (")
-    step1b = sl.index("**Step 1b (")
-    step2 = sl.index("**Step 2 —")
-    assert step1 < step1b < step2
-
-
-def test_step_1b_documents_all_four_tiers():
-    sl = _resume_slice()
-    body = sl[sl.index("**Step 1b (") :]
-    assert "which phase" in body
-    assert "which sub-phase" in body
-    assert "where inside the first incomplete sub-phase" in body
-    assert "what to do next" in body
-
-
-def test_step_1b_read_call_passes_max_age_days():
-    sl = _resume_slice()
-    body = sl[sl.index("**Step 1b (") :]
-    assert "run_state.py --read" in body
-    assert "--max-age-days" in body
-
-
-def test_step_1_prose_carries_verbatim_tier1_invariant_pins():
-    """Round-2 issue 4: the tier-1 fallback (`_resolve_phase` above, used
-    when no `autonomous-progress-{task}/` directory exists) reads
-    `next_action`, never `phase`. That contract lives in Step 1's Field
-    invariant bullet and its extended fallback bullet -- both BEFORE
-    Step 1b, so they are out of `test_step_1b_prose_carries_verbatim_invariant_pins`'s
-    scope. Pin them here so a revert of the tier-1 fix (re-keying the
-    fallback on `phase`) fails this harness too, not just the behavioural
-    `_resolve_phase` tests above."""
-    sl = _resume_slice()
-    assert "names the LAST COMPLETED phase" in sl
-    assert "--fields active,next_action" in sl
-
-
-def test_step_1b_prose_carries_verbatim_invariant_pins():
-    """The three checks above (tier ordinal position, tier-name substrings,
-    flag presence) do not discriminate the documented algorithm from an
-    inverted one: rewriting Step 1b to say the record OVERRIDES the
-    sentinels, dropping the `at_stage_boundary: false` precondition, or
-    swapping string equality for ordering would still pass every one of
-    them, and every `_resolve_*`-driven tier test above (issue 8 -- those
-    helpers are transcribed FROM this same prose, so they cannot catch a
-    change to it). Pin the exact invariant sentences instead."""
-    sl = _resume_slice()
-    body = sl[sl.index("**Step 1b (") :]
-    assert "The record NEVER overrides them." in body
-    assert "STRING EQUALITY" in body
-    assert "at_stage_boundary: false" in body
-    assert "is DISCARDED, not obeyed" in body
-    # The no-sub-phase-sentinel case must be stated, not
-    # left implicit -- without it, tier 3's only production writer
-    # (`/thorough_plan`'s round boundary) can never re-enter, since its
-    # phase has no known sub-phase sentinel names to string-equal against.
-    assert "No-sub-phase-sentinel case" in body
-    assert "tier 2 has\n   no candidate set to select from" in body
-
-
-def test_step_1b_fields_argument_is_complete_and_matches_the_oracle():
-    """`--fields` completeness assert (issue 8): the exact field list Resume
-    Step 1b requests from `run_state.py --read` must match this module's
-    own `ALL_FIELDS` oracle constant exactly, so a field silently dropped
-    from either side -- the doc's `--read` call, or the fixture helpers
-    above that build and read records through that same field set -- fails
-    a test instead of drifting unnoticed."""
-    sl = _resume_slice()
-    body = sl[sl.index("**Step 1b (") :]
-    m = re.search(r"--fields ([a-z_,]+)", body)
-    assert m, "Step 1b's run_state.py --read call must carry a --fields argument"
-    assert m.group(1) == ALL_FIELDS

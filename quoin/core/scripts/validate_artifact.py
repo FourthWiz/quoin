@@ -168,12 +168,6 @@ def resolve_sidecar(cli_path):
             sys.exit(2)
         return cli_path
 
-    # T-11 / MAJ-4: __QUOIN_HOME__ is substituted to dest_root at deploy time, so this
-    # path resolves correctly in both user mode (~/.claude/) and project mode (<proj>/.claude/).
-    deployed = os.path.join('__QUOIN_HOME__', 'memory', 'format-kit.sections.json')
-    if os.path.isfile(deployed):
-        return deployed
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
     dev_path = os.path.normpath(os.path.join(script_dir, '..', '..', 'memory', 'format-kit.sections.json'))
     if os.path.isfile(dev_path):
@@ -181,8 +175,8 @@ def resolve_sidecar(cli_path):
 
     print(
         "validate_artifact.py: format-kit.sections.json not found.\n"
-        "  Tried (a) --sections-json CLI, (b) __QUOIN_HOME__/memory/, (c) <quoin-dir>/memory/\n"
-        "  Run install.sh to deploy or pass --sections-json <path>.",
+        "  Tried (a) --sections-json CLI, (b) <quoin-dir>/memory/\n"
+        "  Reinstall with 'quoin install' or pass --sections-json <path>.",
         file=sys.stderr,
     )
     sys.exit(2)

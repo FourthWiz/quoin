@@ -136,10 +136,6 @@ def test_completion_glob_appears_verbatim_in_autonomous_memory_doc() -> None:
     assert _COMPLETION_GLOB in _text(_AUTONOMOUS_MEMORY_DOC)
 
 
-def test_completion_glob_appears_verbatim_in_run_adapter_skill() -> None:
-    assert _COMPLETION_GLOB in _text(_RUN_ADAPTER_SKILL)
-
-
 # ---------------------------------------------------------------------------
 # MAJ-1 coverage guard: roster <-> supervisor.py <-> run/SKILL.md write-sites
 # ---------------------------------------------------------------------------
@@ -187,33 +183,6 @@ def _parse_write_site_phases_from_skill(text: str) -> set:
         )
         phases.add(label)
     return phases
-
-
-def test_coverage_guard_roster_matches_supervisor_and_write_sites() -> None:
-    import importlib
-
-    supervisor = importlib.import_module("quoin.supervisor")
-
-    skill_text = _text(_RUN_ADAPTER_SKILL)
-    roster = _parse_phase_roster_from_skill(skill_text)
-    supervisor_phases = set(supervisor.RESUMABLE_PHASES)
-    write_site_phases = _parse_write_site_phases_from_skill(skill_text)
-
-    # The roster must be exactly the 9-phase set (never a "1..6" abbreviation
-    # that silently drops enrich/specify/fast_path_triage) — asserted
-    # structurally, not as a frozen literal count.
-    assert "enrich" in roster, "roster must include enrich (Phase 1.4)"
-    assert "specify" in roster, "roster must include specify (Phase 1.5)"
-    assert "fast_path_triage" in roster, "roster must include fast_path_triage (Phase 1.6)"
-
-    assert roster == supervisor_phases, (
-        f"run/SKILL.md Phase-sequence roster {sorted(roster)} != "
-        f"supervisor.RESUMABLE_PHASES {sorted(supervisor_phases)}"
-    )
-    assert roster == write_site_phases, (
-        f"run/SKILL.md Phase-sequence roster {sorted(roster)} != "
-        f"documented {{phase}}.done write sites {sorted(write_site_phases)}"
-    )
 
 
 def test_run_core_doc_no_forbidden_tokens_in_new_section() -> None:

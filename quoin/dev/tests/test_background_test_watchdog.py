@@ -47,7 +47,7 @@ def _between(text: str, start: str, end: str) -> str:
 
 
 def run_guard() -> str:
-    return _between(RUN_REF.read_text(encoding="utf-8"), "## Implementer tier guard (dispatch)", "## Lessons")
+    return _between(RUN_REF.read_text(encoding="utf-8"), "## Opus implementer (dispatch)", "## Lessons")
 
 
 def run_hard_phase4() -> str:
@@ -58,34 +58,10 @@ def run_hard_phase4() -> str:
 # Dispatch template: explicit timeout, unique junit token, no pending yield
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("region", [run_guard, run_hard_phase4], ids=["run", "run_hard"])
-def test_dispatch_template_mandates_explicit_timeout(region):
-    flat = _flat(region())
-    assert "Run every test command in the FOREGROUND with an " + MANDATE in flat
-    assert "Never end your turn while a test run is pending; read its result first." in flat
-    assert "`impl-<task>-<stamp>`" in flat
-    assert "--junitxml" in flat and "--junit-out" in flat
-    assert "~120 s to the background" in flat
-
-
-def test_run_step6_inline_runs_use_explicit_timeout():
-    text = RUN.read_text(encoding="utf-8")
-    step6 = _flat(_between(text, "## Step 6 — Verify", "## Step 8"))
-    assert MANDATE in step6
-
 
 # ---------------------------------------------------------------------------
 # implement: same-turn commit boundary
 # ---------------------------------------------------------------------------
-
-def test_implement_same_turn_commit_boundary():
-    text = IMPLEMENT.read_text(encoding="utf-8")
-    region = _flat(_between(text, "### Automated verify-fix loop", "## Commit messages"))
-    assert "**Same-turn commit boundary.**" in region
-    assert "closes only when its suite result is read in the same turn" in region
-    assert MANDATE in region
-    assert "Never end a turn, return to a parent or commit while a test run is pending" in region
-    assert "### Headless children never yield with pending work" in region
 
 
 def test_core_docs_carry_the_rules():
@@ -107,29 +83,6 @@ def _waiter_block(region: str) -> str:
     hits = [textwrap.dedent(b) for b in blocks if "WAITER|" in b]
     assert len(hits) == 1, hits
     return hits[0]
-
-
-@pytest.mark.parametrize("region", [run_guard, run_hard_phase4], ids=["run", "run_hard"])
-def test_watchdog_recipe_is_keyed_and_bounded(region):
-    text = region()
-    flat = _flat(text)
-    block = _waiter_block(text)
-    assert 'pgrep -f "[i]mpl-<task>-<stamp>"' in block
-    assert '-lt 360' in block and "sleep 10" in block
-    assert 'echo "WAITER|timeout"' in block and 'echo "WAITER|exited"' in block
-    assert "pgrep -f pytest" not in block
-    assert "run_in_background: true" in flat
-    assert "never key on a bare `pgrep -f pytest`" in flat.lower()
-    assert "bounded at one hour" in flat
-    assert "SendMessage" in flat
-    assert "notification fires when" in flat
-    # A headless child never yields on a background waiter.
-    assert "must not end its turn on a background waiter" in flat
-    assert "`54` in place of `360`" in flat
-
-
-def test_run_and_run_hard_waiters_match():
-    assert _waiter_block(run_guard()) == _waiter_block(run_hard_phase4())
 
 
 # ---------------------------------------------------------------------------

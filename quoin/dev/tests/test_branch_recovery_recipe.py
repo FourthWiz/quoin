@@ -5,7 +5,7 @@ Asserts:
   (b) The recipe file does NOT expose git reset --hard as a standalone runnable
       fenced command (only allows it inside the "Why not" rationale prose).
   (c) Each referencing adapter SKILL.md (implement, gate, review, end_of_task)
-      contains the __QUOIN_HOME__/memory/branch-recovery.md path literal.
+      contains the ${CLAUDE_PLUGIN_ROOT}/memory/branch-recovery.md path literal.
   (d) branch-recovery.md is in TIER1_MEMORY_FILES (installer.py).
   (e) CLAUDE.md contains the branch-recovery.md reference.
   (f) pyproject.toml wires branch-recovery.md into the wheel via the
@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Path constants (parents[3] form — matches test_install_branch_hygiene_deployed.py)
@@ -120,35 +119,10 @@ def test_no_standalone_git_reset_hard_fenced():
 # (c) Each referencing adapter SKILL.md contains the path literal
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("skill_name", REFERENCING_SKILLS)
-def test_skill_references_recipe(skill_name):
-    """Each referencing adapter SKILL.md must contain __QUOIN_HOME__/memory/branch-recovery.md."""
-    skill_file = _skill_path(skill_name)
-    assert skill_file.exists(), (
-        f"Adapter SKILL.md not found at {skill_file}"
-    )
-    text = skill_file.read_text(encoding="utf-8")
-    expected = "__QUOIN_HOME__/memory/branch-recovery.md"
-    assert expected in text, (
-        f"{skill_name}/SKILL.md must contain the literal '{expected}'. "
-        "This ensures the skill tells the user where to find the safe recovery recipe."
-    )
-
 
 # ---------------------------------------------------------------------------
 # (d) branch-recovery.md is in TIER1_MEMORY_FILES
 # ---------------------------------------------------------------------------
-
-def test_branch_recovery_in_tier1_memory_files():
-    """branch-recovery.md must appear in TIER1_MEMORY_FILES in installer.py."""
-    # pythonpath = ["src"] in pyproject.toml makes this importable directly.
-    from quoin.installer import TIER1_MEMORY_FILES  # noqa: PLC0415
-
-    assert "branch-recovery.md" in TIER1_MEMORY_FILES, (
-        "'branch-recovery.md' not found in TIER1_MEMORY_FILES in src/quoin/installer.py. "
-        "Add it to the tuple (see T-02 in IVG-77) so install.sh deploys it to "
-        "~/.claude/memory/branch-recovery.md."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,25 +144,3 @@ def test_claude_md_references_branch_recovery():
 # (f) pyproject.toml force-include line (dual-list guard)
 # ---------------------------------------------------------------------------
 
-def test_pyproject_force_include_line():
-    """pyproject.toml must wire branch-recovery.md into the wheel.
-
-    The quoin/memory directory force-include ships every quoin/memory/ source
-    file into the wheel, so two conditions guarantee branch-recovery.md ships:
-    (1) the directory mapping is present, and (2) the source file exists.
-    This replaced the former per-file dual-list guard, which drifted out of
-    sync with TIER1_MEMORY_FILES (see test_memory_packaged_as_directory_and_all
-    _tier1_files_present and test_wheel_memory_inventory_matches_tier1_set).
-    """
-    assert PYPROJECT_TOML.exists(), f"pyproject.toml not found at {PYPROJECT_TOML}"
-    text = PYPROJECT_TOML.read_text(encoding="utf-8")
-    assert EXPECTED_FORCE_INCLUDE_LINE in text, (
-        f"pyproject.toml must contain the directory force-include line:\n"
-        f"  {EXPECTED_FORCE_INCLUDE_LINE}\n"
-        "This maps the whole quoin/memory/ directory into the wheel manifest. "
-        "Without it, no memory files ship and quoin install aborts."
-    )
-    assert RECIPE_FILE.exists(), (
-        f"branch-recovery.md source missing at {RECIPE_FILE}; the directory "
-        "force-include can only ship a file that exists in quoin/memory/."
-    )

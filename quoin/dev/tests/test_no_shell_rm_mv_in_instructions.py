@@ -158,10 +158,10 @@ _NOT_FLAGGED = [
     "trash_move x y",
     "skip the move",
     '[ -L x ] && python3 fsops.py rm x',
-    '`python3 __QUOIN_HOME__/scripts/fsops.py rm "P.body.tmp" "P.tmp"`',
-    '`python3 __QUOIN_HOME__/scripts/fsops.py finalize "P.tmp" "P" --cleanup "P.body.tmp" "P.tmp"`',
-    '[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"',
-    '#   [ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"',
+    '`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "P.body.tmp" "P.tmp"`',
+    '`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "P.tmp" "P" --cleanup "P.body.tmp" "P.tmp"`',
+    '[ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"',
+    '#   [ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"',
 ]
 
 

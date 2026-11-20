@@ -2,12 +2,12 @@
 
 ## Row format
 
-**Ledger path:** `.workflow_artifacts/<task-name>/cost-ledger.md`. Create with header `# Cost Ledger — <task-name>` if new. Create it (and append rows) without the editor's Write/Edit tools, which fail on a file not read in this session: pipe the row into `python3 __QUOIN_HOME__/scripts/append_artifact.py "$LEDGER" --header "# Cost Ledger — <task-name>"` (the header is written only when the ledger is new or empty; the helper locks the file so concurrent subagents never interleave rows). The `>> "$LEDGER"` one-liners below remain the documented fallback and are equivalent once the ledger exists.
+**Ledger path:** `.workflow_artifacts/<task-name>/cost-ledger.md`. Create with header `# Cost Ledger — <task-name>` if new. Create it (and append rows) without the editor's Write/Edit tools, which fail on a file not read in this session: pipe the row into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py "$LEDGER" --header "# Cost Ledger — <task-name>"` (the header is written only when the ledger is new or empty; the helper locks the file so concurrent subagents never interleave rows). The `>> "$LEDGER"` one-liners below remain the documented fallback and are equivalent once the ledger exists.
 
 **Row format — executable one-liner (7-column form):**
 
 ```bash
-uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s | %s\n' \
+uuid=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s | %s\n' \
   "$uuid" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" "NOTE" "FALLBACK_FIRES" \
   >> "$LEDGER"
 ```
@@ -19,7 +19,7 @@ Substitute the bareword placeholders `PHASE`, `MODEL`, `NOTE`, `FALLBACK_FIRES` 
 **8-column form** (adds the optional `attribution` column — written by the on-behalf orchestrator path (stage 3: `/architect`, `/thorough_plan`, `run_hard`, flag-gated by `QUOIN_INLINE_COST_CAPTURE`, default ON since IVG-249 S-02); session-start one-liner writers keep emitting 6/7-col):
 
 ```bash
-uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
+uuid=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$uuid" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" "NOTE" "FALLBACK_FIRES" "ATTRIBUTION" \
   >> "$LEDGER"
 ```
@@ -30,11 +30,11 @@ uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)
 if [ "${QUOIN_INLINE_COST_CAPTURE:-1}" != "0" ]; then
   SID="$CLAUDE_CODE_SESSION_ID"
   _ERR=$(mktemp) || { printf 'cost-attr WARN: %s\n' "mktemp failed"; _ERR=/dev/null; }
-  ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
+  ATTR="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/agent_transcript_cost.py \
             --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
   [ -z "$ATTR" ] && ATTR="src=unresolved"
   [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-  [ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
+  [ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"
   printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
     "$AID" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" "on-behalf: PHASE via /ORCH" "0" "$ATTR" \
     >> "$LEDGER"
@@ -54,7 +54,7 @@ fi
 **6-column form** (for Conditional skills `/discover`, `/triage` that omit `fallback_fires`):
 
 ```bash
-uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s\n' \
+uuid=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s\n' \
   "$uuid" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" "NOTE" \
   >> "$LEDGER"
 ```
@@ -83,7 +83,7 @@ Column 8 is OPTIONAL and default-safe. Absent means "no inline attribution" — 
 
 Append-only and reader-tolerance semantics are unchanged by this column: 6-, 7-, and 8-column rows are all valid forever, and writers never delete or rewrite existing rows.
 
-**UUID acquisition:** Use `python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE"` to obtain the session UUID. The script resolves the UUID with this precedence: an explicit argument, then the `CLAUDE_CODE_SESSION_ID` environment variable (when it is a well-formed UUID), then, only when the variable is unset or malformed, the most-recently-modified `<uuid>.jsonl` under `~/.claude/projects/<project-hash>/` (project-hash = project path with non-alphanumeric chars replaced by `-`); it returns the stem. Falls back to `unknown-<phase_slug>-<YYYYMMDD>T<HHMMSS>Z` if no JSONL is found or on any error (fail-open). The `unknown-*` prefix is recognized by the cost_snapshot skip filter — synthetic UUIDs are excluded from cost totals. Phase dashes are slugified to underscores in the fallback (e.g., `end-of-task` → `end_of_task`). The outer shell fallback in the one-liner (`|| echo "unknown-PHASE-$(date -u ...)"`) ensures a UUID is always set even if Python is unavailable. The script exits 0 always (fail-open design).
+**UUID acquisition:** Use `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE"` to obtain the session UUID. The script resolves the UUID with this precedence: an explicit argument, then the `CLAUDE_CODE_SESSION_ID` environment variable (when it is a well-formed UUID), then, only when the variable is unset or malformed, the most-recently-modified `<uuid>.jsonl` under `~/.claude/projects/<project-hash>/` (project-hash = project path with non-alphanumeric chars replaced by `-`); it returns the stem. Falls back to `unknown-<phase_slug>-<YYYYMMDD>T<HHMMSS>Z` if no JSONL is found or on any error (fail-open). The `unknown-*` prefix is recognized by the cost_snapshot skip filter — synthetic UUIDs are excluded from cost totals. Phase dashes are slugified to underscores in the fallback (e.g., `end-of-task` → `end_of_task`). The outer shell fallback in the one-liner (`|| echo "unknown-PHASE-$(date -u ...)"`) ensures a UUID is always set even if Python is unavailable. The script exits 0 always (fail-open design).
 
 ## Phase values
 

@@ -72,6 +72,7 @@ User-facing workflow skills with effort levels (from `quoin/core/workflow/skills
 | `weekly_review` | session-lifecycle | low |
 | `specify` | specify | max |
 | `enrich` | enrich | max |
+| `workspace` | workspace | medium |
 | `repo_cleanup` | repo_cleanup | high |
 
 Codex performs each phase natively using its own planning and reasoning capabilities.
@@ -152,7 +153,6 @@ The generator is optional; `discover` MUST NOT fail if it errors.
 - Key validation commands:
   ```
   python3 -m pytest quoin/dev/tests/
-  python3 quoin/scripts/build_preambles.py --check
   python3 quoin/adapters/codex/verify_codex_readiness.py --project-root .
   python3 quoin/adapters/codex/smoke_codex_workflow.py --project-root .
   ```

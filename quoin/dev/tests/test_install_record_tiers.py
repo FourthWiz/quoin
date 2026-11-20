@@ -62,13 +62,15 @@ def _make_venv(dest: Path, *, pth_target: Path | None) -> Path:
 def _install(tmp_path: Path, monkeypatch, venv_python: Path) -> Path:
     """Runs a real project-scope `_cmd_claude_install` with `sys.executable`
     swapped to `venv_python`, so the writer records that interpreter. Returns
-    the deploy dest_root (`<project>/.claude`)."""
+    the staged plugin, the deploy root the resolver reads its record from."""
     fake_home = tmp_path / "home"
     fake_home.mkdir(exist_ok=True)
     project_dir = tmp_path / "proj"
     project_dir.mkdir(exist_ok=True)
 
     monkeypatch.setattr(inst, "check_prerequisites", lambda: [])
+    monkeypatch.setenv("QUOIN_PLUGIN_DIR", str(tmp_path / "plugin"))
+    monkeypatch.setattr(inst, "install_plugin", lambda *a, **kw: "install")
     monkeypatch.setattr(sys, "executable", str(venv_python))
     monkeypatch.chdir(project_dir)
     args = argparse.Namespace(
@@ -79,7 +81,7 @@ def _install(tmp_path: Path, monkeypatch, venv_python: Path) -> Path:
          unittest.mock.patch("time.sleep"):
         result = cli._cmd_claude_install(args)
     assert result == 0
-    return project_dir / ".claude"
+    return tmp_path / "plugin"
 
 
 def _cli_check(dest_root: Path, project_root: Path) -> dict:

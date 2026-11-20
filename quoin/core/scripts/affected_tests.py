@@ -283,58 +283,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/repo_cleanup/SKILL.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
-    (
-        "quoin/CLAUDE.md",
-        "quoin/dev/tests/test_claude_md_size_ceiling.py",
-    ),
-    (
-        "quoin/memory/format-kit.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/memory/glossary.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    # Added IVG-164 stage 1 (T-05): the slim-CLAUDE.md generator's regen
-    # byte-identity drift guards (architecture D-01) live in
-    # test_build_claude_slim.py, not the size-ceiling test above — without
-    # these rows an affected-area /gate run selects only the size-ceiling
-    # test on a CLAUDE.md edit and the drift guards never execute (lesson
-    # 2026-07-04). Duplicate-key-safe: this consumer iterates all rows into
-    # a set, so this row ADDS to the existing quoin/CLAUDE.md selector above
-    # rather than displacing it.
-    (
-        "quoin/CLAUDE.md",
-        "quoin/dev/tests/test_build_claude_slim.py",
-    ),
-    (
-        "quoin/CLAUDE.slim.md",
-        "quoin/dev/tests/test_build_claude_slim.py",
-    ),
-    (
-        "quoin/memory/workflow-catalog.md",
-        "quoin/dev/tests/test_build_claude_slim.py",
-    ),
-    # Added review-1.md MAJOR 2 (IVG-164 stage 1 fix round): the fail-closed
-    # CLAUDE.md-citation disposition sweep (T-09) polices exactly the corpora an
-    # adapter SKILL.md / quoin/memory/*.md edit can stale, but without these rows
-    # test_claude_md_citations.py was unreachable from any affected-area selector —
-    # verbatim the lesson-2026-07-04 blind spot the rows above were written to
-    # close, now reopened for the sweep's own two doc sources plus its fixture.
-    # Duplicate-key-safe (same iterate-all-rows-into-a-set consumer as above): both
-    # doc rows ADD to their existing selectors rather than displacing them.
-    (
-        "quoin/CLAUDE.md",
-        "quoin/dev/tests/test_claude_md_citations.py",
-    ),
-    (
-        "quoin/memory/workflow-catalog.md",
-        "quoin/dev/tests/test_claude_md_citations.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/claude_md_citation_dispositions.json",
-        "quoin/dev/tests/test_claude_md_citations.py",
-    ),
     # IVG-164 stage 2 T-08: context_bundle exclusion drift test is reachable
     # when the SKILL.md corpus changes (bundle emission sites + review/gate
     # adapters + implement parity fix all land in the same stage).
@@ -365,19 +313,11 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_onbehalf_writer_predicate.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_agent_transcript_cost.py",
     ),
     (
         "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
         "quoin/dev/tests/test_onbehalf_default_on.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
-        "quoin/dev/tests/test_onbehalf_writer_predicate.py",
     ),
     (
         "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
@@ -389,15 +329,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/architect/SKILL.md",
-        "quoin/dev/tests/test_onbehalf_writer_predicate.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/architect/SKILL.md",
         "quoin/dev/tests/test_agent_transcript_cost.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/end_of_task/SKILL.md",
-        "quoin/dev/tests/test_onbehalf_writer_predicate.py",
     ),
     # Round 4 (MAJOR-1(d)): closes the Site-7 (run/SKILL.md:729) blast-radius
     # gap — test_run_fast_path.py pins the route-conditional model literal
@@ -470,58 +402,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_authored_content_rule_pointers.py",
     ),
-    (
-        "quoin/adapters/claude/skills/end_of_task/SKILL.md",
-        "quoin/dev/tests/test_authored_content_lint_wiring.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/review/SKILL.md",
-        "quoin/dev/tests/test_authored_content_lint_wiring.py",
-    ),
-    # IVG-123: each of the 9 spawn-target skills' generated preamble.md
-    # (quoin/adapters/claude/skills/<skill>/preamble.md — see build_preambles.py's
-    # SPAWN_TARGETS) selects test_preamble_freshness.py directly. Per-file
-    # rows, not a directory-prefix rule (D-04): a prefix rule would widen
-    # matching semantics for every existing row above. Duplicate-key-safe
-    # (same iterate-all-rows-into-a-set consumer as above) — these are the
-    # first rows for these specific paths, so no existing selector is
-    # widened or displaced.
-    (
-        "quoin/adapters/claude/skills/critic/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/revise/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/revise-fast/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/plan/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/review/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/architect/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/gate/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/specify/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/enrich/preamble.md",
-        "quoin/dev/tests/test_preamble_freshness.py",
-    ),
     # IVG-248 stage 2 T-14: a doc-only edit to the inter-agent handoff spec
     # is unselectable at a Standard gate without these rows — same
     # lesson-2026-07-04 blind spot the rows above were written to close.
@@ -544,16 +424,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/core/workflow/handoff-format-reference.md",
         "quoin/dev/tests/test_handoff_validate.py",
     ),
-    # IVG-248 stage 2 T-14 (durable half of the C-03 critical): gate/SKILL.md
-    # embeds the deploy-drift coverage qualifier VERBATIM, including the
-    # literal "CLAUDE.md" inside its "not covered" clause, so a gate/SKILL.md
-    # edit can stale the citation-sweep fixture the same way a memory/*.md
-    # edit can — but until this row, only the memory/*.md and CLAUDE.md
-    # sides of that sweep were selectable, not the adapter-SKILL.md side.
-    (
-        "quoin/adapters/claude/skills/gate/SKILL.md",
-        "quoin/dev/tests/test_claude_md_citations.py",
-    ),
     # This stage's agent-handoff envelope section and its emit
     # directives touch structural regions of run/SKILL.md that the named
     # structural guards plus several additive-edit traps already pin —
@@ -565,14 +435,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_run_fast_path_heading_freeze.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_plain_run_unchanged.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_autonomous_sentinel_contract.py",
     ),
     (
@@ -581,23 +443,11 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_claude_md_citations.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_decision_gate_census.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_path_resolve_e2e.py",
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_autonomous_hooks_untouched.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_budget_roster_census.py",
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
@@ -619,10 +469,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/run/reference.md",
-        "quoin/dev/tests/test_run_implementer_guard.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/reference.md",
         "quoin/dev/tests/test_run_isolation.py",
     ),
     (
@@ -636,7 +482,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # run keeps the brief, the r1 review and r3 handling in routes.md, read
     # only above r0.
     ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_light_pipeline_split.py"),
-    ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_scope_triage.py"),
     ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_skill_footprint_ceiling.py"),
     ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_discovery_refresh_policy_docs.py"),
     # run keeps its light-route steps in light-pipeline.md, read on demand;
@@ -648,10 +493,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/claude/skills/run/light-pipeline.md",
         "quoin/dev/tests/test_path_resolve.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/light-pipeline.md",
-        "quoin/dev/tests/test_run_implementer_guard.py",
     ),
     (
         "quoin/adapters/claude/skills/run/light-pipeline.md",
@@ -707,14 +548,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # run/SKILL.md changes in the same diff (it already carries a row
     # above). These two rows make an implement- or end_of_task-only edit
     # select the census guard on its own.
-    (
-        "quoin/adapters/claude/skills/implement/SKILL.md",
-        "quoin/dev/tests/test_decision_gate_census.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/end_of_task/SKILL.md",
-        "quoin/dev/tests/test_decision_gate_census.py",
-    ),
     # gate/SKILL.md's own no-envelope clause at its fail-closed site now sits
     # alongside pre-existing decision-gate markers, guarded by both the
     # inline-summary co-occurrence check (test_fail_closed_sites_emit_no_envelope,
@@ -725,10 +558,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/claude/skills/gate/SKILL.md",
         "quoin/dev/tests/test_inline_step_summary_present.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/gate/SKILL.md",
-        "quoin/dev/tests/test_decision_gate_census.py",
     ),
     # core/skills/run.md carried no selector row at all
     # before this stage. Four rows close the hole for the guards this
@@ -761,27 +590,11 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/claude/skills/cleanup/SKILL.md",
-        "quoin/dev/tests/test_cleanup_sentinels.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/cleanup/SKILL.md",
-        "quoin/dev/tests/test_cleanup_skill_structure.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/cleanup/SKILL.md",
         "quoin/dev/tests/test_sentinel_family_parity.py",
     ),
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_run_state_wiring.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_run_state_resume_precedence.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
-        "quoin/dev/tests/test_run_state_wiring.py",
     ),
     # Task-bookkeeping pass prose spans cleanup/SKILL.md,
     # the runtime-neutral core doc, the reference doc,
@@ -863,10 +676,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/memory/hooks-table.md",
-        "quoin/dev/tests/test_hook_stanza_count_parity.py",
-    ),
-    (
-        "quoin/memory/hooks-table.md",
         "quoin/dev/tests/test_compaction_telemetry.py",
     ),
     # round-1 critic MIN-4: T-08 (stage 5) edits lifecycle-guide.md and this
@@ -882,10 +691,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # file out of "ignored" when the mapped test path actually exists on
     # disk (see the mapped_any check below), so in a project without this
     # test file the row simply does not fire.
-    (
-        "pyproject.toml",
-        "quoin/dev/tests/test_probe_gateway.py",
-    ),
     # The lifecycle plugin: its build project, shipped artifact and captured fixture.
     (
         "quoin/adapters/README.md",
@@ -941,10 +746,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_run_skill_auto_resume_contract.py",
     ),
     (
-        "quoin/docs/hooks-guide.md",
-        "quoin/dev/tests/test_hook_stanza_count_parity.py",
-    ),
-    (
         "quoin/docs/runtime-parity-matrix.md",
         "quoin/dev/tests/test_runtime_portability_docs.py",
     ),
@@ -956,10 +757,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_headless_no_yield_rule.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/implement/SKILL.md",
-        "quoin/dev/tests/test_implement_autonomous.py",
     ),
     (
         "quoin/adapters/claude/skills/gate/SKILL.md",
@@ -1102,10 +899,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_pytest_bound_matches_wait_budget.py",
     ),
     (
-        "quoin/adapters/claude/skills/review/SKILL.md",
-        "quoin/dev/tests/test_review_fanout_ledger.py",
-    ),
-    (
         "quoin/adapters/claude/skills/end_of_task/SKILL.md",
         "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
     ),
@@ -1144,14 +937,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/memory/hooks-table.md",
         "quoin/dev/tests/test_context_reading_docs.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/end_of_day/SKILL.md",
-        "quoin/dev/tests/test_end_of_day_cleanup_autofire.py",
-    ),
-    (
-        "src/quoin/installer.py",
-        "quoin/dev/tests/test_install_retired_skill.py",
     ),
 )
 

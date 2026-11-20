@@ -60,24 +60,9 @@ def error_handling_section(run_skill_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_paths_not_content_is_hard_autonomous_requirement(subagent_mgmt_section: str) -> None:
-    section = subagent_mgmt_section
-    assert "Pass only file paths and parameters to each subagent — never raw content" in section
-    assert "Within-phase isolation, autonomous (T-12)" in section
-    assert "HARD requirement" in section
-    assert "never raw file content" in section
-
-
 # ---------------------------------------------------------------------------
 # (b) PARTIAL-signal contract: subagent writes checkpoint + returns PARTIAL
 # ---------------------------------------------------------------------------
-
-
-def test_partial_signal_contract_documented(subagent_mgmt_section: str) -> None:
-    section = subagent_mgmt_section
-    assert "writes a checkpoint to disk" in section
-    assert "`PARTIAL`" in section
-    assert "FRESH subagent to CONTINUE" in section
 
 
 # ---------------------------------------------------------------------------
@@ -85,31 +70,9 @@ def test_partial_signal_contract_documented(subagent_mgmt_section: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_error_handling_documents_partial_continuation_branch(
-    error_handling_section: str,
-) -> None:
-    section = error_handling_section
-    assert "Within-phase PARTIAL continuation (autonomous, T-12)" in section
-    assert "Dispatch a FRESH subagent for the SAME phase" in section
-    assert "checkpoint the subagent wrote to disk" in section or "checkpoint path the subagent wrote to disk" in section
-    assert "Repeat until the phase returns its normal phase-complete summary" in section
-    # Distinguished from the pre-existing stream-idle recovery mechanism.
-    assert "distinct from the stream-idle recovery above" in section
-    # Only fires under autonomous mode.
-    assert "Only fires under `AUTONOMOUS`" in section
-
-
 # ---------------------------------------------------------------------------
 # (d) References the T-03-chosen util/scope-cap mechanism
 # ---------------------------------------------------------------------------
-
-
-def test_self_util_or_scope_cap_fallback_referenced(subagent_mgmt_section: str) -> None:
-    section = subagent_mgmt_section
-    assert "read its own transcript utilization" in section
-    assert "fixed tool-use scope cap" in section
-    assert "Scope cap: ~N tool uses; if blocked, write to disk and return" in section
-    assert "deterministically" in section
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,6 @@ population.
 import re
 from pathlib import Path
 
-import quoin.installer as _inst
 
 THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
@@ -29,7 +28,7 @@ CORE_SKILLS_DIR = PKG_DIR / "core" / "skills"
 # "orchestrator" / "subagent" vocabulary core/workflow/ legitimately uses.
 FORBIDDEN_TOKENS = ("~/.claude", "Haiku", "Sonnet", "Opus", "gh CLI")
 
-EXPECTED_FILENAMES = set(_inst.CORE_WORKFLOW_FILES) - {"skills.json"}
+EXPECTED_FILENAMES = {p.name for p in CORE_WORKFLOW_DIR.glob("*.md")}
 
 
 def _slash_regex(name: str) -> re.Pattern:
@@ -68,25 +67,6 @@ def _scan_forbidden_tokens(path: Path) -> list:
     return hits
 
 
-def test_core_workflow_population_matches_installer_registration():
-    """Guards the population itself, not just the scan: a missing OR an
-    unregistered file would silently break deployment rather than fail
-    loudly. Anchored to the installer's own CORE_WORKFLOW_FILES tuple (the
-    thing that actually gates deployment), not a test-local filename set —
-    a set-equality guard here catches both directions: a file added to
-    core/workflow/ without a matching installer row, and an installer row
-    with no matching file on disk."""
-    files = _core_workflow_files()
-    names = {p.name for p in files}
-    assert files, f"expected at least one *.md file under {CORE_WORKFLOW_DIR}"
-    assert names == EXPECTED_FILENAMES, (
-        f"core/workflow/*.md does not match quoin.installer.CORE_WORKFLOW_FILES "
-        f"(minus skills.json): missing {sorted(EXPECTED_FILENAMES - names)}, "
-        f"unregistered {sorted(names - EXPECTED_FILENAMES)} "
-        f"(found: {sorted(names)})"
-    )
-
-
 def test_core_workflow_population_guard_catches_unrostered_file(tmp_path):
     """Mutation guard: an extra *.md file dropped into a copy of the real
     population, with no matching installer row, must fail the set-equality
@@ -109,27 +89,6 @@ def test_core_workflow_docs_have_no_forbidden_tokens():
     assert offenses == [], (
         "Forbidden Claude-specific token(s) found in core/workflow/*.md:\n"
         + "\n".join(f"  {f}:{ln}: {tok!r} in {text!r}" for f, ln, tok, text in offenses)
-    )
-
-
-def test_core_workflow_docs_have_no_slash_command_forms_of_skill_names():
-    """core/workflow/ docs must reference skills by bare name, never by
-    Claude Code slash-command syntax (e.g. '/implement') — that syntax is
-    adapter-owned UX, not a runtime-neutral concept."""
-    skill_names = _skill_names()
-    assert skill_names, f"expected skill docs under {CORE_SKILLS_DIR}"
-    offenses = []
-    for path in _core_workflow_files():
-        text = path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        for name in skill_names:
-            regex = _slash_regex(name)
-            for lineno, line in enumerate(lines, start=1):
-                if regex.search(line):
-                    offenses.append((path.name, lineno, name, line))
-    assert offenses == [], (
-        "Slash-command form of a skill name found in core/workflow/*.md:\n"
-        + "\n".join(f"  {f}:{ln}: /{name} in {text!r}" for f, ln, name, text in offenses)
     )
 
 

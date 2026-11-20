@@ -111,7 +111,6 @@ class TestState:
         assert inst.workflow_tasks_state(dest) == "foreign"
 
 
-
 # ── apply ───────────────────────────────────────────────────────────────────
 
 class TestApply:
@@ -372,6 +371,8 @@ def _install(base: Path, name: str, *, with_wt=False, remove_wt=False,
     cwd = os.getcwd()
     with contextlib.ExitStack() as stack:
         stack.enter_context(unittest.mock.patch.object(inst, "check_prerequisites", lambda: []))
+        stack.enter_context(unittest.mock.patch.object(inst, "stage_plugin", lambda *a, **kw: "0+test"))
+        stack.enter_context(unittest.mock.patch.object(inst, "install_plugin", lambda *a, **kw: "install"))
         stack.enter_context(unittest.mock.patch("time.sleep"))
         stack.enter_context(unittest.mock.patch.object(Path, "home", return_value=home))
         stack.enter_context(unittest.mock.patch("shutil.which", _no_which))
@@ -409,7 +410,9 @@ class TestEndToEnd:
 
     def test_opt_in_does_not_touch_settings(self, shared):
         _, plain, opted = shared
-        read = lambda d: (d / "settings.json").read_text(encoding="utf-8").replace(str(d), "DEST")
+        def read(d):
+            path = d / "settings.json"
+            return path.read_text(encoding="utf-8").replace(str(d), "DEST") if path.exists() else None
         assert read(opted) == read(plain)
 
     def test_second_opt_in_run_is_byte_identical(self, tmp_path):
@@ -455,7 +458,6 @@ class TestEndToEnd:
         rc, dest = _install(tmp_path, "double", with_wt=True, seed=seed, fake_home=home)
         assert rc == 1
         assert _snapshot(dest) == before
-
 
 
 # ── source tree invariants ──────────────────────────────────────────────────
@@ -510,27 +512,6 @@ class TestSourceInvariant:
         text = (PLUGIN_SRC / "hooks" / "tasks.ts").read_text(encoding="utf-8")
         assert not re.search(r"\$\.", text)
         assert "from 'claude-code'" not in text
-
-
-# ── drift ───────────────────────────────────────────────────────────────────
-
-class TestDrift:
-    def test_never_installed_is_clean(self, tmp_path):
-        assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
-
-    def test_fresh_deploy_is_clean(self, tmp_path):
-        _installed(tmp_path)
-        assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
-
-    def test_edited_file_is_stale(self, tmp_path):
-        folder = _installed(tmp_path)
-        (folder / "hooks" / "tasks.ts").write_text("// edited")
-        drift = inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",))
-        assert [(d.category, d.reason) for d in drift] == [("plugins", "stale")]
-
-    def test_foreign_folder_is_not_compared(self, tmp_path):
-        _foreign(tmp_path)
-        assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
 
 
 # ── affected-tests mapping ──────────────────────────────────────────────────

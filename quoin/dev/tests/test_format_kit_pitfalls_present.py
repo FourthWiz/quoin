@@ -78,13 +78,3 @@ def test_pitfalls_passes_validator():
     )
 
 
-def test_install_sh_includes_pitfalls():
-    """installer.py TIER1_MEMORY_FILES must include format-kit-pitfalls.md."""
-    import sys
-    sys.path.insert(0, str(QUOIN_DIR.parent / "src"))
-    from quoin import installer  # noqa: PLC0415
-
-    assert "format-kit-pitfalls.md" in installer.TIER1_MEMORY_FILES, (
-        "installer.TIER1_MEMORY_FILES does not include 'format-kit-pitfalls.md' — T-02 deploy regression. "
-        "The Python installer must deploy all Tier-1 memory files that install.sh used to deploy."
-    )

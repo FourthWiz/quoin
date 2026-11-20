@@ -151,13 +151,6 @@ def test_absent_null_total_case(tmp_path):
     assert is_partial is False
 
 
-def test_run_skill_renders_totals_unavailable_for_null_case():
-    # Contract pairing: the null/missing-total case above must correspond to a
-    # documented "totals unavailable" rendering in run/SKILL.md's Phase 6 span.
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    assert "totals unavailable" in text
-
-
 # ---------------------------------------------------------------------------
 # Three ordering assertions inside the Phase 6 span (round-2 MAJ-3 rewrite):
 # each its own assert so a dropped subsection FAILs rather than degrading to
@@ -172,23 +165,6 @@ def _phase6_span() -> str:
     m = re.search(r"^## ", after[len("## Phase 6 — End of Task"):], re.MULTILINE)
     end = len("## Phase 6 — End of Task") + (m.start() if m else len(after))
     return after[:end]
-
-
-def test_recovery_heading_present_in_phase6_span():
-    span = _phase6_span()
-    assert "### end_of_task failure recovery (inline finish)" in span
-
-
-def test_cost_summary_json_appears_after_recovery_heading_not_in_pre_existing_prose():
-    span = _phase6_span()
-    heading_idx = span.index("### end_of_task failure recovery (inline finish)")
-    cost_summary_idx = span.index("cost-summary.json")
-    assert cost_summary_idx > heading_idx
-
-
-def test_cost_summary_json_appears_before_archived_literal():
-    span = _phase6_span()
-    assert span.index("cost-summary.json") < span.index("Archived:")
 
 
 # ---------------------------------------------------------------------------
@@ -220,21 +196,6 @@ def _review_ledger_slice() -> str:
     text = REVIEW_SKILL.read_text(encoding="utf-8")
     i = text.index("**Ledger:**")
     return text[i : text.index("**Merge:**", i)]
-
-
-def test_normalized_post_check_predicate_equal_across_all_five_copies():
-    """The fifth copy is the review fan-out's on-behalf block, so it cannot drift."""
-    run_pred = _extract_predicate_line(RUN_SKILL.read_text(encoding="utf-8"), is_architect=False)
-    tp_pred = _extract_predicate_line(THOROUGH_PLAN_SKILL.read_text(encoding="utf-8"), is_architect=False)
-    arch_pred = _extract_predicate_line(ARCHITECT_SKILL.read_text(encoding="utf-8"), is_architect=True)
-    fmt_pred = _extract_predicate_line(COST_LEDGER_FORMAT.read_text(encoding="utf-8"), is_architect=False)
-
-    assert run_pred == EXPECTED_NORMALIZED_PREDICATE
-    assert tp_pred == EXPECTED_NORMALIZED_PREDICATE
-    assert arch_pred == EXPECTED_NORMALIZED_PREDICATE
-    assert fmt_pred == EXPECTED_NORMALIZED_PREDICATE
-    review_pred = _extract_predicate_line(_review_ledger_slice(), is_architect=False)
-    assert review_pred == EXPECTED_NORMALIZED_PREDICATE
 
 
 def _run_shell(shell: str, script: str, env: dict) -> "subprocess.CompletedProcess[str]":

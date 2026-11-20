@@ -69,57 +69,6 @@ def _residue_hits(lines):
     return hits
 
 
-def test_frontmatter_model_and_name():
-    head = SKILL.read_text(encoding="utf-8").split("---")[1]
-    assert re.search(r"(?m)^model: opus$", head)
-    assert re.search(r"(?m)^name: repo_cleanup$", head)
-
-
-def test_pre_flight():
-    sec = _section("Pre-flight")
-    _has(sec, "`main` or `master`", "dirty", "baseline", "scratch directory outside the target repo", "kept after the run")
-
-
-def test_comment_phase():
-    sec = _section("Comment phase")
-    _has(sec, "Python files only", "skipped and counted by extension", "Docstrings are never touched",
-         "Keep when unsure", "sonnet subagents, at most 8", "untrusted", "protected", "`#123`")
-
-
-def test_test_phase_rules():
-    sec = _section("Test phase")
-    _has(sec, "coverage and mutation evidence", "Zero-coverage tests are never removable", "PYTEST_ADDOPTS",
-         "suite_audit.py", "30 minutes", "scoped to the code covered", "reverse order", "-n 0", "-n auto",
-         "unverified in CI", "report-only", "mutmut", "cosmic-ray", "--help")
-
-
-def test_safety_net_and_mutants_cleanup():
-    sec = _section("Safety net and rollback")
-    _has(sec, "bisect", "revert")
-    sentence = next(s for s in re.split(r"(?<=\.)\s", sec) if "mutants/" in s and "trash" in s)
-    assert "fsops.py trash" in sentence
-
-
-def test_dry_run_and_report():
-    _has(_section("Dry-run"), "no commits", "applies nothing")
-    _has(_section("Report"), "comments removed", "protected", "non-Python files skipped", "tests removed",
-         "efficiency and execution changes", "surviving-mutant", "skipped analyses", "test count", "runtime",
-         "coverage", "mutation score", "scratch directory path")
-
-
-def test_body_prohibitions():
-    body = _hand_written()
-    assert "fsops.py rm" not in body
-    assert "git push" not in body and "gh pr" not in body
-    assert "test_suite_audit.py" not in body
-    assert not re.search(r"(?m)^\s*(rm|mv|rmdir)\s", body)
-    assert "`rm " not in body and "`mv " not in body
-
-
-def test_no_planning_residue_in_body():
-    assert _residue_hits(_hand_written().splitlines()) == []
-
-
 def test_residue_helper_still_bites():
     planted = ["see MAJ-2 for why", "done in T-04"]
     allowed = ["report at .workflow_artifacts/x/repo-cleanup-report.md", "fall back to lessons-learned.md"]

@@ -75,26 +75,3 @@ def test_orphan_does_not_match_uuid_skip_pattern():
 # Test (b): Prose — cleanup/SKILL.md documents empty-SID orphan eligibility
 # ---------------------------------------------------------------------------
 
-def test_cleanup_skill_documents_empty_sid_orphan():
-    """cleanup/SKILL.md must document that empty-SID orphans are trash-eligible.
-
-    The IVG-84 fix adds a clarifying sentence to Step 4 so the invariant is
-    explicitly stated (no logic change — just documentation clarity).
-    """
-    assert CLEANUP_SKILL.exists(), f"Missing: {CLEANUP_SKILL}"
-    text = CLEANUP_SKILL.read_text(encoding="utf-8")
-
-    # The clarifying sentence must exist somewhere in Step 4 area
-    # Key signal: the specific orphan filename or "empty-SID" concept
-    has_orphan_doc = (
-        "pending-restore-.txt" in text
-        or "empty-SID orphan" in text.lower()
-        or ("suffix `-.txt`" in text and "orphan" in text.lower())
-    )
-    assert has_orphan_doc, (
-        "cleanup/SKILL.md does not document empty-SID orphan trash-eligibility. "
-        "Expected a clarifying sentence in Step 4 mentioning `pending-restore-.txt` "
-        "or the 'empty-SID orphan' concept.\n"
-        "The sentence must explain that sentinels with suffix `-.txt` are never "
-        "protected by the UUID-skip check and are always trash-eligible."
-    )

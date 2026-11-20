@@ -16,7 +16,7 @@ The header model stays unchanged — CCR routes below the UI.
 
 Setup: `export OPENROUTER_API_KEY=sk-or-... && quoin router setup`
 
-Note: `__QUOIN_HOME__` is the quoin deploy root (installed by `quoin install`). CCR's
+Note: `${CLAUDE_PLUGIN_ROOT}` is the quoin deploy root (installed by `quoin install`). CCR's
 config lives in `$HOME/.claude-code-router/`; quoin's model defaults live in
 `$HOME/.config/quoin/models.json` — neither is deploy-tree, neither is substituted
 by the installer.
@@ -183,7 +183,7 @@ Multiple sessions can run in a day (parallel tasks). Each session writes its own
 
 ### Branch hygiene (essential)
 
-This rule is enforced at three layers: (1) `/implement` §0b branch-hygiene precheck (prompts to create a feature branch if on a protected branch pre-first-commit); (2) `/gate` FAILS if task commits (`has_task_commits: true` — commits ahead of upstream on main/master) land on a protected branch; (3) `/review` flags it as a backstop. Keys on the commits-ahead signal, NOT bare on-main status — a clean repo on main with no ahead commits is NOT a violation. Env knobs: `QUOIN_PROTECTED_BRANCHES` (csv, default `main,master`), `QUOIN_DISABLE_BRANCH_HYGIENE=1` (opt-out). Recovery recipe (mis-placed commits): `__QUOIN_HOME__/memory/branch-recovery.md`.
+This rule is enforced at three layers: (1) `/implement` §0b branch-hygiene precheck (prompts to create a feature branch if on a protected branch pre-first-commit); (2) `/gate` FAILS if task commits (`has_task_commits: true` — commits ahead of upstream on main/master) land on a protected branch; (3) `/review` flags it as a backstop. Keys on the commits-ahead signal, NOT bare on-main status — a clean repo on main with no ahead commits is NOT a violation. Env knobs: `QUOIN_PROTECTED_BRANCHES` (csv, default `main,master`), `QUOIN_DISABLE_BRANCH_HYGIENE=1` (opt-out). Recovery recipe (mis-placed commits): `${CLAUDE_PLUGIN_ROOT}/memory/branch-recovery.md`.
 - **Reinstall (`bash quoin/install.sh`) after a `quoin/**`/`src/quoin/**` diff** — `/gate` `deploy_drift_check.py` flags drift (`QUOIN_DISABLE_DEPLOY_DRIFT=1`; IVG-136).
 
 ### Git workflow
@@ -216,7 +216,7 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`
 
 The body should explain the "why" — the motivation for the change, not a list of files modified (the diff shows that).
 
-**Clean authored content.** Comments, commit bodies, and PR descriptions are shipped work product: they read as plain engineering to someone who has never seen the planning artifacts — no plan/decision/finding IDs, severities, review-round narration, gate verdicts, confidence scores, or `.workflow_artifacts/` paths. Full rule (all skills that author shipped content follow it): `__QUOIN_HOME__/memory/clean-authored-content.md`.
+**Clean authored content.** Comments, commit bodies, and PR descriptions are shipped work product: they read as plain engineering to someone who has never seen the planning artifacts — no plan/decision/finding IDs, severities, review-round narration, gate verdicts, confidence scores, or `.workflow_artifacts/` paths. Full rule (all skills that author shipped content follow it): `${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md`.
 
 #### Pull requests
 
@@ -248,9 +248,9 @@ Don't guess about external system behavior — verify it.
 
 ### Serena (conditional)
 
-If `ToolSearch select:mcp__serena__activate_project` loads a schema, run the activation protocol at task start (`activate_project` then `initial_instructions`) and prefer Serena symbol tools over grep. If no schema loads, do nothing — never call Serena tools that don't exist. Full protocol: `__QUOIN_HOME__/memory/serena-activation.md`.
+If `ToolSearch select:mcp__serena__activate_project` loads a schema, run the activation protocol at task start (`activate_project` then `initial_instructions`) and prefer Serena symbol tools over grep. If no schema loads, do nothing — never call Serena tools that don't exist. Full protocol: `${CLAUDE_PLUGIN_ROOT}/memory/serena-activation.md`.
 
-For periodic re-onboarding when Serena memory becomes stale (marker `serena-onboarded.md` exists AND is older than `QUOIN_SERENA_STALE_DAYS`): see `__QUOIN_HOME__/memory/serena-activation.md §Refresh / Re-onboarding`. The `/start_of_day` Step 6b offers the "Set up / Refresh Serena memory" option when staleness is detected.
+For periodic re-onboarding when Serena memory becomes stale (marker `serena-onboarded.md` exists AND is older than `QUOIN_SERENA_STALE_DAYS`): see `${CLAUDE_PLUGIN_ROOT}/memory/serena-activation.md §Refresh / Re-onboarding`. The `/start_of_day` Step 6b offers the "Set up / Refresh Serena memory" option when staleness is detected.
 
 ### Daily insight capture
 
@@ -267,7 +267,7 @@ Write an entry when you encounter:
 - A workflow step that felt wrong or slow (mark `Applies to: workflow` — this becomes a Tier 3 suggestion at end of day)
 - Any moment you think "I wish I'd known this earlier in the session"
 
-**Write without asking the user first.** This is your scratchpad. Keep entries short (2-4 sentences). Tag each with `Promote?: yes | maybe | no`. Append via `__QUOIN_HOME__/scripts/append_artifact.py`, not Write/Edit.
+**Write without asking the user first.** This is your scratchpad. Keep entries short (2-4 sentences). Tag each with `Promote?: yes | maybe | no`. Append via `${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py`, not Write/Edit.
 
 Do NOT use the insights scratchpad for task progress tracking — that belongs in `.workflow_artifacts/memory/sessions/<date>-<task>.md`.
 
@@ -292,11 +292,11 @@ Keep entries concise — 2-4 lines each. This file grows over time and becomes t
 
 ### Session state tracking
 
-Every skill that does meaningful work (architect, plan, critic, revise, implement, review, run) writes `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` once per run, at the stage boundary, to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule). `/end_of_day` and `/start_of_day` read it.
+Every skill that does meaningful work (architect, plan, critic, revise, implement, review, run) writes `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` once per run, at the stage boundary, to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule). `/end_of_day` and `/start_of_day` read it.
 
-`end_of_day_due: yes` is set at every write; `/end_of_day` Step 3d flips it to `no` per processed session (hybrid date-window + flag rule); `sessionstart.sh`/`/start_of_day` use it as the second missing-EOD-banner signal (36 h window). `fallback_fires` counts Class B English-fallback + Haiku-dispatch retries (incremented in place, preserved across rewrites, never decremented). Full semantics: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+`end_of_day_due: yes` is set at every write; `/end_of_day` Step 3d flips it to `no` per processed session (hybrid date-window + flag rule); `sessionstart.sh`/`/start_of_day` use it as the second missing-EOD-banner signal (36 h window). `fallback_fires` counts Class B English-fallback + Haiku-dispatch retries (incremented in place, preserved across rewrites, never decremented). Full semantics: `${CLAUDE_PLUGIN_ROOT}/memory/lifecycle-guide.md`.
 
-`verification_ran`/`verification_mismatches` (§V, IVG-115) reset to `no`/`0` at every write — omission or `no` reads as a failure signal, never a silent pass. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
+`verification_ran`/`verification_mismatches` (§V, IVG-115) reset to `no`/`0` at every write — omission or `no` reads as a failure signal, never a silent pass. Details: `${CLAUDE_PLUGIN_ROOT}/memory/verification-guide.md`.
 
 The cost ledger (`.workflow_artifacts/<task-name>/cost-ledger.md`) is the source of truth for per-session costs.
 
@@ -314,15 +314,15 @@ Note: `/thorough_plan` writes phase-boundary session-state updates (IVG-98) to a
 
 **Conditional skills:** `/discover`, `/gate`, `/start_of_day`, `/capture_insight`, and `/triage` skip cost recording if no task context is active.
 
-Bash one-liner, UUID rules, writer guidance, NOTE-quoting, and parser-tolerance details: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Bash one-liner, UUID rules, writer guidance, NOTE-quoting, and parser-tolerance details: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 ### Knowledge cache
 
-Cache lives under `.workflow_artifacts/cache/` (advisory; missing/stale never an error; rollback by deletion). Three rules, directory structure, entry format, staleness, and the "per-skill inline copies are never pointer-replaced" caveat (lesson 2026-04-13): `__QUOIN_HOME__/memory/cache-guide.md`.
+Cache lives under `.workflow_artifacts/cache/` (advisory; missing/stale never an error; rollback by deletion). Three rules, directory structure, entry format, staleness, and the "per-skill inline copies are never pointer-replaced" caveat (lesson 2026-04-13): `${CLAUDE_PLUGIN_ROOT}/memory/cache-guide.md`.
 
 ### Tier 1 — files that always stay English (caveman-token-optimization carve-out)
 
-The full catalog of always-English Tier-1 files (hand-edited, contract-approval, rendered briefings, source files) lives at `__QUOIN_HOME__/memory/tier1-files.md` (source: `quoin/memory/tier1-files.md`) — consult it when deciding if a file is exempt from terse-style writing.
+The full catalog of always-English Tier-1 files (hand-edited, contract-approval, rendered briefings, source files) lives at `${CLAUDE_PLUGIN_ROOT}/memory/tier1-files.md` (source: `quoin/memory/tier1-files.md`) — consult it when deciding if a file is exempt from terse-style writing.
 
 ## Model assignments
 
@@ -363,33 +363,33 @@ The full catalog of always-English Tier-1 files (hand-edited, contract-approval,
 
 ### Subagent preamble (Stage 2 of pipeline-efficiency-improvements)
 
-Purely additive prompt-cache warm-up for 9 spawn-target skills; generated by `build_preambles.py`; never hand-edit. Full details: `__QUOIN_HOME__/memory/preamble-guide.md`.
+Purely additive prompt-cache warm-up for 9 spawn-target skills; generated by `build_preambles.py`; never hand-edit. Full details: `${CLAUDE_PLUGIN_ROOT}/memory/preamble-guide.md`.
 
 ### §0 Model dispatch preamble
 
 The 19 cheap-tier skills (gate, end_of_day, start_of_day, triage, capture_insight, cleanup, cost_snapshot, weekly_review, end_of_task, implement, rollback, expand, revise-fast, sleep, next_steps, continue_work, pr, status, workspace) carry a `## §0 Model dispatch` block as the first body H2 after the H1. When invoked from a session running on a model strictly more expensive than the declared tier, the skill self-dispatches via the Agent tool to its declared model and prefixes the child prompt with `[no-redispatch]` to prevent recursion. Counter form `[no-redispatch:N]` (N≥2) is an abort signal. The 13 Opus-tier skills do NOT carry §0. The 11 Opus-tier leaf skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich, repo_cleanup) carry `## §0″ Minimum-tier guard` (under-tier protection) instead; orchestrators `/run` and `/thorough_plan` carry neither.
 
-Fail-OPEN on Agent unavailable (best-effort cost guardrail, architecture I-01). Manual override: prefix slash invocation with `[no-redispatch]`. Drift detection: `test_quoin_stage1_preamble.py`, `test_quoin_stage1_recursion_abort.py`. Full branch set — worktree-error classification, sentinel forms, recovery options, 1M-credit handling (IVG-89/IVG-90): `__QUOIN_HOME__/memory/dispatch-guide.md`.
+Fail-OPEN on Agent unavailable (best-effort cost guardrail, architecture I-01). Manual override: prefix slash invocation with `[no-redispatch]`. Drift detection: `test_quoin_stage1_preamble.py`, `test_quoin_stage1_recursion_abort.py`. Full branch set — worktree-error classification, sentinel forms, recovery options, 1M-credit handling (IVG-89/IVG-90): `${CLAUDE_PLUGIN_ROOT}/memory/dispatch-guide.md`.
 
 ### §0' Pollution dispatch
 
-The 11 Opus-tier non-orchestrator skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich, repo_cleanup) carry a `## §0' Pollution dispatch` block. Fires when `pollution_guard.py` prints `OVER` (score ≥ `QUOIN_POLLUTION_THRESHOLD`, default 5000) AND no `[no-redispatch]` AND no prior §0 dispatch; §0 fires first, §0' only if no §0 dispatch. Excluded: `/run`, `/thorough_plan`. Fail-OPEN on Agent unavailable. Drift: `quoin/dev/tests/test_quoin_pollution_preamble.py`. Per-skill dispatch contract, 1M-credit recovery (IVG-89), and full detection rules: `__QUOIN_HOME__/memory/dispatch-guide.md`.
+The 11 Opus-tier non-orchestrator skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich, repo_cleanup) carry a `## §0' Pollution dispatch` block. Fires when `pollution_guard.py` prints `OVER` (score ≥ `QUOIN_POLLUTION_THRESHOLD`, default 5000) AND no `[no-redispatch]` AND no prior §0 dispatch; §0 fires first, §0' only if no §0 dispatch. Excluded: `/run`, `/thorough_plan`. Fail-OPEN on Agent unavailable. Drift: `quoin/dev/tests/test_quoin_pollution_preamble.py`. Per-skill dispatch contract, 1M-credit recovery (IVG-89), and full detection rules: `${CLAUDE_PLUGIN_ROOT}/memory/dispatch-guide.md`.
 
 ### §0″ Minimum-tier guard
 
-The 11 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block. Fires when `current_tier < declared_tier` (inverse of §0); up-dispatches to Opus (mirrors §0), with an AskUserQuestion fallback on failure. Env knob `QUOIN_DISABLE_MINTIER_GUARD=1` → silent skip. Generated by `inject_pollution_dispatch.py`; drift test `test_mintier_guard.py`. Orchestrators excluded (D-04); `/run` hands implementing to Opus from any other tier (same knob). The 12 Sonnet-tier §0 skills carry the mirrored `§0‴` block (same knob; drift test `test_sonnet_mintier_guard.py`). Full decision tree and 1M-credit details: `__QUOIN_HOME__/memory/dispatch-guide.md`.
+The 11 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block. Fires when `current_tier < declared_tier` (inverse of §0); up-dispatches to Opus (mirrors §0), with an AskUserQuestion fallback on failure. Env knob `QUOIN_DISABLE_MINTIER_GUARD=1` → silent skip. Generated by `inject_pollution_dispatch.py`; drift test `test_mintier_guard.py`. Orchestrators excluded (D-04); `/run` hands implementing to Opus from any other tier (same knob). The 12 Sonnet-tier §0 skills carry the mirrored `§0‴` block (same knob; drift test `test_sonnet_mintier_guard.py`). Full decision tree and 1M-credit details: `${CLAUDE_PLUGIN_ROOT}/memory/dispatch-guide.md`.
 
 ### §V Ground-truth verification
 
-`end_of_day`/`start_of_day`/`weekly_review` carry `## §V Ground-truth verification`: `verify_claims.py` reconciles claimed task/PR state vs re-derived truth (`end_of_day`'s early `## Claims` manifest is backstopped by a SessionEnd hook). `status`/`triage`/`cost_snapshot` carry a lighter block; `pr`/`end_of_task`/`continue_work` deferred. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
+`end_of_day`/`start_of_day`/`weekly_review` carry `## §V Ground-truth verification`: `verify_claims.py` reconciles claimed task/PR state vs re-derived truth (`end_of_day`'s early `## Claims` manifest is backstopped by a SessionEnd hook). `status`/`triage`/`cost_snapshot` carry a lighter block; `pr`/`end_of_task`/`continue_work` deferred. Details: `${CLAUDE_PLUGIN_ROOT}/memory/verification-guide.md`.
 
 ### Hooks deployed by quoin
 
-`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 9 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` only clears or stamps run-continuation sentinels (no transcript read); `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
+`bash install.sh` deploys hook scripts to `${CLAUDE_PLUGIN_ROOT}/hooks/` and registers 9 (event, matcher) stanzas in `${CLAUDE_PLUGIN_ROOT}/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` only clears or stamps run-continuation sentinels (no transcript read); `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
 
-The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
+The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `${CLAUDE_PLUGIN_ROOT}/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
 
-All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, etc.) use integer basis-points arithmetic. Context % comes from real transcript usage (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` overrides the window), with a byte-estimate fallback. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
+All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, etc.) use integer basis-points arithmetic. Context % comes from real transcript usage (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` overrides the window), with a byte-estimate fallback. Details: `${CLAUDE_PLUGIN_ROOT}/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
 
 Opt-in mods (asked in a TTY): `install.sh --with-context-tracker`, `--with-workflow-tasks` (undo `--remove-*`); hooks-guide.md.
 
@@ -400,11 +400,11 @@ Three skills handle session lifecycle at different granularities (v3 lifecycle s
 - `/sleep` — Scans daily insights + session files (30-day window); three-bucket decisions (Promote/Soft-Forget/deferred). Writes ONLY to `lessons-learned.md` + `forgotten/`.
 - `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires from `/end_of_day` (Step 5b).
 
-Full subcommand contracts and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+Full subcommand contracts and env knobs: `${CLAUDE_PLUGIN_ROOT}/memory/lifecycle-guide.md`.
 
 ### /sleep importance signals
 
-`/sleep` reads signals from `__QUOIN_HOME__/memory/sleep-signals.yaml` (source: `quoin/memory/sleep-signals.yaml`). Thresholds override via `QUOIN_SLEEP_<KEY>` env vars. Fallback if YAML absent: `sleep_score.py` parses this section, then hardcoded defaults.
+`/sleep` reads signals from `${CLAUDE_PLUGIN_ROOT}/memory/sleep-signals.yaml` (source: `quoin/memory/sleep-signals.yaml`). Thresholds override via `QUOIN_SLEEP_<KEY>` env vars. Fallback if YAML absent: `sleep_score.py` parses this section, then hardcoded defaults.
 
 ### Workflow memory layers
 
@@ -418,6 +418,6 @@ The workflow uses several distinct memory layers, each with a different lifecycl
 | `daily/<date>.md` | rendered daily briefing | `/end_of_day` |
 | `weekly/<iso-week>.md` | rendered weekly review | `/weekly_review` |
 | `forgotten/<date>.md` | soft-forget archive | `/sleep` |
-| `run-state-<task>.json` + `run-notes-<task>.md`[`.1`] | task-keyed resume record (`phase`/`next_action`/`step`) + its append-only notes log — session-id anchoring and adoption timing: `__QUOIN_HOME__/memory/lifecycle-guide.md` | `/run` (sole creator) + `/thorough_plan` (refines only) |
+| `run-state-<task>.json` + `run-notes-<task>.md`[`.1`] | task-keyed resume record (`phase`/`next_action`/`step`) + its append-only notes log — session-id anchoring and adoption timing: `${CLAUDE_PLUGIN_ROOT}/memory/lifecycle-guide.md` | `/run` (sole creator) + `/thorough_plan` (refines only) |
 
-**Hard boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Enforced by `test_sleep_write_boundary.py`. `trash/` directory is outside `/sleep --purge` scope (gap-seven narrowed: 8 live `*.txt` sentinel families under `memory/` are now covered via `/sleep --purge --sentinels`; `trash/<date>/` remains the residual gap). Directory tree + `forgotten/<date>.md` entry-format + `> Source:` restore anchor: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+**Hard boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Enforced by `test_sleep_write_boundary.py`. `trash/` directory is outside `/sleep --purge` scope (gap-seven narrowed: 8 live `*.txt` sentinel families under `memory/` are now covered via `/sleep --purge --sentinels`; `trash/<date>/` remains the residual gap). Directory tree + `forgotten/<date>.md` entry-format + `> Source:` restore anchor: `${CLAUDE_PLUGIN_ROOT}/memory/lifecycle-guide.md`.

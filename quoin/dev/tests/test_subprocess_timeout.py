@@ -3,7 +3,6 @@
 Covers every touched subprocess site:
   - quoin/core/scripts/branch_hygiene.py  (_run)
   - quoin/core/scripts/affected_tests.py  (_run, pytest subprocess)
-  - quoin/scripts/build_preambles.py      (git_hash_object)
   - quoin/core/scripts/status_graph.py    (_git_diff_nonempty)
   - quoin/core/scripts/verify_claims.py   (_run_gh_pr_list)
   - quoin/core/scripts/generate_discovery_map.py (_read_git_head)
@@ -59,8 +58,6 @@ _sg = _load_core("status_graph")
 _vc = _load_core("verify_claims")
 _gdm = _load_core("generate_discovery_map")
 
-sys.path.insert(0, str(_SCRIPTS_DIR))
-import build_preambles as _bp  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +66,8 @@ import build_preambles as _bp  # noqa: E402
 
 @pytest.mark.parametrize(
     "mod",
-    [_bh, _at, _bp, _sg, _vc, _gdm],
-    ids=["branch_hygiene", "affected_tests", "build_preambles", "status_graph", "verify_claims", "generate_discovery_map"],
+    [_bh, _at, _sg, _vc, _gdm],
+    ids=["branch_hygiene", "affected_tests", "status_graph", "verify_claims", "generate_discovery_map"],
 )
 class TestHelperFallback:
     def test_default_is_30(self, mod, monkeypatch):
@@ -338,40 +335,6 @@ class TestAffectedTestsPytestTimeout:
             out = capsys.readouterr().out
             assert "pytest_timeout_warning" not in out
             assert "exceeds the headless" not in out
-
-
-# ---------------------------------------------------------------------------
-# build_preambles.git_hash_object — explicit timeout + clear TimeoutExpired wrap
-# ---------------------------------------------------------------------------
-
-class TestBuildPreamblesHashObject:
-    def test_passes_explicit_timeout(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("QUOIN_SUBPROCESS_TIMEOUT", "1")
-        captured = {}
-        real_run = subprocess.run
-
-        def fake_run(args, **kwargs):
-            captured.update(kwargs)
-            return real_run(args, **kwargs)
-
-        monkeypatch.setattr(_bp.subprocess, "run", fake_run)
-        f = tmp_path / "x.txt"
-        f.write_text("hello\n")
-        sha = _bp.git_hash_object(f)
-        assert captured.get("timeout") == 1
-        assert isinstance(sha, str) and len(sha) == 40
-
-    def test_timeout_expired_wrapped_clearly(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("QUOIN_SUBPROCESS_TIMEOUT", "1")
-
-        def fake_run(args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout"))
-
-        monkeypatch.setattr(_bp.subprocess, "run", fake_run)
-        f = tmp_path / "x.txt"
-        f.write_text("hello\n")
-        with pytest.raises(RuntimeError, match="git hash-object timed out"):
-            _bp.git_hash_object(f)
 
 
 # ---------------------------------------------------------------------------

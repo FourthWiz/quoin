@@ -1,0 +1,2099 @@
+"""Deploy quoin artifacts to ~/.claude/ (user mode) or <project>/.claude/ (project mode)."""
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+from typing import NamedTuple, Optional
+
+# T-04: single source of truth for wheel-bundled memory files (8 Tier-1 files)
+TIER1_MEMORY_FILES = (
+    "terse-rubric.md",
+    "format-kit.md",
+    "glossary.md",
+    "format-kit.sections.json",
+    "summary-prompt.md",
+    "format-kit-pitfalls.md",
+    "sleep-signals.yaml",
+    "cache-guide.md",
+    "hooks-table.md",
+    "dispatch-guide.md",
+    "lifecycle-guide.md",
+    "cost-ledger-format.md",
+    # Added IVG-77: canonical safe branch-reset recipe (Tier-1 memory file)
+    "branch-recovery.md",
+    # Added IVG-50 S-3: subagent preamble warm-up guide (extracted from CLAUDE.md)
+    "preamble-guide.md",
+    # Added IVG-50 S-3: memory maintenance reference doc and pattern config
+    "memory-maintenance.md",
+    "memory-maintenance.yaml",
+    # Added serena-integration: Serena MCP activation protocol (Tier-1 memory file)
+    "serena-activation.md",
+    # Added claude-md-trim: relocated Tier-1 catalog from CLAUDE.md
+    "tier1-files.md",
+    # Added IVG-106: discovery/Serena refresh routine recipe (Tier-1 memory file)
+    "discovery-refresh-routine.md",
+    # Added IVG-115: §V ground-truth verification verbose reference (Tier-1 memory file)
+    "verification-guide.md",
+    # Added IVG-137: opt-in /schedule EOD cron recipe (Tier-1 memory file)
+    "eod-refresh-routine.md",
+    # Added claude-adapter-optimization stage 3: fixed session-state schema (Tier-1 memory file)
+    "session-schema.md",
+    # Added IVG-153: opt-in --autonomous span reference (Tier-1 memory file)
+    "autonomous-mode.md",
+    # Added IVG-150: shared fail-closed decision-gate guard reference (Tier-1 memory file)
+    "decision-gate-guard.md",
+    # Added IVG-164 stage 1: generated slim-variant catalog of dropped CLAUDE.md sections
+    "workflow-catalog.md",
+    # Shared clean-authored-content rule (Tier-1 memory file)
+    "clean-authored-content.md",
+    # Category-3 comment-cleanup criteria (Tier-1 memory file)
+    "comment-cleanup-criteria.md",
+    # /cleanup task-bookkeeping pass interactive procedure (Tier-1 memory file)
+    "cleanup-task-bookkeeping.md",
+)
+
+# T-05: canonical skill list — must match quoin/adapters/claude/skills/ on disk exactly
+CANONICAL_SKILLS = (
+    "architect",
+    "capture_insight",
+    "cleanup",
+    "continue_work",
+    "cost_snapshot",
+    "critic",
+    "discover",
+    "end_of_day",
+    "end_of_task",
+    "enrich",
+    "expand",
+    "gate",
+    "implement",
+    "init_workflow",
+    "next_steps",
+    "plan",
+    "pr",
+    "repo_cleanup",
+    "review",
+    "revise",
+    "revise-fast",
+    "rollback",
+    "run",
+    "run_hard",
+    "security_review",
+    "sleep",
+    "specify",
+    "start_of_day",
+    "status",
+    "thorough_plan",
+    "triage",
+    "weekly_review",
+    "workspace",
+)
+
+# T-05: canonical script list — adapter scripts deployed to ~/.claude/scripts/
+DEPLOYED_SCRIPTS = (
+    "validate_artifact.py",
+    "path_resolve.py",
+    "cost_from_jsonl.py",
+    "classify_critic_issues.py",
+    "build_preambles.py",
+    "session_age_guard.py",
+    "model_tier.py",  # IVG-307: Claude-adapter-owned model-name to tier mapping for the /run implementer guard (adapter-only, no CORE_SCRIPTS twin)
+    "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
+    "sleep_score.py",
+    "analyze_cost_ledger.py",
+    "git_root_for_dispatch.py",
+    "dispatch_sidecar.py",
+    "status_graph.py",
+    "dashboard_cost.py",    # T-11: dashboard adapter cost provider (D-11)
+    "dashboard_server.py",  # T-11: dashboard HTTP server (D-11)
+    "branch_hygiene.py",   # IVG-70: branch hygiene check wrapper
+    "affected_tests.py",   # IVG-71: affected-area test selector + runner wrapper
+    "inject_pollution_dispatch.py",  # IVG-69 Stage A: §0' Pollution dispatch generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
+    "spend_monitor.py",              # IVG-62: realtime token-spend monitor wrapper
+    "get_session_uuid.py",           # IVG-74: reliable session-UUID capture for cost ledger
+    "memory_check.py",               # IVG-50: auto-memory referential-integrity checker wrapper
+    "memory_select.py",              # IVG-50 S-1: selective lessons retrieval wrapper
+    "dispatch_config.py",            # IVG-90: 1M-dispatch config+cache reader/writer wrapper
+    "worktree_isolation.py",         # IVG-116: worktree-dispatch decider+probe reader/writer wrapper
+    "parallel_stages.py",            # IVG-129: /run parallel: wave planner + stage worktree/merge helper wrapper
+    "generate_discovery_map.py",     # /discover optional hook — silently skips without deploy
+    "select_unprocessed_sessions.py",  # authoritative session-selection helper for end_of_day/weekly_review
+    "thorough_plan_checkpoint.py",   # IVG-98: phase-boundary checkpoint wrapper for /thorough_plan
+    "cost_summary.py",               # IVG-96: portable cost-summary.json normalizer wrapper
+    "discovery_staleness.py",        # IVG-106: discovery/Serena staleness detector wrapper
+    "repo_map.py",                   # ranked symbol map for /discover cache wrapper
+    "verify_claims.py",              # IVG-115: §V ground-truth reconciliation engine wrapper
+    "inject_verification_step.py",   # IVG-115 T-04: §V block generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
+    "deploy_drift_check.py",         # IVG-136: post-merge deploy-drift guard (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, see D-05)
+    "ci_mirror.py",  # IVG-138: CI-parity gate check for non-Python deliverables
+    "checkpoint_picker.py",          # IVG-139: pure restore-picker wrapper
+    "nested_root_check.py",          # IVG-119: nested/duplicate .workflow_artifacts root detector wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "lessons_guard.py",              # IVG-119: cross-project lessons verbatim-dedup guard wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "decision_gate_guard.py",        # IVG-150: fail-closed decision-gate guard wrapper (wrapped portable-core — also in CORE_SCRIPTS; parents[1]/core/scripts loader)
+    "context_budget_guard.py",       # IVG-141: on-demand context-budget guard wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "boundary_checkpoint.py",        # IVG-141: phase/task-boundary checkpoint writer wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "run_state.py",                  # IVG-258: task-keyed run-state writer/reader wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "auto_resume.py",                # IVG-280: run-continuation helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "compaction_telemetry.py",       # IVG-258 stage 5: compaction-telemetry sink reader wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "agent_transcript_cost.py",      # IVG-111 S-2: nested subagent-transcript resolver + pricer (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors cost_from_jsonl.py)
+    "cost_ledger_summary.py",        # finalize-time ledger re-pricing + token-mix estimates (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors agent_transcript_cost.py)
+    "known_red.py",  # IVG-144: known-red manifest reader/matcher (wrapped portable-core — also in CORE_SCRIPTS)
+    "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
+    "run_isolation.py",  # /run per-checkout run registry + worktree isolation (wrapped portable-core — also in CORE_SCRIPTS)
+    "plan_path_lint.py",  # IVG-143: cited-path resolver/linter wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "authored_content_lint.py",  # advisory authored-content lint wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "footprint_report.py",  # IVG-162 T-01: corpus byte-footprint report (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors sleep_score.py)
+    "build_claude_slim.py",  # IVG-164 stage 1 T-04: slim CLAUDE.md variant generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_preambles.py)
+    "context_bundle.py",  # IVG-164 stage 2 T-02: context bundle helper for orchestrator spawn-prompt construction (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_claude_slim.py)
+    "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
+    "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
+    "continuation_handoff.py",  # continuation handoff helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "repo_comment_cleanup.py",  # /repo_cleanup comment lister, applier and removal-only verifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "suite_audit.py",  # /repo_cleanup test-suite audit helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "task_bookkeeping.py",  # task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "fsops.py",  # file-operations helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "append_artifact.py",  # artifact append helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "run_phase.py",  # /run phase marker wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "discovery_dirty.py",  # /run discovery-dirty decision wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "run_record.py",  # /run brief and discovery record wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "plan_tasks.py",  # plan pending-task check wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "wait_for.py",  # detached-start and bounded foreground wait helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "child_watch.py",  # handed-off child observer wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+)
+
+# T-05: obsolete artifacts to remove from prior installs
+OBSOLETE_SCRIPTS = (
+    "summarize_for_human.py",
+    "with_env.sh",
+    "audit_corpus_coverage.py",
+    "pidfile_helpers.sh",
+)
+
+# Skills quoin used to ship; an upgrade removes the deployed directory when it
+# is quoin's own copy (see cleanup_obsolete_skills).
+OBSOLETE_SKILLS = ("checkpoint",)
+
+# Memory files quoin used to ship; removed from dest_root/memory/ on upgrade.
+OBSOLETE_MEMORY_FILES = ("checkpoint-spec.md",)
+
+# skillOverrides keys quoin used to write. A key is removed only while it still
+# holds the value quoin wrote; any other value is the user's own choice.
+RETIRED_SKILL_OVERRIDES = {"checkpoint": "on"}
+OBSOLETE_TESTS = ("test_summarize_for_human.py", "test_with_env_sh.py")
+
+# Canonical skillOverrides tier list written to settings.json on install.
+# "on" = full description in every session; "name-only" = invocable via /name, no auto-suggest description.
+# Only keys in this dict are touched; user-added keys for other skills are preserved.
+SKILL_OVERRIDES: dict[str, str] = {
+    # Light-path entry points — always show full description
+    "run": "on",
+    "specify": "on",
+    "enrich": "on",
+    "review": "on",
+    # Heavy-pipeline phases — reached through /run hard:, so name-only keeps
+    # them out of auto-suggest and off every session's skill listing
+    "thorough_plan": "name-only",
+    "plan": "name-only",
+    "critic": "name-only",
+    "implement": "name-only",
+    "gate": "name-only",
+    "triage": "name-only",
+    # Lifecycle / one-shot skills — invocable by name, no description in auto-suggest
+    "pr": "name-only",
+    "init_workflow": "name-only",
+    "init": "name-only",          # non-quoin skill; skillOverrides applies by name regardless
+    "keybindings-help": "name-only",  # non-quoin skill; same
+    "start_of_day": "name-only",
+    "end_of_day": "name-only",
+    # Internal / rarely-typed-directly skills — name-only to stay within skill listing budget
+    "sleep": "name-only",
+    "cleanup": "name-only",
+    "expand": "name-only",
+    "cost_snapshot": "name-only",
+    "status": "name-only",
+    "rollback": "name-only",
+    "run_hard": "name-only",
+    "weekly_review": "name-only",
+    "next_steps": "name-only",
+    "continue_work": "name-only",
+    "repo_cleanup": "name-only",
+    "security_review": "name-only",
+    "workspace": "name-only",
+    # Dispatched by name from /thorough_plan; its description says not for direct use.
+    "revise-fast": "name-only",
+}
+
+_MARKER_START = "# === DEV WORKFLOW START ==="
+_MARKER_END = "# === DEV WORKFLOW END ==="
+
+# ── T-06: deploy-time path substitution ──────────────────────────────────────
+
+# File extensions that may contain __QUOIN_HOME__ placeholders.
+_SUBSTITUTE_EXTS = frozenset({".md", ".py", ".sh", ".yaml", ".json", ".txt"})
+
+# Placeholder used in source files for load-bearing ~/.claude/ references.
+# Documentation-only prose keeps literal ~/.claude/... and is NOT substituted.
+QUOIN_HOME_PLACEHOLDER = "__QUOIN_HOME__"
+
+# Subdirectories under dest_root that quoin deploys to.
+# assert_no_placeholders scans ONLY these (positive allowlist) to avoid
+# false positives from Claude Code internal directories (projects/, todos/, etc.).
+_QUOIN_DEPLOYED_SUBDIRS = frozenset({"skills", "scripts", "core", "memory", "hooks"})
+
+
+def substitute_quoin_home(text: str, dest_root: pathlib.Path) -> str:
+    """Replace all __QUOIN_HOME__ occurrences with str(dest_root.resolve()).
+
+    dest_root must be absolute. Substitution is verbatim — the caller is
+    responsible for only tagging load-bearing references in source files
+    (per D-03 / MAJ-2: documentation-only prose stays as literal ~/.claude/).
+    """
+    return text.replace(QUOIN_HOME_PLACEHOLDER, str(dest_root.resolve()))
+
+
+def expected_deployed_content(src: pathlib.Path, dest_root: pathlib.Path) -> bytes:
+    """Return the exact bytes that _copy_with_substitution WOULD write for src.
+
+    Text files (_SUBSTITUTE_EXTS) have __QUOIN_HOME__ substituted with dest_root
+    and are returned as UTF-8 bytes; all other extensions are byte-copied verbatim.
+    This is the single source of truth for "what does deploy produce for this file"
+    — both _copy_with_substitution (T-01 refactor) and compute_drift (T-02) call it,
+    so the drift checker can never disagree with what install actually writes.
+    Pure: reads src only, never writes.
+    """
+    if src.suffix in _SUBSTITUTE_EXTS:
+        return substitute_quoin_home(
+            src.read_text(encoding="utf-8"), dest_root
+        ).encode("utf-8")
+    return src.read_bytes()
+
+
+def _copy_with_substitution(
+    src: pathlib.Path,
+    dst: pathlib.Path,
+    dest_root: pathlib.Path,
+) -> None:
+    """Copy src to dst, performing __QUOIN_HOME__ substitution for text files.
+
+    Non-text extensions are byte-copied without substitution.
+    Sets +x for .py and .sh files.
+    Skips the write when the destination already contains identical content
+    so that re-installs preserve file mtimes (CRIT-1 round-2).
+
+    Behaviour-preserving delegation (T-01): the deployed bytes are computed by
+    expected_deployed_content so the drift checker and the deploy path agree
+    byte-for-byte. Writing bytes (rather than text) yields identical output for
+    valid UTF-8 while keeping the substitution/byte-copy split intact.
+    """
+    new_bytes = expected_deployed_content(src, dest_root)
+    if not (dst.exists() and dst.read_bytes() == new_bytes):
+        # write_bytes (not write_text) is deliberate: expected_deployed_content already
+        # returns the exact bytes compute_drift compares against, and write_text's
+        # newline=None default would translate "\n" -> os.linesep on write (a no-op on
+        # macOS/Linux where os.linesep == "\n", but CRLF on Windows) — that would make
+        # a freshly-deployed file NOT byte-equal to expected_deployed_content's output,
+        # breaking both drift-check parity and the mtime-preservation skip above on a
+        # future Windows target. Do not "helpfully" revert this to write_text.
+        dst.write_bytes(new_bytes)
+    if src.suffix in (".py", ".sh"):
+        os.chmod(dst, 0o755)
+    if _deploy_record is not None:
+        try:
+            rel = dst.relative_to(dest_root).as_posix()
+        except ValueError:
+            return
+        _deploy_record[rel] = hashlib.sha256(new_bytes).hexdigest()
+
+
+# ── Deploy manifest and stale-file pruning ───────────────────────────────────
+
+# Every file the install writes into dest_root, with the sha256 of the bytes
+# written. The next install deletes the files it no longer ships, but only
+# while they still hold exactly what quoin wrote.
+MANIFEST_FILENAME = "quoin-manifest.json"
+MANIFEST_SCHEMA = 1
+
+# Files removed from quoin before the manifest existed. An install that finds
+# no previous manifest deletes these instead of pruning (relative to dest_root).
+PRE_MANIFEST_REMOVED_FILES = (
+    "scripts/backfill_cost_attribution.py",
+    "scripts/handoff_measure.py",
+    "scripts/find_drive_conflicts.py",
+    "core/scripts/find_drive_conflicts.py",
+)
+
+# Collects {relative path: sha256} while an install is recording; None otherwise.
+_deploy_record: Optional[dict[str, str]] = None
+
+
+def start_deploy_record() -> None:
+    """Start collecting every file _copy_with_substitution writes."""
+    global _deploy_record
+    _deploy_record = {}
+
+
+def take_deploy_record() -> dict[str, str]:
+    """Stop collecting and return what was recorded since start_deploy_record."""
+    global _deploy_record
+    record, _deploy_record = _deploy_record or {}, None
+    return record
+
+
+def _sha256_file(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_deploy_manifest(dest_root: pathlib.Path) -> Optional[dict[str, str]]:
+    """Return the previous install's {relative path: sha256}, or None.
+
+    None means there is no usable manifest (first install with pruning, or an
+    unreadable file); the caller then prunes nothing.
+    """
+    path = dest_root / MANIFEST_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        data = None
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, dict) or data.get("schema") != MANIFEST_SCHEMA:
+        print(f"quoin: warning: ignoring unreadable deploy manifest {path}", file=sys.stderr)
+        return None
+    return {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def write_deploy_manifest(dest_root: pathlib.Path, files: dict[str, str]) -> Optional[pathlib.Path]:
+    """Atomically write the manifest; returns its path, or None after a warning."""
+    path = dest_root / MANIFEST_FILENAME
+    tmp = path.with_name(path.name + ".tmp")
+    payload = {"schema": MANIFEST_SCHEMA, "files": dict(sorted(files.items()))}
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"quoin: warning: could not write deploy manifest {path}: {exc}", file=sys.stderr)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+    return path
+
+
+def _prunable_path(dest_root: pathlib.Path, rel: str) -> Optional[pathlib.Path]:
+    """Map a manifest entry to a path under a quoin deploy subdirectory, or None."""
+    pure = pathlib.PurePosixPath(rel)
+    parts = pure.parts
+    if pure.as_posix() != rel or pure.is_absolute() or ".." in parts:
+        return None
+    if len(parts) < 2 or parts[0] not in _QUOIN_DEPLOYED_SUBDIRS:
+        return None
+    return dest_root.joinpath(*parts)
+
+
+def remove_pre_manifest_files(dest_root: pathlib.Path) -> None:
+    """Delete PRE_MANIFEST_REMOVED_FILES; used only when no manifest exists yet."""
+    for rel in PRE_MANIFEST_REMOVED_FILES:
+        target = dest_root / rel
+        if target.is_file() and not target.is_symlink():
+            target.unlink()
+            print(f"Removed {target} (no longer shipped)")
+
+
+def prune_stale_deploys(
+    dest_root: pathlib.Path,
+    previous: dict[str, str],
+    current: dict[str, str],
+    protected: tuple[str, ...] = (),
+) -> tuple[list[str], dict[str, str]]:
+    """Delete files the previous install deployed that this install did not.
+
+    A file is deleted only while its sha256 still matches the previous
+    manifest; an edited file is kept with a warning. Only paths under the
+    quoin deploy subdirectories are considered, so settings.json, CLAUDE.md
+    and anything quoin never recorded are never touched. Directories left
+    empty by a deletion are removed up to (not including) the subdirectory.
+
+    Entries under a `protected` prefix (a mod folder quoin treats as foreign)
+    are left alone.
+
+    Returns (pruned relative paths, retry entries). An edited file leaves the
+    manifest, so it is reported once and is the user's from then on; a
+    protected entry, or a file that could not be read or deleted, is returned
+    for the next install to retry.
+    """
+    pruned: list[str] = []
+    kept: dict[str, str] = {}
+    for rel in sorted(set(previous) - set(current)):
+        if protected and rel.startswith(protected):
+            kept[rel] = previous[rel]
+            continue
+        target = _prunable_path(dest_root, rel)
+        if target is None or target.is_symlink() or not target.is_file():
+            continue
+        try:
+            unchanged = _sha256_file(target) == previous[rel]
+        except OSError as exc:
+            print(f"quoin: warning: could not check {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        if not unchanged:
+            print(
+                f"quoin: warning: keeping {target}: quoin no longer ships it, "
+                "but it was changed after install",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            target.unlink()
+        except OSError as exc:
+            print(f"quoin: warning: could not remove {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        pruned.append(rel)
+        print(f"Removed {target} (no longer shipped)")
+        top = dest_root / pathlib.PurePosixPath(rel).parts[0]
+        parent = target.parent
+        while parent != top and parent != dest_root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    return pruned, kept
+
+
+# ── T-13: home hook conflict detection ───────────────────────────────────────
+
+# Canonical hook script basenames registered by quoin
+_QUOIN_HOOK_BASENAMES = frozenset({
+    "userpromptsubmit.sh",
+    "precompact.sh",
+    "postcompact.sh",
+    "sessionstart.sh",
+    "sessionend.sh",
+    "stop.sh",
+})
+
+
+# Hook stanzas quoin no longer registers: (event, matcher, script basename).
+# Empty today; a later release adds a row when a hook script is retired.
+_RETIRED_HOOK_STANZAS: tuple[tuple[str, str, str], ...] = ()
+
+
+def _remove_retired_stanzas(hooks: dict, hooks_dir: pathlib.Path) -> None:
+    """Drop stanzas listed in _RETIRED_HOOK_STANZAS from `hooks` in place.
+
+    A stanza goes only when its matcher equals the entry's, it has at least one
+    command, and every command resolves to the entry's script inside hooks_dir.
+    Mixed or foreign stanzas keep their content and order. An event key whose
+    list this removal emptied is dropped; an event that was already empty stays.
+    """
+    for event, matcher, basename in _RETIRED_HOOK_STANZAS:
+        stanzas = hooks.get(event)
+        if not isinstance(stanzas, list):
+            continue
+
+        def _owned(stanza) -> bool:
+            if not isinstance(stanza, dict) or stanza.get("matcher") != matcher:
+                return False
+            entries = stanza.get("hooks")
+            if not isinstance(entries, list):
+                return False
+            cmds = [h.get("command", "") for h in entries if isinstance(h, dict)]
+            if not cmds:
+                return False
+            for cmd in cmds:
+                if not isinstance(cmd, str) or not cmd.endswith("/" + basename):
+                    return False
+                try:
+                    path = pathlib.Path(cmd).expanduser()
+                    if not path.is_absolute() or path.resolve().parent != hooks_dir:
+                        return False
+                except (OSError, RuntimeError):
+                    return False
+            return True
+
+        kept = [s for s in stanzas if not _owned(s)]
+        if len(kept) == len(stanzas):
+            continue
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+
+
+def detect_home_hook_conflict() -> bool:
+    """Return True if ~/.claude/settings.json already has quoin hook stanzas.
+
+    Detection checks both basename AND that the command path contains
+    '/.claude/hooks/' to avoid false-positives from non-quoin scripts that
+    happen to share the same filename.
+    """
+    home_settings = pathlib.Path.home() / ".claude" / "settings.json"
+    if not home_settings.exists():
+        return False
+    try:
+        data = json.loads(home_settings.read_text(encoding="utf-8"))
+        hooks = data.get("hooks", {})
+        for stanzas in hooks.values():
+            stanza_list = stanzas if isinstance(stanzas, list) else [stanzas]
+            for stanza in stanza_list:
+                if not isinstance(stanza, dict):
+                    continue
+                for hook in stanza.get("hooks", []):
+                    if not isinstance(hook, dict):
+                        continue
+                    cmd = hook.get("command", "")
+                    basename = cmd.rsplit("/", 1)[-1]
+                    if basename in _QUOIN_HOOK_BASENAMES and "/.claude/hooks/" in cmd:
+                        return True
+    except (json.JSONDecodeError, KeyError, OSError):
+        pass
+    return False
+
+
+# ── T-04 ──────────────────────────────────────────────────────────────────────
+
+def deploy_memory(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy Tier-1 memory files from source_dir/memory/ to dest_root/memory/."""
+    src_mem = source_dir / "memory"
+    dst_mem = dest_root / "memory"
+    dst_mem.mkdir(parents=True, exist_ok=True)
+    for fname in TIER1_MEMORY_FILES:
+        src = src_mem / fname
+        if not src.exists():
+            print(f"quoin: Expected {fname} at {src} but not found", file=sys.stderr)
+            sys.exit(1)
+        _copy_with_substitution(src, dst_mem / fname, dest_root)
+        print(f"Copied {fname} to {dest_root}/memory/")
+
+
+def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy QUICKSTART.md to dest_root/ (not under memory/)."""
+    src = source_dir / "QUICKSTART.md"
+    if not src.exists():
+        print(f"quoin: Expected QUICKSTART.md at {src} but not found", file=sys.stderr)
+        sys.exit(1)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    _copy_with_substitution(src, dest_root / "QUICKSTART.md", dest_root)
+    print(f"QUICKSTART deployed to {dest_root}/QUICKSTART.md")
+
+
+# ── T-05 ──────────────────────────────────────────────────────────────────────
+
+# Optional files deployed next to a skill's SKILL.md when its source folder has
+# them: preamble.md for subagent spawn targets, and reference files a skill
+# reads on demand (run's routes.md, loaded only for r1 and above, its
+# light-pipeline steps, loaded only for r2 and the run_hard switch, and its
+# reference.md, loaded only for rare tags, non-Opus sessions and escalation).
+SKILL_COMPANION_FILES = (
+    "preamble.md", "routes.md", "light-pipeline.md", "reference.md",
+)
+
+
+def deploy_skills(source_dir: pathlib.Path, dest_root: pathlib.Path) -> int:
+    """Copy Claude skills to dest_root/skills/. Returns count copied.
+
+    Skill sources live at source_dir/adapters/claude/skills/<name>/: SKILL.md is
+    required, and each SKILL_COMPANION_FILES entry is copied alongside it when
+    present.
+    """
+    src_adapter = source_dir / "adapters" / "claude" / "skills"
+    dst_skills = dest_root / "skills"
+    count = 0
+    for skill_dir in sorted(src_adapter.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_name = skill_dir.name
+        # Skip directories not in CANONICAL_SKILLS (e.g. Drive sync artifacts like "next_steps 2")
+        if skill_name not in CANONICAL_SKILLS:
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            print(f"quoin: Expected SKILL.md at {skill_md} but not found", file=sys.stderr)
+            sys.exit(1)
+        dst_skill = dst_skills / skill_name
+        dst_skill.mkdir(parents=True, exist_ok=True)
+        _copy_with_substitution(skill_md, dst_skill / "SKILL.md", dest_root)
+        for companion in SKILL_COMPANION_FILES:
+            src_companion = skill_dir / companion
+            if src_companion.exists():
+                _copy_with_substitution(src_companion, dst_skill / companion, dest_root)
+        count += 1
+    print(f"Copied {count} skills to {dest_root}/skills/")
+    return count
+
+
+# Portable core scripts deployed alongside the adapter wrappers in ~/.claude/scripts/.
+CORE_SCRIPTS = (
+    "validate_artifact.py",
+    "path_resolve.py",
+    "classify_critic_issues.py",
+    "status_graph.py",
+    "cost_event.py",              # required by dashboard_model.py (sibling core load)
+    "dashboard_model.py",
+    "dispatch_sidecar.py",        # wrapped impl; required by ~/.claude/scripts/dispatch_sidecar.py parents[1] loader
+    "git_root_for_dispatch.py",   # wrapped impl; required by ~/.claude/scripts/git_root_for_dispatch.py parents[1] loader
+    "branch_hygiene.py",          # wrapped impl; required by ~/.claude/scripts/branch_hygiene.py parents[1] loader
+    "affected_tests.py",          # IVG-71: wrapped impl; required by ~/.claude/scripts/affected_tests.py parents[1] loader
+    "spend_monitor.py",           # IVG-62: realtime token-spend monitor core impl
+    "get_session_uuid.py",        # IVG-74: reliable session-UUID capture for cost ledger
+    "memory_check.py",            # IVG-50: auto-memory referential-integrity checker core impl
+    "memory_select.py",           # IVG-50 S-1: selective lessons retrieval core impl
+    "dispatch_config.py",         # IVG-90: 1M-dispatch config+cache reader core impl; required by ~/.claude/scripts/dispatch_config.py parents[1] loader
+    "worktree_isolation.py",      # IVG-116: worktree-dispatch decider+probe core impl; required by ~/.claude/scripts/worktree_isolation.py parents[1] loader
+    "parallel_stages.py",         # IVG-129: /run parallel: core impl; required by ~/.claude/scripts/parallel_stages.py parents[1] loader
+    "generate_discovery_map.py",  # /discover optional hook — builds discovery-map.json post-scan
+    "validate_discovery_map.py",  # loaded by generate_discovery_map.py --validate (on by default)
+    "select_unprocessed_sessions.py",  # session-selection helper for end_of_day/weekly_review
+    "thorough_plan_checkpoint.py",  # IVG-98: phase-boundary checkpoint core impl for /thorough_plan
+    "cost_summary.py",              # IVG-96: portable cost-summary.json normalizer core impl
+    "discovery_staleness.py",       # IVG-106: discovery/Serena staleness detector core impl
+    "repo_map.py",                  # ranked symbol map core impl; required by the wrapper's parents[1] loader
+    "verify_claims.py",             # IVG-115: §V ground-truth reconciliation engine core impl
+    "ci_mirror.py",  # IVG-138: wrapped impl; required by ~/.claude/scripts/ci_mirror.py parents[1] loader
+    "checkpoint_picker.py",         # IVG-139: wrapped impl; required by ~/.claude/scripts/checkpoint_picker.py parents[1] loader
+    "nested_root_check.py",         # IVG-119: wrapped impl; required by ~/.claude/scripts/nested_root_check.py parents[1] loader (imports sibling path_resolve.py)
+    "lessons_guard.py",             # IVG-119: wrapped impl; required by ~/.claude/scripts/lessons_guard.py parents[1] loader
+    "decision_gate_guard.py",       # IVG-150: fail-closed decision-gate guard core impl; required by ~/.claude/scripts/decision_gate_guard.py parents[1] loader
+    "context_budget_guard.py",      # IVG-141: on-demand context-budget guard core impl; required by ~/.claude/scripts/context_budget_guard.py parents[1] loader
+    "boundary_checkpoint.py",       # IVG-141: phase/task-boundary checkpoint writer core impl; required by ~/.claude/scripts/boundary_checkpoint.py parents[1] loader
+    "run_state.py",                 # IVG-258: task-keyed run-state writer/reader core impl; required by ~/.claude/scripts/run_state.py parents[1] loader
+    "auto_resume.py",               # IVG-280: run-continuation helper core impl; required by ~/.claude/scripts/auto_resume.py parents[1] loader (imports sibling run_state.py)
+    "compaction_telemetry.py",      # IVG-258 stage 5: compaction-telemetry sink reader core impl; required by ~/.claude/scripts/compaction_telemetry.py parents[1] loader
+    "known_red.py",  # IVG-144: known-red manifest reader/matcher core impl (wrapped portable-core — also in DEPLOYED_SCRIPTS)
+    "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
+    "run_isolation.py",  # /run per-checkout run registry + worktree isolation (wrapped portable-core — also in DEPLOYED_SCRIPTS)
+    "plan_path_lint.py",  # IVG-143: wrapped impl; required by ~/.claude/scripts/plan_path_lint.py parents[1] loader
+    "authored_content_lint.py",  # advisory authored-content lint core impl (wrapped portable-core)
+    "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
+    "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator core impl; required by ~/.claude/scripts/handoff_validate.py parents[1] loader
+    "continuation_handoff.py",  # continuation handoff helper core impl; required by the wrapper's parents[1] loader
+    "comment_cleanup.py",  # pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
+    "repo_comment_cleanup.py",  # /repo_cleanup comment script core impl; required by the wrapper's parents[1] loader
+    "suite_audit.py",  # /repo_cleanup audit helper core impl; required by the wrapper's parents[1] loader
+    "task_bookkeeping.py",  # task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
+    "fsops.py",  # file-operations helper core impl; required by the wrapper's parents[1] loader
+    "append_artifact.py",  # artifact append helper core impl; required by the wrapper's parents[1] loader
+    "run_phase.py",  # /run phase marker core impl; required by the wrapper's parents[1] loader
+    "discovery_dirty.py",  # /run discovery-dirty decision core impl; required by the wrapper's parents[1] loader
+    "run_record.py",  # /run brief and discovery record core impl; required by the wrapper's parents[1] loader
+    "plan_tasks.py",  # plan pending-task check core impl; required by the wrapper's parents[1] loader
+    "wait_for.py",  # detached-start and bounded foreground wait helper core impl; required by the wrapper's parents[1] loader
+    "child_watch.py",  # handed-off child observer core impl; required by the wrapper's parents[1] loader
+)
+
+
+def deploy_core_scripts(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy portable core scripts from source_dir/core/scripts/ to dest_root/core/scripts/."""
+    src_core = source_dir / "core" / "scripts"
+    dst_core = dest_root / "core" / "scripts"
+    dst_core.mkdir(parents=True, exist_ok=True)
+    for fname in CORE_SCRIPTS:
+        src = src_core / fname
+        if not src.exists():
+            print(f"quoin: Expected core script {fname} at {src} but not found", file=sys.stderr)
+            sys.exit(1)
+        dst = dst_core / fname
+        _copy_with_substitution(src, dst, dest_root)
+        print(f"Copied core {fname} to {dest_root}/core/scripts/")
+
+
+# Portable core workflow docs deployed alongside core scripts in ~/.claude/core/workflow/.
+# IVG-248: runtime-neutral workflow semantics (rules.md, task-layout.md, session-state.md,
+# cost-ledger.md, skills.md, skills.json) plus the inter-agent handoff spec (T-06, D-10).
+CORE_WORKFLOW_FILES = (
+    "continuation-handoff.md",
+    "cost-ledger.md",
+    "handoff-format-reference.md",
+    "handoff-format.md",
+    "rules.md",
+    "session-state.md",
+    "skills.json",
+    "skills.md",
+    "task-layout.md",
+)
+
+
+def deploy_core_workflow(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy portable core workflow docs from source_dir/core/workflow/ to dest_root/core/workflow/."""
+    src_workflow = source_dir / "core" / "workflow"
+    dst_workflow = dest_root / "core" / "workflow"
+    dst_workflow.mkdir(parents=True, exist_ok=True)
+    for fname in CORE_WORKFLOW_FILES:
+        src = src_workflow / fname
+        if not src.exists():
+            print(f"quoin: Expected core workflow file {fname} at {src} but not found", file=sys.stderr)
+            sys.exit(1)
+        dst = dst_workflow / fname
+        _copy_with_substitution(src, dst, dest_root)
+        print(f"Copied core workflow {fname} to {dest_root}/core/workflow/")
+
+
+def deploy_scripts(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy scripts from source_dir/scripts/ to dest_root/scripts/."""
+    src_scripts = source_dir / "scripts"
+    dst_scripts = dest_root / "scripts"
+    dst_scripts.mkdir(parents=True, exist_ok=True)
+    for fname in DEPLOYED_SCRIPTS:
+        src = src_scripts / fname
+        if not src.exists():
+            print(f"quoin: Expected {fname} at {src} but not found", file=sys.stderr)
+            sys.exit(1)
+        dst = dst_scripts / fname
+        _copy_with_substitution(src, dst, dest_root)
+        print(f"Copied {fname} to {dest_root}/scripts/")
+
+
+# ── Opt-in mods ──────────────────────────────────────────────────────────────
+# Small Claude Code mods that Claude Code auto-loads from <dest>/skills/<name>/
+# as "<name>@skills-dir". A mod is only ever created on explicit request; once
+# installed, later installs refresh it. Ownership is by name: a folder whose
+# plugin.json names the mod is ours, anything else (other name, unreadable,
+# plain file, symlink) is foreign and never written to or removed.
+
+
+class OptInMod(NamedTuple):
+    """An opt-in mod: its folder name (also its plugin name and flag stem) and
+    the allowlist of source files that are deployed.
+
+    A NamedTuple rather than a dataclass: several tests load this module with
+    spec_from_file_location without registering it in sys.modules, which a
+    dataclass cannot survive when annotations are strings.
+    """
+
+    name: str
+    files: tuple[str, ...]
+
+
+CONTEXT_TRACKER = OptInMod(
+    "context-tracker",
+    (
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.tsx",
+        "types/index.d.ts",
+    ),
+)
+
+
+def mod_source(mod: OptInMod, source_dir: pathlib.Path) -> pathlib.Path:
+    return source_dir / "plugins" / mod.name
+
+
+def mod_dest(mod: OptInMod, dest_root: pathlib.Path) -> pathlib.Path:
+    return dest_root / "skills" / mod.name
+
+
+def mod_state(mod: OptInMod, dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    folder = mod_dest(mod, dest_root)
+    try:
+        if folder.is_symlink():
+            return "foreign"
+        if not folder.exists():
+            return "absent"
+        if not folder.is_dir():
+            return "foreign"
+        data = json.loads((folder / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("name") == mod.name:
+            return "installed"
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    return "foreign"
+
+
+def missing_mod_sources(mod: OptInMod, source_dir: pathlib.Path) -> list[str]:
+    src = mod_source(mod, source_dir)
+    return [rel for rel in mod.files if not (src / rel).is_file()]
+
+
+def mod_preflight(
+    mod: OptInMod,
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    if mode is None:
+        return errors, warnings
+    state = mod_state(mod, dest_root)
+    folder = mod_dest(mod, dest_root)
+    if mode == "with":
+        missing = missing_mod_sources(mod, source_dir)
+        if missing:
+            errors.append(f"quoin: {mod.name} source files missing: " + ", ".join(missing))
+        if state == "foreign":
+            errors.append(
+                f"quoin: {folder} exists and is not the quoin {mod.name} mod "
+                "(or is a symlink); move it aside and re-run"
+            )
+        if is_project_mode and mod_state(mod, home_dest_root) == "installed":
+            errors.append(
+                f"quoin: user-scope copy installed at {mod_dest(mod, home_dest_root)}; "
+                f"remove it first (--remove-{mod.name} --scope user) to avoid a double load"
+            )
+        if (
+            not is_project_mode
+            and cwd_dest_root.resolve() != dest_root.resolve()
+            and mod_state(mod, cwd_dest_root) == "installed"
+        ):
+            warnings.append(
+                f"quoin: project copy at {mod_dest(mod, cwd_dest_root)} "
+                "will load alongside this user copy"
+            )
+    elif mode == "remove" and state == "foreign":
+        warnings.append(f"quoin: {folder} is not the quoin {mod.name} mod; leaving it untouched")
+    return errors, warnings
+
+
+def deploy_mod(
+    mod: OptInMod, source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool
+) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled.
+
+    strict=True aborts on a missing source file (explicit opt-in); strict=False
+    warns and skips so a routine refresh never fails an install.
+    """
+    src_root = mod_source(mod, source_dir)
+    dst_root = mod_dest(mod, dest_root)
+    copied = 0
+    for rel in mod.files:
+        src = src_root / rel
+        if not src.is_file():
+            msg = f"quoin: Expected {mod.name} file {rel} at {src} but not found"
+            if strict:
+                print(msg, file=sys.stderr)
+                sys.exit(1)
+            print(f"{msg}; skipping", file=sys.stderr)
+            continue
+        dst = dst_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _copy_with_substitution(src, dst, dest_root)
+        copied += 1
+    return copied
+
+
+def remove_mod(mod: OptInMod, dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    if mod_state(mod, dest_root) != "installed":
+        return False
+    shutil.rmtree(mod_dest(mod, dest_root))
+    return True
+
+
+def apply_mod(
+    mod: OptInMod, source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    state = mod_state(mod, dest_root)
+    folder = mod_dest(mod, dest_root)
+    if mode == "remove":
+        if state == "installed":
+            remove_mod(mod, dest_root)
+            print(f"Removed {mod.name} mod from {folder}")
+            return "removed"
+        if state == "absent":
+            print(f"{mod.name} mod not installed at {folder}; nothing to remove")
+            return "absent"
+        return "foreign"
+    if mode == "with":
+        deploy_mod(mod, source_dir, dest_root, strict=True)
+        if state == "installed":
+            print(f"Refreshed {mod.name} mod at {folder}")
+            return "refreshed"
+        print(f"Deployed {mod.name} mod to {folder}")
+        return "deployed"
+    if state == "installed":
+        deploy_mod(mod, source_dir, dest_root, strict=False)
+        print(f"Refreshed {mod.name} mod at {folder}")
+        return "refreshed"
+    return "noop"
+
+
+# Names the context-tracker tests and the CLI already use: thin wrappers bound
+# to CONTEXT_TRACKER so their signatures and behaviour stay unchanged.
+CONTEXT_TRACKER_NAME = CONTEXT_TRACKER.name
+CONTEXT_TRACKER_FILES: tuple[str, ...] = CONTEXT_TRACKER.files
+
+
+def context_tracker_source(source_dir: pathlib.Path) -> pathlib.Path:
+    return mod_source(CONTEXT_TRACKER, source_dir)
+
+
+def context_tracker_dest(dest_root: pathlib.Path) -> pathlib.Path:
+    return mod_dest(CONTEXT_TRACKER, dest_root)
+
+
+def context_tracker_state(dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    return mod_state(CONTEXT_TRACKER, dest_root)
+
+
+def missing_context_tracker_sources(source_dir: pathlib.Path) -> list[str]:
+    return missing_mod_sources(CONTEXT_TRACKER, source_dir)
+
+
+def context_tracker_preflight(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    return mod_preflight(
+        CONTEXT_TRACKER,
+        source_dir,
+        dest_root,
+        mode=mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=home_dest_root,
+        cwd_dest_root=cwd_dest_root,
+    )
+
+
+def deploy_context_tracker(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled."""
+    return deploy_mod(CONTEXT_TRACKER, source_dir, dest_root, strict=strict)
+
+
+def remove_context_tracker(dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    return remove_mod(CONTEXT_TRACKER, dest_root)
+
+
+def apply_context_tracker(
+    source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    return apply_mod(CONTEXT_TRACKER, source_dir, dest_root, mode=mode)
+
+
+WORKFLOW_TASKS = OptInMod(
+    "workflow-tasks",
+    (
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.tsx",
+        "hooks/tasks.ts",
+        "types/index.d.ts",
+    ),
+)
+
+# Every opt-in mod, in the order the install applies them.
+OPT_IN_MODS: tuple[OptInMod, ...] = (CONTEXT_TRACKER, WORKFLOW_TASKS)
+
+WORKFLOW_TASKS_NAME = WORKFLOW_TASKS.name
+WORKFLOW_TASKS_FILES: tuple[str, ...] = WORKFLOW_TASKS.files
+
+
+def workflow_tasks_source(source_dir: pathlib.Path) -> pathlib.Path:
+    return mod_source(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_dest(dest_root: pathlib.Path) -> pathlib.Path:
+    return mod_dest(WORKFLOW_TASKS, dest_root)
+
+
+def workflow_tasks_state(dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    return mod_state(WORKFLOW_TASKS, dest_root)
+
+
+def missing_workflow_tasks_sources(source_dir: pathlib.Path) -> list[str]:
+    return missing_mod_sources(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_preflight(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    return mod_preflight(
+        WORKFLOW_TASKS,
+        source_dir,
+        dest_root,
+        mode=mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=home_dest_root,
+        cwd_dest_root=cwd_dest_root,
+    )
+
+
+def deploy_workflow_tasks(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled."""
+    return deploy_mod(WORKFLOW_TASKS, source_dir, dest_root, strict=strict)
+
+
+def remove_workflow_tasks(dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    return remove_mod(WORKFLOW_TASKS, dest_root)
+
+
+def apply_workflow_tasks(
+    source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    return apply_mod(WORKFLOW_TASKS, source_dir, dest_root, mode=mode)
+
+
+# ── IVG-136: read-only deploy-drift detection ────────────────────────────────
+
+# Category names compute_drift knows how to compare. Kept in sync with the
+# deploy manifests above. The CLI (deploy_drift_check.py) surfaces this list as
+# `checked_categories` and names everything NOT here as `uncovered_categories`.
+DRIFT_CATEGORIES: tuple[str, ...] = (
+    "skills", "scripts", "core-scripts", "core-workflow", "memory", "plugins",
+)
+
+
+class DriftEntry(NamedTuple):
+    """One drifted deployed file.
+
+    reason is "missing" (source present, deployed copy absent) or "stale"
+    (deployed bytes differ from what deploy would write).
+    """
+    category: str
+    source_path: str
+    deployed_path: str
+    reason: str  # "missing" | "stale"
+
+
+def compute_drift(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    categories: Optional[tuple[str, ...]] = None,
+) -> list[DriftEntry]:
+    """Return the list of deployed files that drifted from source_dir (T-02).
+
+    Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
+    CANONICAL_SKILLS (adapter SKILL.md, + each SKILL_COMPANION_FILES entry the adapter
+    skill folder carries), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
+    context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
+    under dest_root against expected_deployed_content(src, dest_root). Per file:
+      * deployed copy absent            -> DriftEntry(..., reason="missing")
+      * deployed bytes != expected      -> DriftEntry(..., reason="stale")
+      * __QUOIN_HOME__ substitution parity is preserved because the comparison goes
+        through expected_deployed_content (which substitutes), so a source file
+        holding the placeholder is NOT flagged against its substituted deployed copy.
+
+    Pure and total: never writes, never raises. A canonical skill whose SOURCE
+    SKILL.md is entirely absent on disk (MIN-3) is SILENTLY SKIPPED — it cannot be
+    compared, and deploy_skills would have aborted the install before it ever
+    deployed, so an absent source is not a deploy-drift condition. Unreadable files
+    degrade to "no drift for this file" (OSError swallowed). D-08's main() exception
+    wrapper in the CLI is the second line of defense if this contract is violated.
+
+    categories: restrict the comparison to a subset of DRIFT_CATEGORIES; None (default)
+    checks all of them.
+    """
+    selected = set(categories) if categories is not None else set(DRIFT_CATEGORIES)
+    drift: list[DriftEntry] = []
+
+    def _check(category: str, src: pathlib.Path, deployed: pathlib.Path) -> None:
+        if not src.exists():
+            return  # source absent: cannot compare, never raise (MIN-3)
+        if not deployed.exists():
+            drift.append(DriftEntry(category, str(src), str(deployed), "missing"))
+            return
+        try:
+            expected = expected_deployed_content(src, dest_root)
+            actual = deployed.read_bytes()
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError: expected_deployed_content calls read_text(encoding="utf-8")
+            # for substitute-extension sources; a non-UTF-8 source file raises here, not OSError.
+            # Caught alongside OSError to honor the "never raises" contract (review MINOR-1).
+            return  # unreadable — degrade to "no drift for this file"
+        if expected != actual:
+            drift.append(DriftEntry(category, str(src), str(deployed), "stale"))
+
+    if "memory" in selected:
+        src_mem = source_dir / "memory"
+        dst_mem = dest_root / "memory"
+        for fname in TIER1_MEMORY_FILES:
+            _check("memory", src_mem / fname, dst_mem / fname)
+
+    if "skills" in selected:
+        src_adapter = source_dir / "adapters" / "claude" / "skills"
+        dst_skills = dest_root / "skills"
+        for name in CANONICAL_SKILLS:
+            _check("skills", src_adapter / name / "SKILL.md", dst_skills / name / "SKILL.md")
+            for companion in SKILL_COMPANION_FILES:
+                src_companion = src_adapter / name / companion
+                if src_companion.exists():
+                    _check("skills", src_companion, dst_skills / name / companion)
+
+    if "scripts" in selected:
+        src_scripts = source_dir / "scripts"
+        dst_scripts = dest_root / "scripts"
+        for fname in DEPLOYED_SCRIPTS:
+            _check("scripts", src_scripts / fname, dst_scripts / fname)
+
+    if "core-scripts" in selected:
+        src_core = source_dir / "core" / "scripts"
+        dst_core = dest_root / "core" / "scripts"
+        for fname in CORE_SCRIPTS:
+            _check("core-scripts", src_core / fname, dst_core / fname)
+
+    if "core-workflow" in selected:
+        src_workflow = source_dir / "core" / "workflow"
+        dst_workflow = dest_root / "core" / "workflow"
+        for fname in CORE_WORKFLOW_FILES:
+            _check("core-workflow", src_workflow / fname, dst_workflow / fname)
+
+    # Mods are optional: compare each only when an installed copy exists, so a
+    # never-installed or foreign folder is never reported as drift.
+    if "plugins" in selected:
+        for mod in OPT_IN_MODS:
+            if mod_state(mod, dest_root) != "installed":
+                continue
+            src_mod = mod_source(mod, source_dir)
+            dst_mod = mod_dest(mod, dest_root)
+            for rel in mod.files:
+                _check("plugins", src_mod / rel, dst_mod / rel)
+
+    return drift
+
+
+# T-12: Dashboard asset directory — fixed set of SPA files
+_DASHBOARD_ASSETS = ("index.html", "dashboard.css", "app.js", "memory.js")
+
+
+def deploy_dashboard_assets(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
+    """Copy the dashboard SPA assets from source_dir/core/scripts/dashboard_assets/
+    to dest_root/core/scripts/dashboard_assets/.
+
+    (a) Creates the destination directory with parents=True before copying
+        (fresh-install safety — _copy_with_substitution does not mkdir).
+    (b) Copies index.html, dashboard.css, app.js, memory.js via _copy_with_substitution
+        (no __QUOIN_HOME__ placeholders in these files; byte-copy harmless).
+    (c) Fails with clear stderr + sys.exit(1) if a source asset is missing.
+
+    Per D-11 (arch R-06): caller is _cmd_claude_install, after deploy_core_scripts.
+    """
+    src_assets = source_dir / "core" / "scripts" / "dashboard_assets"
+    dst_assets = dest_root / "core" / "scripts" / "dashboard_assets"
+    # (a) mkdir before any copy
+    dst_assets.mkdir(parents=True, exist_ok=True)
+    # (b) copy each asset
+    for fname in _DASHBOARD_ASSETS:
+        src = src_assets / fname
+        if not src.exists():
+            print(
+                f"quoin: Expected dashboard asset {fname} at {src} but not found; "
+                "ensure quoin/core/scripts/dashboard_assets/ is present in the source tree",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        dst = dst_assets / fname
+        _copy_with_substitution(src, dst, dest_root)
+        print(f"Copied dashboard asset {fname} to {dst_assets}/")
+
+
+def _merge_skill_overrides(settings: dict) -> int:
+    """Merge SKILL_OVERRIDES into settings['skillOverrides'].
+
+    Only touches keys in SKILL_OVERRIDES. User-added keys for skills not in
+    our canonical list are preserved untouched. Canonical keys are always
+    set to the canonical value (user changes to canonical keys are reset on reinstall).
+
+    Returns count of keys added or changed.
+    """
+    if "skillOverrides" in settings and not isinstance(settings["skillOverrides"], dict):
+        return 0
+    overrides = settings.setdefault("skillOverrides", {})
+    changed = 0
+    for skill, tier in RETIRED_SKILL_OVERRIDES.items():
+        if skill not in SKILL_OVERRIDES and overrides.get(skill) == tier:
+            del overrides[skill]
+            changed += 1
+    for skill, tier in SKILL_OVERRIDES.items():
+        if overrides.get(skill) != tier:
+            overrides[skill] = tier
+            changed += 1
+    return changed
+
+
+_QUOIN_ENV_KEYS = ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+
+
+def _merge_env(settings: dict, *, pct: int | None, window: int | None) -> int | None:
+    """Merge the auto-compaction delegation vars into settings['env'].
+
+    Writes ONLY the keys whose value is not None (D-02: the two are
+    independent). Returns the count of keys added or changed. Never
+    removes a key here.
+
+    If settings['env'] already exists and is not a dict (e.g. a
+    hand-edited `"env": null` or `"env": "FOO=bar"`), returns None as a
+    sentinel instead of raising or overwriting the existing value — the
+    caller turns that into a stderr warning naming the key and leaves
+    the file untouched.
+    """
+    if pct is not None and not (1 <= pct <= 100):
+        raise ValueError(f"autocompact pct must be 1..100, got {pct}")
+    if window is not None and not (100000 <= window <= 1000000):
+        raise ValueError(f"autocompact window must be 100000..1000000, got {window}")
+
+    if "env" in settings and not isinstance(settings["env"], dict):
+        return None
+
+    env = settings.setdefault("env", {})
+    changed = 0
+    if pct is not None:
+        value = str(pct)
+        if env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") != value:
+            env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = value
+            changed += 1
+    if window is not None:
+        value = str(window)
+        if env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") != value:
+            env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = value
+            changed += 1
+    return changed
+
+
+def _clear_env(settings: dict) -> int:
+    """Remove ONLY the two keys quoin manages from settings['env'].
+
+    Leaves every other env key untouched; deletes the 'env' dict itself
+    only when it becomes empty (so a default install never leaves an
+    empty {} behind for the no-env-by-default assertion in T-05). A
+    non-dict 'env' (or a missing one) is treated as nothing to clear.
+    """
+    if "env" not in settings or not isinstance(settings["env"], dict):
+        return 0
+    existing = settings["env"]
+    removed = 0
+    for key in _QUOIN_ENV_KEYS:
+        if key in existing:
+            del existing[key]
+            removed += 1
+    if not existing:
+        del settings["env"]
+    return removed
+
+
+SETTINGS_BACKUP_KEEP_DEFAULT = 5
+SETTINGS_BACKUP_KEEP_ENV = "QUOIN_SETTINGS_BACKUP_KEEP"
+
+
+def _settings_backup_keep() -> int:
+    """Return how many settings.json backups to keep (env override, min 1)."""
+    raw = os.environ.get(SETTINGS_BACKUP_KEEP_ENV, "").strip()
+    if not raw:
+        return SETTINGS_BACKUP_KEEP_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"quoin: ignoring {SETTINGS_BACKUP_KEEP_ENV}={raw!r} (not an integer); "
+            f"keeping {SETTINGS_BACKUP_KEEP_DEFAULT} backups",
+            file=sys.stderr,
+        )
+        return SETTINGS_BACKUP_KEEP_DEFAULT
+    # Never prune the backup this run may have just written.
+    return max(value, 1)
+
+
+def _settings_backup_path(settings_path: pathlib.Path, kind: str = "bak") -> pathlib.Path:
+    """Timestamped sibling path for a copy of settings_path.
+
+    kind="bak" names the routine pre-change backups, which pruning rotates.
+    kind="broken" names the copy of an unparseable file that the installer is
+    about to replace with a fresh one; that copy may be the user's only record
+    of their settings, so pruning never matches it.
+
+    The timestamp has one-second resolution, so a second copy within the
+    same second gets a ``-1``, ``-2``... suffix instead of overwriting the
+    first one.
+    """
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = f"{settings_path.name}.{kind}-{ts}"
+    candidate = settings_path.parent / base
+    n = 0
+    while candidate.exists() or candidate.is_symlink():
+        n += 1
+        candidate = settings_path.parent / f"{base}-{n}"
+    return candidate
+
+
+def _prune_settings_backups(settings_path: pathlib.Path, keep: int) -> int:
+    """Delete all but the newest `keep` installer backups of settings_path.
+
+    Only files named exactly ``<name>.bak-YYYYMMDDTHHMMSSZ``, optionally with
+    a same-second ``-N`` suffix (the installer's own pattern), are considered;
+    hand-made backups with other suffixes, and the ``<name>.broken-<ts>``
+    copies of unparseable files, are never touched. Age order is the UTC
+    timestamp, then the numeric suffix (no suffix first). Returns the number
+    of files removed.
+    """
+    pattern = re.compile(
+        re.escape(settings_path.name) + r"\.bak-(\d{8}T\d{6}Z)(?:-(\d+))?"
+    )
+    keyed = []
+    try:
+        for p in settings_path.parent.iterdir():
+            m = pattern.fullmatch(p.name)
+            if m and p.is_file() and not p.is_symlink():
+                keyed.append(((m.group(1), int(m.group(2) or 0)), p))
+    except OSError:
+        return 0
+    candidates = [p for _, p in sorted(keyed)]
+    removed = 0
+    for old in candidates[:-keep] if keep > 0 else candidates:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def deploy_hooks(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    is_project_mode: bool = False,
+    autocompact_pct: int | None = None,
+    autocompact_window: int | None = None,
+    clear_autocompact_env: bool = False,
+) -> None:
+    """Copy hook scripts and merge hook stanzas into dest_root/settings.json.
+
+    In project mode, hooks are scoped to <project>/.claude/settings.json only.
+    Home ~/.claude/settings.json is NOT modified.
+    """
+    # _lib.sh copies FIRST: sessionstart.sh, sessionend.sh, precompact.sh,
+    # postcompact.sh and stop.sh source it, and a hook that already has a new
+    # call but sources a not-yet-updated _lib.sh during an install window (or
+    # after an install aborted mid-copy) would report "command not found".
+    # userpromptsubmit.sh no longer sources it. Copying _lib.sh first closes
+    # that window; it never depends on the other hook scripts.
+    hook_scripts = ("_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "worktreecreate.sh", "stop.sh")
+    src_hooks = source_dir / "hooks"
+    dst_hooks = dest_root / "hooks"
+    dst_hooks.mkdir(parents=True, exist_ok=True)
+
+    # Copy hook scripts (with __QUOIN_HOME__ substitution for .sh files)
+    for fname in hook_scripts:
+        src = src_hooks / fname
+        if not src.exists():
+            print(f"quoin: Expected hook {fname} at {src} but not found", file=sys.stderr)
+            sys.exit(1)
+        dst = dst_hooks / fname
+        _copy_with_substitution(src, dst, dest_root)
+        print(f"Copied hook {fname} to {dest_root}/hooks/")
+
+    # Merge 9 hook stanzas into settings.json using Python json module
+    # settings.json lives inside dest_root (~/.claude/settings.json)
+    settings_path = dest_root / "settings.json"
+
+    original_text: str | None = None
+    if settings_path.exists():
+        try:
+            with open(settings_path) as f:
+                original_text = f.read()
+            settings = json.loads(original_text)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            original_text = None
+            # Keep the unparseable file under a name pruning never matches:
+            # the fresh settings written below replace it, so this copy may be
+            # the only remaining record of the user's settings.
+            backup = _settings_backup_path(settings_path, kind="broken")
+            shutil.copyfile(settings_path, backup)
+            print(
+                f"quoin: settings.json parse error ({exc}); saved the unparseable file "
+                f"to {backup} (never pruned) and starting fresh",
+                file=sys.stderr,
+            )
+            settings = {}
+    else:
+        settings = {}
+
+    hooks = settings.setdefault("hooks", {})
+
+    # Helper: append a stanza, replacing any existing entry for the same
+    # (matcher, script-filename) pair — the dedup key is (matcher, script
+    # basename), so a stanza on a new matcher for an already-registered
+    # script is added rather than replacing an existing one. Tracks the
+    # number of stanzas registered so the printed count can never drift
+    # from the calls below (D-02).
+    _stanza_count = [0]
+
+    def _append_stanza(event: str, matcher: str, command: str, timeout: int) -> None:
+        stanza = {
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": command, "timeout": timeout}],
+        }
+        event_list = hooks.setdefault(event, [])
+        script_name = command.rsplit("/", 1)[-1]
+        # Remove stale entries for the same matcher + script filename (handles path changes)
+        event_list[:] = [
+            s for s in event_list
+            if not (
+                isinstance(s, dict)
+                and s.get("matcher") == matcher
+                and isinstance(s.get("hooks"), list)
+                and any(
+                    isinstance(h, dict)
+                    and str(h.get("command", "")).endswith(script_name)
+                    for h in s["hooks"]
+                )
+            )
+        ]
+        event_list.append(stanza)
+        _stanza_count[0] += 1
+
+    hooks_dir = str(dest_root.resolve() / "hooks")
+    _remove_retired_stanzas(hooks, pathlib.Path(hooks_dir))
+    _append_stanza("UserPromptSubmit", "*",       f"{hooks_dir}/userpromptsubmit.sh", 5)
+    _append_stanza("PreCompact",       "auto",    f"{hooks_dir}/precompact.sh",       10)
+    _append_stanza("PostCompact",      "auto",    f"{hooks_dir}/postcompact.sh",      5)
+    _append_stanza("SessionStart",     "startup", f"{hooks_dir}/sessionstart.sh",     5)
+    _append_stanza("SessionStart",     "resume",  f"{hooks_dir}/sessionstart.sh",     5)
+    _append_stanza("SessionStart",     "compact", f"{hooks_dir}/sessionstart.sh",     5)
+    _append_stanza("SessionEnd",       "*",       f"{hooks_dir}/sessionend.sh",       5)
+    _append_stanza("WorktreeCreate",   "*",       f"{hooks_dir}/worktreecreate.sh",   10)
+    _append_stanza("Stop",             "*",       f"{hooks_dir}/stop.sh",             10)
+
+    # Merge rm -rf / rm -fr deny rules into permissions.deny (idempotent).
+    # These prevent accidental recursive deletes while still allowing plain rm.
+    _DENY_RULES = [
+        "Bash(rm -rf:*)",
+        "Bash(rm -rf *)",
+        "Bash(rm -fr:*)",
+        "Bash(rm -fr *)",
+    ]
+    permissions = settings.setdefault("permissions", {})
+    deny_list = permissions.setdefault("deny", [])
+    added = 0
+    for rule in _DENY_RULES:
+        if rule not in deny_list:
+            deny_list.append(rule)
+            added += 1
+
+    # Merge skillOverrides (idempotent — only canonical keys, user keys preserved).
+    _merge_skill_overrides(settings)
+
+    # Opt-in platform-threshold delegation (off by default — D-02, R-08).
+    if clear_autocompact_env:
+        removed = _clear_env(settings)
+        if removed:
+            print(f"Cleared {removed} autocompact env var(s) from {settings_path}")
+    elif autocompact_pct is not None or autocompact_window is not None:
+        env_changed = _merge_env(settings, pct=autocompact_pct, window=autocompact_window)
+        if env_changed is None:
+            print(
+                f"quoin: {settings_path}['env'] already exists and is not an object; "
+                "leaving it untouched (autocompact env vars NOT written)",
+                file=sys.stderr,
+            )
+        elif env_changed:
+            parts = []
+            if autocompact_pct is not None:
+                parts.append(f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={autocompact_pct}")
+            if autocompact_window is not None:
+                parts.append(f"CLAUDE_CODE_AUTO_COMPACT_WINDOW={autocompact_window}")
+            print(f"Set {', '.join(parts)} in {settings_path}['env']")
+    # else: default path — the env key is never created, never read, never removed
+
+    new_text = json.dumps(settings, indent=2) + "\n"
+    # Back up a valid existing file before rewriting it, but only when the
+    # content actually changes, so idempotent re-installs add no backups.
+    if original_text is not None and original_text != new_text:
+        backup = _settings_backup_path(settings_path)
+        shutil.copyfile(settings_path, backup)
+        print(f"Backed up {settings_path} to {backup}")
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(settings_path, "w") as f:
+        f.write(new_text)
+    pruned = _prune_settings_backups(settings_path, _settings_backup_keep())
+    if pruned:
+        print(f"Pruned {pruned} old settings.json backup(s) next to {settings_path}")
+    print(f"Merged {_stanza_count[0]} hook stanzas into {settings_path}")
+    if added:
+        print(f"Added {added} rm -rf/rm -fr deny rule(s) to {settings_path}")
+    print(f"Set {len(SKILL_OVERRIDES)} skill overrides in {settings_path}")
+    if is_project_mode:
+        print(
+            f"Hooks registered in {settings_path} (project-scoped). "
+            "Home hooks (if any) are NOT removed by this install — see T-13."
+        )
+
+
+def cleanup_obsolete_scripts(dest_root: pathlib.Path) -> None:
+    """Remove obsolete scripts from dest_root/scripts/ if present."""
+    dst_scripts = dest_root / "scripts"
+    for fname in OBSOLETE_SCRIPTS:
+        target = dst_scripts / fname
+        if target.exists():
+            target.unlink()
+            print(f"Removed obsolete {fname} from {dest_root}/scripts/ (Stage 5 cleanup)")
+    dst_tests = dst_scripts / "tests"
+    for fname in OBSOLETE_TESTS:
+        target = dst_tests / fname
+        if target.exists():
+            target.unlink()
+            print(f"Removed obsolete {fname} from {dest_root}/scripts/tests/ (Stage 5 cleanup)")
+
+
+def _is_quoin_skill_dir(skill_dir: pathlib.Path, name: str) -> bool:
+    """True when skill_dir holds a quoin-installed SKILL.md for `name`."""
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return False
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    front = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
+    if front is None:
+        return False
+    declared = re.search(r"^name:\s*(\S+)\s*$", front.group(1), re.MULTILINE)
+    if declared is None or declared.group(1).strip("'\"") != name:
+        return False
+    return "quoin" in text.lower()
+
+
+def cleanup_obsolete_skills(dest_root: pathlib.Path) -> None:
+    """Remove skill directories quoin no longer ships from dest_root/skills/.
+
+    A directory is removed only when its SKILL.md is quoin's own copy; a
+    same-named skill the user installed from elsewhere is left in place.
+    """
+    for name in OBSOLETE_SKILLS:
+        skill_dir = dest_root / "skills" / name
+        if not skill_dir.is_dir():
+            continue
+        if _is_quoin_skill_dir(skill_dir, name):
+            shutil.rmtree(skill_dir)
+            print(f"Removed obsolete skill {name} from {dest_root}/skills/")
+        elif (skill_dir / "SKILL.md").is_file():
+            print(f"quoin: leaving {skill_dir} (not a quoin-installed skill)")
+
+
+def cleanup_obsolete_memory(dest_root: pathlib.Path) -> None:
+    """Remove memory files quoin no longer ships from dest_root/memory/."""
+    for fname in OBSOLETE_MEMORY_FILES:
+        target = dest_root / "memory" / fname
+        if target.exists():
+            target.unlink()
+            print(f"Removed obsolete {fname} from {dest_root}/memory/")
+
+
+# ── T-06 ──────────────────────────────────────────────────────────────────────
+
+def merge_workflow_rules(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    force_merge: bool = False,
+    claude_md_path: pathlib.Path | None = None,
+    source_claude_name: str = "CLAUDE.md",
+) -> None:
+    """Merge quoin workflow rules into the target CLAUDE.md file.
+
+    In user mode: target is dest_root/CLAUDE.md (i.e. ~/.claude/CLAUDE.md).
+    In project mode (D-02): caller passes claude_md_path = dest_root.parent/CLAUDE.md
+    (i.e. <project>/CLAUDE.md, NOT <project>/.claude/CLAUDE.md).
+
+    T-05 / CRIT-4: in project mode, __QUOIN_HOME__ placeholders in the source
+    CLAUDE.md are substituted with the actual dest_root before writing, so that
+    the deployed rules refer to the correct project-scoped paths.
+
+    IVG-164 stage 1 (T-07): source_claude_name selects which source file to
+    merge from (source_dir / source_claude_name) — "CLAUDE.md" (default, full
+    variant) or "CLAUDE.slim.md" (project-scope slim pilot).
+    """
+    source_claude = source_dir / source_claude_name
+    if not source_claude.exists():
+        print(f"quoin: Expected {source_claude_name} at {source_claude} but not found", file=sys.stderr)
+        sys.exit(1)
+
+    raw_rules = source_claude.read_text(encoding="utf-8")
+    # CRIT-4: substitute __QUOIN_HOME__ before embedding in the marker section
+    new_rules = substitute_quoin_home(raw_rules, dest_root)
+    new_section = f"{_MARKER_START}\n{new_rules}\n{_MARKER_END}"
+
+    # Resolve target CLAUDE.md path (explicit > user-mode default)
+    if claude_md_path is None:
+        claude_md_path = dest_root / "CLAUDE.md"
+
+    dest_claude = claude_md_path
+    content = dest_claude.read_text(encoding="utf-8") if dest_claude.exists() else ""
+
+    pair_count = content.count(_MARKER_START)
+
+    if pair_count == 0:
+        # behavior B: append
+        dest_claude.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest_claude, "a", encoding="utf-8") as f:
+            f.write(f"\n{_MARKER_START}\n{new_rules}\n{_MARKER_END}\n")
+        print(f"Appended quoin rules to {dest_claude}")
+
+    elif pair_count == 1:
+        # behavior A: replace (DOTALL — spans newlines)
+        updated = re.sub(
+            rf"{re.escape(_MARKER_START)}.*?{re.escape(_MARKER_END)}",
+            new_section,
+            content,
+            flags=re.DOTALL,
+        )
+        dest_claude.write_text(updated, encoding="utf-8")
+        print(f"Updated quoin section in {dest_claude}")
+
+    else:
+        # pair_count > 1
+        if not force_merge:
+            # behavior C: abort with recovery hint
+            print(
+                f"quoin: {dest_claude} contains {pair_count} '# === DEV WORKFLOW' marker pairs "
+                f"(expected 0 or 1); run 'quoin doctor' to inspect, OR re-run "
+                f"'quoin install --force-merge' to keep the first pair and remove the rest",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        else:
+            # behavior D: keep first pair (with new content), delete the rest
+            pattern = re.compile(
+                rf"{re.escape(_MARKER_START)}.*?{re.escape(_MARKER_END)}",
+                re.DOTALL,
+            )
+            matches = list(pattern.finditer(content))
+            extra_count = len(matches) - 1
+
+            # Emit per-deletion stderr warnings (compute line numbers before modifying)
+            for m in matches[1:]:
+                line_no = content[: m.start()].count("\n") + 1
+                print(
+                    f"quoin: removed extra '# === DEV WORKFLOW' marker pair at line {line_no}",
+                    file=sys.stderr,
+                )
+
+            # Remove extra pairs from end to preserve earlier positions
+            result = content
+            for m in reversed(matches[1:]):
+                result = result[: m.start()] + result[m.end() :]
+
+            # Replace the first pair (now the only one) with new content
+            result = re.sub(
+                rf"{re.escape(_MARKER_START)}.*?{re.escape(_MARKER_END)}",
+                new_section,
+                result,
+                count=1,
+                flags=re.DOTALL,
+            )
+            dest_claude.write_text(result, encoding="utf-8")
+            print(
+                f"Updated quoin section in {dest_claude} "
+                f"(--force-merge: removed {extra_count} extra marker pairs)"
+            )
+
+
+# ── T-07 ──────────────────────────────────────────────────────────────────────
+
+MIN_PYTHON = (3, 10)  # keep in step with requires-python in pyproject.toml
+
+
+def _bare_python3_version(path: str) -> Optional[tuple]:
+    """Return (major, minor) reported by `path`, or None when it cannot say."""
+    try:
+        proc = subprocess.run(
+            [path, "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+            capture_output=True, text=True, timeout=10,
+        )
+        major, minor = proc.stdout.split()[:2]
+        return int(major), int(minor)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def check_prerequisites() -> list[str]:
+    """Return list of missing required tools; warn about optional ones."""
+    missing: list[str] = []
+    if shutil.which("claude") is None:
+        missing.append("claude (Claude Code CLI)")
+    if shutil.which("git") is None:
+        missing.append("git")
+    if shutil.which("python3") is None:
+        print(
+            "Warning: no python3 on PATH — quoin's skills and hooks call bare "
+            f"python3; link or alias {sys.executable} as python3.",
+            file=sys.stderr,
+        )
+    else:
+        found = _bare_python3_version(shutil.which("python3"))
+        if found is not None and found < MIN_PYTHON:
+            print(
+                f"Warning: python3 on PATH is {found[0]}.{found[1]}, below the "
+                f"required {MIN_PYTHON[0]}.{MIN_PYTHON[1]} — quoin's skills and hooks "
+                f"call bare python3; put {sys.executable} first on PATH or link it as python3.",
+                file=sys.stderr,
+            )
+    if shutil.which("gh") is None:
+        print(
+            "Warning: gh (GitHub CLI) not found — /end_of_task push will still work, but PR creation won't.",
+            file=sys.stderr,
+        )
+    if shutil.which("npx") is None:
+        print(
+            "Warning: npx not found — cost tracking in /end_of_task requires npx "
+            "(install Node.js from https://nodejs.org).",
+            file=sys.stderr,
+        )
+    return missing
+
+
+def deploy_agentdesk(source_dir: pathlib.Path, dest_agentdesk_dir: pathlib.Path) -> None:
+    """Copy agentdesk tool files to dest_agentdesk_dir (~/.config/agentdesk/).
+
+    If source files are missing, logs a warning and returns without error.
+    agentdesk is an optional user-level tool; its absence must not abort install.
+    """
+    src_agentdesk = source_dir / "tools" / "agentdesk"
+    if not src_agentdesk.exists():
+        print(f"[warn] agentdesk source not found: {src_agentdesk}", file=sys.stderr)
+        return
+
+    dest_agentdesk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy agentdesk.zsh — _copy_with_substitution only sets +x for .py/.sh,
+    # so we call os.chmod explicitly for the .zsh file.
+    _copy_with_substitution(
+        src_agentdesk / "agentdesk.zsh",
+        dest_agentdesk_dir / "agentdesk.zsh",
+        dest_agentdesk_dir,
+    )
+    os.chmod(dest_agentdesk_dir / "agentdesk.zsh", 0o755)
+
+    # Copy setup-agentdesk.sh — .sh extension, _copy_with_substitution sets +x.
+    _copy_with_substitution(
+        src_agentdesk / "setup-agentdesk.sh",
+        dest_agentdesk_dir / "setup-agentdesk.sh",
+        dest_agentdesk_dir,
+    )
+
+    print(f"Deployed agentdesk to {dest_agentdesk_dir}")
+
+
+def _has_pyyaml() -> bool:
+    """True if pyyaml is importable in the current interpreter.
+
+    A monkeypatchable seam for tests. build_preambles.py --check needs pyyaml
+    to parse preamble frontmatter; checking here first avoids spawning a
+    child process that would fail for a reason unrelated to staleness.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("yaml") is not None
+
+
+def _looks_like_source_tree(source_dir: pathlib.Path) -> bool:
+    """True if source_dir looks like a working clone, not a wheel/site-packages copy.
+
+    Mirrors conjuncts (c) and (d) of cli.py's _derive_allow_writes — copied,
+    not imported, because installer.py must not import cli.py.
+    """
+    if not (source_dir / "adapters" / "claude" / "skills").is_dir():
+        return False
+    parent = source_dir.parent
+    return (parent / ".git").is_dir() or (parent / "pyproject.toml").is_file()
+
+
+def _preamble_check_timeout() -> int:
+    """Read QUOIN_SUBPROCESS_TIMEOUT (seconds); default 30; bad values fall back to 30.
+
+    Self-contained local copy — do NOT cross-import; each touched script owns
+    its own copy per the repo's copy-not-import convention.
+    """
+    try:
+        return int(os.environ.get("QUOIN_SUBPROCESS_TIMEOUT", "30"))
+    except (TypeError, ValueError):
+        return 30
+
+
+def _advise_preamble_freshness(source_dir: pathlib.Path) -> None:
+    """User-mode advisory: warn (never fail) when source-tree preambles are stale.
+
+    Runs build_preambles.py --check as a subprocess so any bad exit code or
+    exception in the child can never abort `quoin install`. Silent unless the
+    check is inconclusive (soft note) or the child reports stale preambles
+    (exit 7, [warn] block) — install always returns 0 regardless.
+    """
+    if os.environ.get("QUOIN_DISABLE_PREAMBLE_CHECK") == "1":
+        return
+    if not _looks_like_source_tree(source_dir):
+        return
+    script = source_dir / "scripts" / "build_preambles.py"
+    if not script.is_file():
+        print("[note] preamble freshness check skipped (generator not found)")
+        return
+    if not _has_pyyaml():
+        print("[note] preamble freshness check skipped (pyyaml is a --dev dependency)")
+        return
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), "--check"],
+            capture_output=True,
+            text=True,
+            timeout=_preamble_check_timeout(),
+        )
+    except Exception:
+        print("[note] preamble freshness check inconclusive")
+        return
+    if result.returncode == 0:
+        return
+    if result.returncode == 7:
+        print(
+            "[warn] preambles are stale relative to quoin/memory/format-kit.md and "
+            "glossary.md. Regenerate and commit:\n"
+            "  python3 quoin/scripts/build_preambles.py  (or bash install.sh --dev)\n"
+            "then commit quoin/adapters/claude/skills/*/preamble.md",
+            file=sys.stderr,
+        )
+        for line in result.stderr.splitlines():
+            if line.strip():
+                print(f"  {line}", file=sys.stderr)
+        return
+    print(f"[note] preamble freshness check inconclusive (exit {result.returncode})")
+
+
+def regenerate_preambles(source_dir: pathlib.Path, *, allow_writes: bool) -> None:
+    """Regenerate subagent preambles if running from a writable working tree."""
+    if not allow_writes:
+        print("Skipping preamble regeneration (user mode — pass --dev to regenerate from source)")
+        _advise_preamble_freshness(source_dir)
+        return
+    import runpy
+
+    script = source_dir / "scripts" / "build_preambles.py"
+    # Isolate sys.argv so build_preambles.py's argparse sees only its own script name
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [str(script)]
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        # Scripts end with sys.exit(main()); catch the successful exit (code 0) so it
+        # doesn't propagate and abort the caller.  Re-raise on any non-zero code.
+        if exc.code != 0:
+            raise
+    finally:
+        sys.argv = old_argv
+    print(f"Regenerated subagent preambles in {source_dir}/adapters/claude/skills/*/preamble.md")
+
+
+def regenerate_pollution_dispatch(source_dir: pathlib.Path, *, allow_writes: bool) -> None:
+    """Regenerate §0' Pollution dispatch, §0″ Minimum-tier guard (Opus), and §0‴
+    Minimum-tier guard (Sonnet) blocks.
+
+    Regenerates §0' (11 Opus-tier leaf skills carry pollution dispatch) AND
+    §0″ (same 11 skills carry minimum-tier guard) AND §0‴ (12 Sonnet-tier
+    cheap-tier skills carry the mirrored minimum-tier guard, IVG-117) in the
+    adapter SKILL.md files at quoin/adapters/claude/skills/*/SKILL.md.
+
+    Must be called BEFORE deploy_skills so the freshly-injected adapter SKILL.md is the
+    file that deploy_skills copies to the deploy root (IVG-69, T-06, R-11).
+
+    Note: allow_writes=False (user-mode installs) skips regeneration entirely — the
+    committed adapter SKILL.md output is the delivery vehicle for end users. The
+    --check flag (run in CI) is the guard against committed drift.
+    """
+    if not allow_writes:
+        print("Skipping pollution dispatch regeneration (user mode — pass --dev to regenerate from source)")
+        return
+    import runpy
+
+    script = source_dir / "scripts" / "inject_pollution_dispatch.py"
+    # Isolate sys.argv so inject_pollution_dispatch.py's argparse sees only its own script name
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [str(script)]
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        # Scripts end with sys.exit(main()); catch the successful exit (code 0) so it
+        # doesn't propagate and abort the caller.  Re-raise on any non-zero code.
+        if exc.code != 0:
+            raise
+    finally:
+        sys.argv = old_argv
+    print(f"Regenerated §0' Pollution dispatch in {source_dir}/adapters/claude/skills/*/SKILL.md")
+
+
+def regenerate_verification_step(source_dir: pathlib.Path, *, allow_writes: bool) -> None:
+    """Regenerate §V Ground-truth verification blocks (IVG-115 T-04).
+
+    Regenerates the late §V-verify block in end_of_day/start_of_day/weekly_review and
+    the early §V-claims block in end_of_day, in the adapter SKILL.md files at
+    quoin/adapters/claude/skills/*/SKILL.md.
+
+    Must be called BEFORE deploy_skills so the freshly-injected adapter SKILL.md is the
+    file that deploy_skills copies to the deploy root (mirrors regenerate_pollution_dispatch).
+
+    Note: allow_writes=False (user-mode installs) skips regeneration entirely — the
+    committed adapter SKILL.md output is the delivery vehicle for end users. The
+    --check flag (run in CI) is the guard against committed drift.
+    """
+    if not allow_writes:
+        print("Skipping §V verification-step regeneration (user mode — pass --dev to regenerate from source)")
+        return
+    import runpy
+
+    script = source_dir / "scripts" / "inject_verification_step.py"
+    # Isolate sys.argv so inject_verification_step.py's argparse sees only its own script name
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [str(script)]
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code != 0:
+            raise
+    finally:
+        sys.argv = old_argv
+    print(f"Regenerated §V verification blocks in {source_dir}/adapters/claude/skills/*/SKILL.md")
+
+
+def check_slim_outputs_fresh(source_dir: pathlib.Path) -> list[str]:
+    """Byte-compare committed CLAUDE.slim.md / memory/workflow-catalog.md against a
+    fresh regen from CLAUDE.md and CLAUDE.core.md.
+
+    Slim is the default variant in both scopes and installs often run with
+    allow_writes=False, so regenerate_pollution_dispatch's self-heal pattern above
+    cannot fire — an edit to quoin/CLAUDE.md or quoin/CLAUDE.core.md that skips
+    re-running build_claude_slim.py would otherwise deploy stale generated content
+    silently. This is a read-only CHECK, never a write: it
+    borrows build_claude_slim.py's `build_outputs()` function and CLASSIFICATION
+    table via runpy with a non-`"__main__"` run_name, so the script's own
+    argparse/main()/file-write side effects never execute.
+
+    Returns a list of stale output path strings (empty when both generated files
+    match a fresh regen of the live source_dir/CLAUDE.md). A ClassificationError
+    from the borrowed build_outputs() (heading/table drift) is treated the same as
+    staleness — the generator itself would abort, so the install must too.
+    """
+    import runpy
+
+    script = source_dir / "scripts" / "build_claude_slim.py"
+    claude_md = source_dir / "CLAUDE.md"
+    slim_output = source_dir / "CLAUDE.slim.md"
+    catalog_output = source_dir / "memory" / "workflow-catalog.md"
+
+    # review-1 minor (widened per round-2 minor 3): a missing/unparsable script,
+    # a renamed symbol, or an absent CLAUDE.md must surface as a clean stale
+    # entry (the caller aborts with the regenerate-and-commit message), never as
+    # an uncaught traceback. runpy.run_path EXECUTES the target module, so the
+    # exception surface is arbitrary user code — module-level ImportError,
+    # NameError, ValueError, even SystemExit — not a known API. Catch everything.
+    try:
+        mod_globals = runpy.run_path(str(script), run_name="quoin_slim_staleness_check")
+        build_outputs = mod_globals["build_outputs"]
+        classification_error = mod_globals["ClassificationError"]
+        source_text = claude_md.read_text(encoding="utf-8")
+    except (Exception, SystemExit) as exc:
+        return [f"{script} (staleness check unavailable: {type(exc).__name__}: {exc})"]
+    core_md = source_dir / "CLAUDE.core.md"
+    try:
+        core_text = core_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"{core_md} (core text unreadable: {type(exc).__name__}: {exc})"]
+    try:
+        slim_text, catalog_text = build_outputs(source_text, core_text)
+    except classification_error as exc:
+        return [f"{claude_md} (regen aborted, CLASSIFICATION/heading mismatch: {exc})"]
+
+    stale: list[str] = []
+    if not slim_output.exists() or slim_output.read_text(encoding="utf-8") != slim_text:
+        stale.append(str(slim_output))
+    if not catalog_output.exists() or catalog_output.read_text(encoding="utf-8") != catalog_text:
+        stale.append(str(catalog_output))
+    return stale
+
+
+def assert_no_placeholders(dest_root: pathlib.Path) -> list[str]:
+    """Return list of 'path:line_no' strings where __QUOIN_HOME__ was found after deploy.
+
+    Call this after all deploy functions complete to verify substitution was fully applied.
+    Only scans quoin-deployed paths (root-level files + _QUOIN_DEPLOYED_SUBDIRS) to avoid
+    false positives from Claude Code internal directories (projects/, todos/, etc.).
+    """
+    violations: list[str] = []
+    check_exts = (".md", ".sh", ".py", ".json", ".yaml", ".txt")
+
+    def _scan_file(p: pathlib.Path) -> None:
+        if p.is_file() and p.suffix in check_exts:
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                for i, line in enumerate(text.splitlines(), 1):
+                    if "__QUOIN_HOME__" in line:
+                        violations.append(f"{p}:{i}")
+            except Exception:
+                pass
+
+    # 1. Root-level files only (CLAUDE.md, QUICKSTART.md, settings.json, etc.)
+    for entry in dest_root.iterdir():
+        if entry.is_file():
+            _scan_file(entry)
+
+    # 2. Quoin-deployed subdirectories only
+    for subdir_name in _QUOIN_DEPLOYED_SUBDIRS:
+        subdir = dest_root / subdir_name
+        if subdir.is_dir():
+            for p in subdir.rglob("*"):
+                _scan_file(p)
+
+    return violations
+
+
+def install_dev_deps() -> None:
+    """Install dev Python dependencies via pip (uses quoin[dev] extras).
+
+    Runs pip through the interpreter that is running quoin, not whichever
+    pip is first on PATH (which can belong to a different Python), and drops
+    --user inside a virtual environment where pip rejects it.
+    """
+    pip_check = subprocess.run(
+        [sys.executable, "-m", "pip", "--version"],
+        capture_output=True,
+    )
+    if pip_check.returncode != 0:
+        print(
+            "Warning: pip not found for "
+            f"{sys.executable} — install quoin[dev] manually for dev tests",
+            file=sys.stderr,
+        )
+        return
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    user_flag = [] if in_venv else ["--user"]
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", *user_flag, "--upgrade", "quoin[dev]"],
+    )
+    if result.returncode != 0:
+        print(
+            "Warning: pip install failed; install quoin[dev] manually for dev tests",
+            file=sys.stderr,
+        )

@@ -490,15 +490,6 @@ class TestInstallerDualListSmoke:
         spec.loader.exec_module(mod)
         return mod
 
-    def test_in_deployed_scripts(self, installer):
-        assert "worktree_isolation.py" in installer.DEPLOYED_SCRIPTS, (
-            "worktree_isolation.py missing from DEPLOYED_SCRIPTS — wrapper won't be deployed"
-        )
-
-    def test_in_core_scripts(self, installer):
-        assert "worktree_isolation.py" in installer.CORE_SCRIPTS, (
-            "worktree_isolation.py missing from CORE_SCRIPTS — wrapper's parents[1] loader will NameError"
-        )
 
     def test_wrapper_importable_via_deployed_path(self):
         """Smoke-import the WRAPPER (not the core) via the wrapper's own importlib chain."""

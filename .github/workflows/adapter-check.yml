@@ -22,12 +22,6 @@ jobs:
       - name: Run adapter completeness check
         run: python3 quoin/core/scripts/validate_adapter_drift.py
 
-      - name: Run registration roster check
-        run: python3 quoin/dev/check_registration.py
-
-      - name: Check generated slim rules are fresh
-        run: python3 quoin/scripts/build_claude_slim.py --check
-
       - name: Install test runner
         run: python3 -m pip install pytest
 

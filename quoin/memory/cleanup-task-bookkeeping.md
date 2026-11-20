@@ -14,7 +14,7 @@ after the person confirms that specific task.
 
 ## Inputs
 
-Read from `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format json`:
+Read from `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_bookkeeping.py classify --format json`:
 
 - `rows[].task`, `rows[].bucket`, `rows[].evidence` — what to show the person.
 - `rows[].options` — the exact, ordered option list for that row's
@@ -93,7 +93,7 @@ AskUserQuestion(
 For each row the person confirmed an archive or trash action for:
 
 ```
-python3 __QUOIN_HOME__/scripts/task_bookkeeping.py apply <archive|trash> <task> --expect <row.fingerprint>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_bookkeeping.py apply <archive|trash> <task> --expect <row.fingerprint>
 ```
 
 On a non-zero exit, print that task's JSON error line and continue to the

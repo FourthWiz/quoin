@@ -45,25 +45,6 @@ def _load_installer():
     return mod
 
 
-def test_installer_deployed_scripts_contains_memory_check():
-    """DEPLOYED_SCRIPTS must contain memory_check.py (wrapper deployment guard)."""
-    mod = _load_installer()
-    assert "memory_check.py" in mod.DEPLOYED_SCRIPTS, (
-        "installer.py DEPLOYED_SCRIPTS must contain 'memory_check.py'. "
-        "Missing entry means install.sh won't deploy the wrapper to "
-        "~/.claude/scripts/memory_check.py."
-    )
-
-
-def test_installer_core_scripts_contains_memory_check():
-    """CORE_SCRIPTS must contain memory_check.py (wrapper loader guard)."""
-    mod = _load_installer()
-    assert "memory_check.py" in mod.CORE_SCRIPTS, (
-        "installer.py CORE_SCRIPTS must contain 'memory_check.py'. "
-        "Missing entry means the wrapper's parents[1] loader fails at runtime."
-    )
-
-
 def test_source_files_exist():
     """Both source files must exist in the repo."""
     assert WRAPPER_SRC.is_file(), f"Wrapper source missing: {WRAPPER_SRC}"

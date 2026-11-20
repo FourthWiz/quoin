@@ -75,17 +75,19 @@ def test_real_install_then_cli_check_reports_usable(tmp_path, monkeypatch):
     project_dir.mkdir()
 
     monkeypatch.setattr(inst, "check_prerequisites", lambda: [])
+    monkeypatch.setattr(inst, "install_plugin", lambda *a, **kw: "install")
     monkeypatch.chdir(project_dir)
     args = argparse.Namespace(
         scope="project", allow_hook_merge=True, runtime="claude", check=False,
         source_dir=str(QUOIN_SRC), force_merge=False, dev=False, use_pip=False,
     )
+    monkeypatch.setenv("QUOIN_PLUGIN_DIR", str(tmp_path / "plugin"))
     with unittest.mock.patch.object(Path, "home", return_value=fake_home), \
          unittest.mock.patch("time.sleep"):
         result = cli._cmd_claude_install(args)
     assert result == 0
 
-    dest_root = project_dir / ".claude"
+    dest_root = tmp_path / "plugin"
     record_path = dest_root / "quoin-runtime.json"
     assert record_path.exists()
     record = json.loads(record_path.read_text(encoding="utf-8"))

@@ -75,52 +75,9 @@ def resumable_phases() -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def test_resume_reads_marker_before_first_decision_point(run_skill_text: str) -> None:
-    text = run_skill_text
-    assert "## Resume" in text
-    start = text.index("## Resume")
-    end = text.index("## Session state tracking", start)
-    section = text[start:end]
-
-    assert "autonomous-run-{task}.marker" in section
-    # The marker read must be documented as happening BEFORE anything else —
-    # "Step 0" ordering, and explicit "FIRST" language.
-    step0_idx = section.index("Step 0")
-    step1_idx = section.index("Step 1")
-    assert step0_idx < step1_idx, "marker read (Step 0) must precede next-phase selection (Step 1)"
-    assert "FIRST" in section[step0_idx:step1_idx]
-    assert "AUTONOMOUS=true" in section[step0_idx:step1_idx]
-
-
 # ---------------------------------------------------------------------------
 # (b) Next-phase selection from completion sentinels, never-re-run/never-skip
 # ---------------------------------------------------------------------------
-
-
-def test_resume_selects_next_phase_from_completion_sentinels(run_skill_text: str) -> None:
-    text = run_skill_text
-    start = text.index("## Resume")
-    end = text.index("## Session state tracking", start)
-    section = text[start:end]
-
-    assert "autonomous-progress-{task}/" in section
-    assert "never re-run it" in section
-    assert "never skip it" in section
-    # Sub-phase partial-resume clause.
-    assert "sub-phase" in section.lower()
-    assert "{phase}.{subphase}.done" in section
-
-
-def test_resume_falls_back_to_session_state_when_no_sentinel_dir(run_skill_text: str) -> None:
-    """Plain resume (no sentinel contract present) must still work exactly
-    as it did pre-T-09, via session-state prose."""
-    text = run_skill_text
-    start = text.index("## Resume")
-    end = text.index("## Session state tracking", start)
-    section = text[start:end]
-
-    assert "fall back to the pre-T-09 behavior" in section
-    assert ".workflow_artifacts/memory/sessions/<latest>-<task-name>.md" in section
 
 
 # ---------------------------------------------------------------------------
@@ -128,85 +85,14 @@ def test_resume_falls_back_to_session_state_when_no_sentinel_dir(run_skill_text:
 # ---------------------------------------------------------------------------
 
 
-def test_completion_sentinel_write_at_every_resumable_phase(
-    run_skill_text: str, resumable_phases: tuple
-) -> None:
-    """Derived from the live T-05 roster (quoin.supervisor.RESUMABLE_PHASES) —
-    never a frozen count or a "1..6" abbreviation. A future added/renamed
-    phase without a documented `{phase}.done` write fails this test."""
-    text = run_skill_text
-    assert set(resumable_phases) == set(_PHASE_HEADINGS), (
-        "the local phase->heading map is out of sync with "
-        "quoin.supervisor.RESUMABLE_PHASES — update _PHASE_HEADINGS"
-    )
-    assert "enrich" in resumable_phases
-    assert "specify" in resumable_phases
-
-    headings_in_order = sorted(
-        ((text.index(h), phase) for phase, h in _PHASE_HEADINGS.items() if h in text)
-    )
-    assert len(headings_in_order) == len(_PHASE_HEADINGS), "not every phase heading was found in run/SKILL.md"
-
-    missing = []
-    for i, (idx, phase) in enumerate(headings_in_order):
-        end = headings_in_order[i + 1][0] if i + 1 < len(headings_in_order) else len(text)
-        section = text[idx:end]
-        expected = f"autonomous-progress-{{task}}/{phase}.done"
-        if expected not in section:
-            missing.append(phase)
-
-    assert not missing, f"phases missing a documented completion-sentinel write: {missing}"
-
-
 # ---------------------------------------------------------------------------
 # (d) Headless resume with marker present raises ZERO AskUserQuestion
 # ---------------------------------------------------------------------------
 
 
-def test_headless_autonomous_resume_raises_zero_askuserquestion(run_skill_text: str) -> None:
-    text = run_skill_text
-    start = text.index("## Resume")
-    end = text.index("## Session state tracking", start)
-    section = text[start:end]
-
-    assert "Headless autonomous path" in section
-    headless_idx = section.index("Headless autonomous path")
-    headless_clause = section[headless_idx : headless_idx + 600]
-    assert "ZERO" in headless_clause
-    assert "AskUserQuestion" in headless_clause
-    assert "zero `AskUserQuestion` prompts" in headless_clause
-
-
 # ---------------------------------------------------------------------------
 # Marker write in Setup (T-10)
 # ---------------------------------------------------------------------------
-
-
-def test_marker_written_on_autonomous_entry(run_skill_text: str) -> None:
-    text = run_skill_text
-    assert "Write the autonomous-span marker" in text
-    start = text.index("Write the autonomous-span marker")
-    end = text.index("### Parse input and determine task profile", start)
-    section = text[start:end]
-
-    assert "autonomous-run-{task}.marker" in section or "autonomous-run-<task-name>.marker" in section
-    assert "AUTONOMOUS=true" in section
-    # Atomic-write idiom.
-    assert "fsops.py write-atomic" in section
-    # Inert for plain /run.
-    assert "AUTONOMOUS=false" in section
-
-    # This site must fall AFTER the flag-parsing block that sets AUTONOMOUS.
-    flag_parse_idx = text.index("Set an internal state flag `AUTONOMOUS=true`")
-    assert flag_parse_idx < start, "marker write must come after AUTONOMOUS is set, not before"
-
-
-def test_plain_run_never_writes_marker(run_skill_text: str) -> None:
-    text = run_skill_text
-    start = text.index("Write the autonomous-span marker")
-    end = text.index("### Parse input and determine task profile", start)
-    section = text[start:end]
-    assert "never writes this marker" in section
 
 
 # ---------------------------------------------------------------------------

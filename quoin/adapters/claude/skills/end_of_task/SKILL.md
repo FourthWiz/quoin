@@ -31,7 +31,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -50,7 +50,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -90,7 +90,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -102,7 +102,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A0 — Consult the worktree-isolation decider FIRST (default is skip):
      Run via Bash:
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --decide
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --decide
      Isolation is opt-in (D-04): the decider prints `skip` unless
      QUOIN_WORKTREE_ISOLATION=on, the dispatch.json config opts in, or a prior probe
      wrote a `works` sentinel. If the output is `skip`, DO NOT write the sidecar and
@@ -113,8 +113,8 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A — Write the dispatch sidecar BEFORE calling the Agent tool:
      Run via Bash:
-       PROJECT_ROOT="$(python3 __QUOIN_HOME__/scripts/path_resolve.py --print-project-root)"
-       python3 __QUOIN_HOME__/scripts/dispatch_sidecar.py \
+       PROJECT_ROOT="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --print-project-root)"
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_sidecar.py \
            --skill <skill-name> \
            --project-root "$PROJECT_ROOT" \
            --plan "<resolved-plan-path-or-empty>"
@@ -123,14 +123,14 @@ Fail-graceful path with error-class triage (per architecture I-01):
   STEP B — Phase 1: Agent dispatch WITH isolation: "worktree" (normal path):
      Call the Agent tool with isolation: "worktree" at the declared cheap-tier
      model (sonnet for this skill). The deployed WorktreeCreate hook at
-     __QUOIN_HOME__/hooks/worktreecreate.sh reads the sidecar, runs
+     ${CLAUDE_PLUGIN_ROOT}/hooks/worktreecreate.sh reads the sidecar, runs
      git_root_for_dispatch.py, and (when a single nested repo resolves)
      creates a worktree IN the nested git root and returns its path.
      One-time probe (opt-in path only): when the probe sentinel is still unknown,
      instruct the child to record its working directory to a marker; after the Agent
      returns, compare it to the created worktree path and persist the result exactly
      once via
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --write-probe --result works|broken
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --write-probe --result works|broken
 
   STEP C — Phase 2 retry WITHOUT isolation (on Worktree-class error):
      If Phase 1 fails with a Worktree-class error (regex above), the hook
@@ -233,12 +233,12 @@ sentinels from the incoming prompt (`[autonomous]`→`_AUTONOMOUS=true`,
 
 <!-- decision-gate: fail-closed site=session-age -->
 ```
-python3 __QUOIN_HOME__/scripts/session_age_guard.py --threshold-hours 6.0 --project-root "$(pwd)"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session_age_guard.py --threshold-hours 6.0 --project-root "$(pwd)"
 ```
 
 The guard's exit-code contract is UNCHANGED (still exit 1 only on `OVER`, exit
 0 otherwise, fail-OPEN on other codes). On **exit 1 (`OVER|...`)**, evaluate this ORDERED rule
-(see `__QUOIN_HOME__/memory/decision-gate-guard.md`):
+(see `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`):
 
 1. **`[no-session-age-guard]` present** → strip + BYPASS the guard entirely (UNCHANGED
    power-user path); continue to `## When to use`.
@@ -247,7 +247,7 @@ The guard's exit-code contract is UNCHANGED (still exit 1 only on `OVER`, exit
    `[autonomous]`, never `[no-session-age-guard]`).
 3. **`[no-interactive]` / non-interactive (and NOT `_AUTONOMOUS`)** → FAIL CLOSED: a human
    cannot pick a session-age option in a background context, so run
-   `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site session-age --reason "session over the age cap; proceed/fresh-session/abort decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or prefix [no-session-age-guard]"`,
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site session-age --reason "session over the age cap; proceed/fresh-session/abort decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or prefix [no-session-age-guard]"`,
    echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`.
 4. **else (interactive)** → present an `AskUserQuestion` 3-option list:
    - **Proceed in this session** — continue `/end_of_task` now despite the age (override).
@@ -278,7 +278,7 @@ e.g. `[no-redispatch] [autonomous]`; `run_hard` prefixes it onto the Phase-6 spa
 Also parse the `[no-interactive]` sentinel the same way. If present, set `_INTERACTIVE=false`;
 default `_INTERACTIVE=true`. `run_hard` injects it onto every non-autonomous phase-subagent spawn so
 a background decision gate FAILS CLOSED instead of silently proceeding — see
-`__QUOIN_HOME__/memory/decision-gate-guard.md`. The two sentinels are mutually exclusive per
+`${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`. The two sentinels are mutually exclusive per
 spawn (autonomous carries pre-authorized answers; no-interactive has none).
 
 `_AUTONOMOUS` gates only the four interactive prompt sites in "Process" (Steps 1b, 2, 3, 4);
@@ -314,9 +314,9 @@ Execute these steps inline (never dispatch for interactive steps):
 
 Before touching git, verify everything is clean:
 
-1. **Review status** — resolve the artifact path via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (or stage=None for legacy tasks), then look for `<task_dir>/review-*.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. If no review file exists at the resolved path, STOP and tell the user: "No review found — please run `/review` first." If a review exists, read the latest one and confirm verdict is APPROVED. If not approved, stop and tell the user. (architecture.md and cost-ledger.md always stay at the task root.) **Retain the resolved `<N-or-name>` (or empty string for a legacy/single-stage task) as `<stage-value>`** — Sub-phase B's lessons-append idempotency guard (Step 7) keys on task+stage, not task alone, so it needs this value.
-2. **Tests pass** — first run `python3 __QUOIN_HOME__/scripts/gate_fullsuite_sidecar.py check --project-root "$(pwd)" --format text`, using the `--project-root` convention `gate/SKILL.md`'s reuse-contract bullet pins (the outer project root that owns `.workflow_artifacts/`, not the git repo root). Exit 0 → the post-review gate's full-suite result is reusable (already size-aware — a red Small/Medium suite never reaches this branch); report `Tests: reused post-review gate full-suite (verdict PASS, SHA <sha12>, trees clean)`, reading `<sha12>` directly from `check`'s own exit-0 text output, and SKIP the re-run. Any non-zero exit, or the script missing, → run the test suite exactly as today, echoing the emitted `reason` when present (exit 1 and exit 3 both emit one on stdout), else the stderr line (exit 2 argparse failures emit no structured `reason` — echo stderr verbatim instead) — so the operator sees why it re-ran. `QUOIN_DISABLE_FULLSUITE_REUSE=1` forces a re-run. A reused verification counts as PASS downstream and never blocks Steps 6-8, so cost aggregation and the `cost-summary.json` write happen either way; a suite that genuinely fails still halts before commit/push.
-3. **Branch state** — check if the branch is up to date with the base branch. If behind, rebase/merge and re-run tests. If push is blocked because task commits are on a protected branch (main/master), do NOT force-push; instead follow the safe reset-to-origin recipe at `__QUOIN_HOME__/memory/branch-recovery.md` — move the mis-placed commits onto a feature branch first, then run the recipe to restore the protected branch to origin.
+1. **Review status** — resolve the artifact path via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (or stage=None for legacy tasks), then look for `<task_dir>/review-*.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. If no review file exists at the resolved path, STOP and tell the user: "No review found — please run `/review` first." If a review exists, read the latest one and confirm verdict is APPROVED. If not approved, stop and tell the user. (architecture.md and cost-ledger.md always stay at the task root.) **Retain the resolved `<N-or-name>` (or empty string for a legacy/single-stage task) as `<stage-value>`** — Sub-phase B's lessons-append idempotency guard (Step 7) keys on task+stage, not task alone, so it needs this value.
+2. **Tests pass** — first run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate_fullsuite_sidecar.py check --project-root "$(pwd)" --format text`, using the `--project-root` convention `gate/SKILL.md`'s reuse-contract bullet pins (the outer project root that owns `.workflow_artifacts/`, not the git repo root). Exit 0 → the post-review gate's full-suite result is reusable (already size-aware — a red Small/Medium suite never reaches this branch); report `Tests: reused post-review gate full-suite (verdict PASS, SHA <sha12>, trees clean)`, reading `<sha12>` directly from `check`'s own exit-0 text output, and SKIP the re-run. Any non-zero exit, or the script missing, → run the test suite exactly as today, echoing the emitted `reason` when present (exit 1 and exit 3 both emit one on stdout), else the stderr line (exit 2 argparse failures emit no structured `reason` — echo stderr verbatim instead) — so the operator sees why it re-ran. `QUOIN_DISABLE_FULLSUITE_REUSE=1` forces a re-run. A reused verification counts as PASS downstream and never blocks Steps 6-8, so cost aggregation and the `cost-summary.json` write happen either way; a suite that genuinely fails still halts before commit/push.
+3. **Branch state** — check if the branch is up to date with the base branch. If behind, rebase/merge and re-run tests. If push is blocked because task commits are on a protected branch (main/master), do NOT force-push; instead follow the safe reset-to-origin recipe at `${CLAUDE_PLUGIN_ROOT}/memory/branch-recovery.md` — move the mis-placed commits onto a feature branch first, then run the recipe to restore the protected branch to origin.
 4. **No secrets** — quick scan of the diff for passwords, API keys, tokens.
 
 Present a pre-flight summary:
@@ -341,7 +341,7 @@ project root):
    and flag any file matching these patterns:
    - `*.tmp`, `*.bak`, `*.orig`, `*.swp`, `*.swo`
    - `* 2.*`, `* 3.*` (macOS/iCloud duplicates, e.g., "README 2.md")
-   - `.planner-trace.md` (Tier-3 ephemeral — deleted by `/end_of_task` before archive, per `__QUOIN_HOME__/memory/tier1-files.md`'s closing paragraph; run `python3 __QUOIN_HOME__/scripts/fsops.py rm ".planner-trace.md"` to clean up)
+   - `.planner-trace.md` (Tier-3 ephemeral — deleted by `/end_of_task` before archive, per `${CLAUDE_PLUGIN_ROOT}/memory/tier1-files.md`'s closing paragraph; run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm ".planner-trace.md"` to clean up)
    - `.expanded-*.md` (expand --save scratch output)
    - `.DS_Store` (if not gitignored)
    - `__pycache__/` directories or `*.pyc` files (if not gitignored)
@@ -393,9 +393,9 @@ project root):
    false (the `[no-interactive]` sentinel was set, or `AskUserQuestion` is unavailable —
    e.g. an Agent subagent, where it is not provisioned — or returns no usable answer),
    FAIL CLOSED — do NOT proceed on a default and do NOT stall: run
-   `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site garbage-files --reason "working-tree cleanup decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site garbage-files --reason "working-tree cleanup decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
    echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`.
-   Rule doc: `__QUOIN_HOME__/memory/decision-gate-guard.md`.
+   Rule doc: `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
 
 4. **If nothing found** — print one line and continue:
    ```
@@ -405,11 +405,11 @@ project root):
 **Step 1c: Authored-content lint (advisory)**
 
 This step runs unconditionally, after item 4 above, regardless of what items 1-4 found.
-Checks new code against `__QUOIN_HOME__/memory/clean-authored-content.md`.
+Checks new code against `${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md`.
 
 Run:
 
-    python3 __QUOIN_HOME__/scripts/authored_content_lint.py --basis union --format text
+    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/authored_content_lint.py --basis union --format text
 
 Result mapping:
 - exit 0 — nothing to report.
@@ -434,7 +434,7 @@ Run `git status`. If there are uncommitted changes:
     ]
   )
   ```
-- **Commit message content:** whichever path composes the message (autonomous or interactive), it follows the shared clean-authored-content rule — plain engineering language, no plan/review process vocabulary: __QUOIN_HOME__/memory/clean-authored-content.md.
+- **Commit message content:** whichever path composes the message (autonomous or interactive), it follows the shared clean-authored-content rule — plain engineering language, no plan/review process vocabulary: ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md.
 - **Autonomous mode:** if `_AUTONOMOUS` is true, skip the `AskUserQuestion` — auto-select
   **"Commit"** (NEVER "Abort"). Compose the conventional commit message automatically from
   the diff/plan context. Print one line: `[quoin: autonomous — committing uncommitted
@@ -443,9 +443,9 @@ Run `git status`. If there are uncommitted changes:
 - **Non-interactive / `[no-interactive]` (and NOT `_AUTONOMOUS`):** if `_INTERACTIVE` is
   false (`[no-interactive]` set, or `AskUserQuestion` unavailable/suppressed), FAIL CLOSED —
   the commit/abort decision must never default silently: run
-  `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site commit-decision --reason "uncommitted-changes commit decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site commit-decision --reason "uncommitted-changes commit decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
   echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`. Rule doc:
-  `__QUOIN_HOME__/memory/decision-gate-guard.md`.
+  `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
 - If **Commit**: collect a conventional commit message inline.
 - If **Abort**: STOP. Tell the user: "Stash manually then re-invoke /end_of_task."
 Capture the answer as `commit_or_abort` (`"commit"` or `"abort"`).
@@ -501,9 +501,9 @@ line: `[quoin: autonomous — archiving task folder to finalized/]`.
 **Non-interactive / `[no-interactive]` (and NOT `_AUTONOMOUS`):** if `_INTERACTIVE` is false
 (`[no-interactive]` set, or `AskUserQuestion` unavailable/suppressed), FAIL CLOSED — do not
 default the archive decision: run
-`python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site archive-type --reason "archive-type decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site archive-type --reason "archive-type decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or pass --autonomous"`,
 echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`. Rule doc:
-`__QUOIN_HOME__/memory/decision-gate-guard.md`.
+`${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
 
 Capture as `archive_type`: `"feature"` (fully complete) or `"none"` (more work planned — do not archive).
 
@@ -604,7 +604,7 @@ Spawn an Agent subagent:
 
        **Cross-project dedup guard (runs only when the append would
        proceed):** write `lessons_text` to a temp file, then call
-       `python3 __QUOIN_HOME__/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task_name>`.
+       `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task_name>`.
        The guard COMPLEMENTS the heading-grep above (grep catches same-task
        re-appends; the guard catches DIFFERENT-task verbatim copies). Exit 1 →
        do NOT silently append: surface the matched foreign heading + slug to the
@@ -615,7 +615,7 @@ Spawn an Agent subagent:
 
        Otherwise append to lessons-learned.md, including the stage suffix in the
        heading when `stage` is non-empty. Append by piping the entry into
-       `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"`
+       `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"`
        (stdin, quoted heredoc; no prior Read needed), not with the Write/Edit tools:
        ```
        ## <date> — <task_name>[ [stage-<stage>]]
@@ -624,13 +624,13 @@ Spawn an Agent subagent:
        **Applies to:** <relevant skills>
        ```
     3. Update `.workflow_artifacts/memory/sessions/<date>-<task_name>.md`:
-       write it to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`: Status `completed`, Current stage `end_of_task`,
+       write it to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md`: Status `completed`, Current stage `end_of_task`,
        branch name and commit hash from eot-preflights.json in one Completed item, Next command `/pr`.
     3a. **Flip finalized-task session flags (single invocation; opt-out via
         `QUOIN_DISABLE_EOT_FLAG_FLIP=1`).** Runs AFTER Step 3 (session-state marked completed) and
         AFTER Sub-phase A's commit/push succeeded. Unless `QUOIN_DISABLE_EOT_FLAG_FLIP=1` is set, run:
         ```bash
-        python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py \
+        python3 ${CLAUDE_PLUGIN_ROOT}/core/scripts/select_unprocessed_sessions.py \
             --flip-finalized-task <task_name> \
             --finalization-date <today, YYYY-MM-DD> \
             --project-root <project-root>
@@ -656,7 +656,7 @@ Spawn an Agent subagent:
         unavailable; sessions remain end_of_day_due: yes — will surface as ordinary backlog on the
         next /end_of_day]` and continue — this is best-effort, not load-bearing for finalization
         (the task is still fully finalized: committed, pushed, archived).
-    4. Cost aggregation — run `python3 __QUOIN_HOME__/scripts/cost_ledger_summary.py --ledger <task-dir>/cost-ledger.md --project-path "$(pwd)" --out <task-dir>/cost-summary.json` from the project root; on script missing or non-zero exit, fall back to the manual procedure a-d below and set `fallback_note` to name that origin. Manual procedure — read cost-ledger.md and compute:
+    4. Cost aggregation — run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_ledger_summary.py --ledger <task-dir>/cost-ledger.md --project-path "$(pwd)" --out <task-dir>/cost-summary.json` from the project root; on script missing or non-zero exit, fall back to the manual procedure a-d below and set `fallback_note` to name that origin. Manual procedure — read cost-ledger.md and compute:
        a. Binary check: `command -v npx` — if unavailable, skip ccusage and use
           cost_from_jsonl.py fallback for ALL UUIDs (see below).
        a2. Inline-first precedence rule (per ledger row, applied BEFORE the lookups
@@ -682,8 +682,8 @@ Spawn an Agent subagent:
           Path-agnostic all-failed gate: whichever of the per-UUID loop or bulk call was taken,
           if NO ledger UUID was successfully resolved, fall back to cost_from_jsonl.py for all UUIDs.
        c. Fallback (from binary-check branch OR all-failed gate):
-          Per-UUID mode: `python3 __QUOIN_HOME__/scripts/cost_from_jsonl.py session -i UUID --json`
-          Bulk mode: `python3 __QUOIN_HOME__/scripts/cost_from_jsonl.py session --json --since <date>`
+          Per-UUID mode: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_from_jsonl.py session -i UUID --json`
+          Bulk mode: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_from_jsonl.py session --json --since <date>`
           Filter results to only UUIDs in the ledger. Parse output identically to ccusage.
           Prepend: `[fallback: cost_from_jsonl.py — prices as of <LAST_UPDATED>]`
           Read LAST_UPDATED via: `python3 -c "from pathlib import Path; import sys; sys.path.insert(0, str(Path.home() / '.claude' / 'scripts')); import cost_from_jsonl; print(cost_from_jsonl.LAST_UPDATED)"`
@@ -730,7 +730,7 @@ Spawn an Agent subagent:
     7. **Write the Sub-phase B entry-skip sentinel (`_AUTONOMOUS` only) — LAST, after
        everything above succeeds:** atomically write
        `autonomous-progress-<task_name>/end_of_task.subphaseB.done`
-       (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`). Inert when
+       (pipe the content into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py write-atomic --parents "<f>"`). Inert when
        `_AUTONOMOUS` is false — plain (non-autonomous) `/end_of_task` never writes it,
        matching every other autonomous-only sentinel write in this workflow.
 
@@ -757,7 +757,7 @@ Spawn an Agent subagent:
     1. Read `cost-summary.json` from the task dir (BEFORE any move).
     2. Read `eot-preflights.json` for `archive_type` and `task_name`.
     3. Delete planner trace breadcrumb (if present):
-       Run: python3 __QUOIN_HOME__/scripts/fsops.py rm "<task_dir>/.planner-trace.md" || true
+       Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<task_dir>/.planner-trace.md" || true
        Tier-3 ephemeral — must not persist in the finalized archive; runs BEFORE the archive move.
     4. **Archive (idempotent)** based on `archive_type`:
        - `"subtask"`: target = `.workflow_artifacts/<parent>/finalized/<subtask>/`.
@@ -767,10 +767,10 @@ Spawn an Agent subagent:
        already exists** (the task folder was already archived on a prior attempt — e.g.
        a kill-after-archive-before-done-sentinel resume). If it exists, SKIP the move as a
        no-op (do not double-move or error) and note "already archived" in the report.
-       Otherwise move the folder: `python3 __QUOIN_HOME__/scripts/fsops.py mv --parents "<task_dir>" "<target>"` (the target is the final path; `--parents` creates only its parent).
+       Otherwise move the folder: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv --parents "<task_dir>" "<target>"` (the target is the final path; `--parents` creates only its parent).
        Then, in both cases (moved now or already archived), remove any empty shell left
        at the old location (a folder re-created by a hook or a resumed session after the
-       move): `python3 __QUOIN_HOME__/scripts/fsops.py rmdir-empty "<task_dir>"`. It
+       move): `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rmdir-empty "<task_dir>"`. It
        removes the folder only when it holds nothing but empty subfolders; exit 0 means
        gone or never there. Exit 3 means files appeared there after the move: leave them,
        and name the folder in the report as "files left at <task_dir> after archive".
@@ -805,7 +805,7 @@ Spawn an Agent subagent:
     6. **Write the done-sentinel (`_AUTONOMOUS` only) — LAST, after the archive move
        (step 4) AND the report print (step 5) above, never before either:** atomically
        write `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
-       (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`), deliberately
+       (pipe the content into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py write-atomic --parents "<f>"`), deliberately
        OUTSIDE the just-archived task folder so the record survives the move. It is the
        terminal signal an external supervisor's relaunch loop checks for SUCCESS. A kill at any
        earlier boundary (after-push-before-Sub-phase-B, after-Sub-phase-B-before-archive,

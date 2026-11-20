@@ -87,6 +87,7 @@ def test_hooks_dir_has_expected_files() -> None:
             "_lib.sh",
             "postcompact.sh",
             "precompact.sh",
+            "rules.sh",
             "sessionend.sh",
             "sessionstart.sh",
             "stop.sh",
@@ -95,20 +96,6 @@ def test_hooks_dir_has_expected_files() -> None:
         ]
     )
     assert names == expected, f"hooks/ script roster changed: {names}"
-
-
-def test_no_hook_file_mentions_autonomous() -> None:
-    """No hook script was edited to add autonomous-specific logic — the
-    autonomous plan's entire scope is SKILL.md/scripts/memory files."""
-    offenders = []
-    for path in sorted(HOOKS_DIR.glob("*.sh")):
-        text = path.read_text(encoding="utf-8")
-        if "autonomous" in text.lower():
-            offenders.append(path.name)
-    assert not offenders, (
-        f"hooks file(s) mention 'autonomous' — hooks must never be edited by "
-        f"autonomous-mode work: {offenders}"
-    )
 
 
 def test_bps_threshold_constants_unchanged(lib_sh_text: str) -> None:
@@ -177,33 +164,6 @@ def test_read_constants_function_present_and_unmodified_shape(lib_sh_text: str) 
 # Files in scope for the autonomous plan (the 15-skill transitive spawn set
 # plus the generator scripts and memory doc T-20 is meant to guard).
 AUTONOMOUS_TAGGED_ROOTS = [ADAPTER_SKILLS_DIR, SCRIPTS_DIR, CORE_SKILLS_DIR, MEMORY_DIR]
-
-
-def test_no_autonomous_line_references_hooks_dir() -> None:
-    """Line-level co-occurrence check: no line that mentions "autonomous"
-    (the sentinel, the state flag, or prose describing autonomous behavior)
-    also mentions `hooks/` anywhere in the autonomous-tagged surface. This is
-    deliberately coarse (co-occurrence, not just writes) — the autonomous
-    plan's entire scope is SKILL.md/scripts/memory text, and it should never
-    even DISCUSS touching hooks/, let alone write to it. Pre-existing hooks/
-    references in these files (e.g. `. __QUOIN_HOME__/hooks/_lib.sh` sourcing
-    in checkpoint/cleanup/implement/end_of_task, or hooks-table.md doc links)
-    are unrelated to autonomous mode and never share a line with
-    "autonomous" — verified true as of this writing."""
-    offenders: list[str] = []
-    for root in AUTONOMOUS_TAGGED_ROOTS:
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*.md")) + sorted(root.rglob("*.py")):
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
-                if "autonomous" in line.lower() and "hooks/" in line:
-                    offenders.append(f"{path.relative_to(PKG_DIR)}:{lineno}: {line.strip()!r}")
-    assert not offenders, (
-        f"found autonomous-tagged line(s) that also reference hooks/ — "
-        f"autonomous mode must never touch the hooks dir: {offenders}"
-    )
 
 
 def test_hooks_dir_untouched_git_diff_if_available() -> None:

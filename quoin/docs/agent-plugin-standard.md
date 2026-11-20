@@ -30,7 +30,7 @@ The 33 Claude skills live in `quoin/adapters/claude/skills/<name>/SKILL.md`. The
 - **§0 model dispatch.** On the 19 cheap-tier Claude skills, a generated block tells the agent to read its own model name, compare it with the declared tier, and re-spawn itself through the Agent tool at the cheaper tier. A `[no-redispatch]` sentinel prevents loops, and a `dispatch_config.py` check runs first.
 - **§0' pollution dispatch.** `pollution_guard.py` scores the Claude session transcript and, past a threshold, re-spawns the skill in a fresh subagent.
 - **Generated preambles.** The 9 spawn targets carry a `preamble.md` produced by `build_preambles.py`. It holds slices of `format-kit.md` and `glossary.md`, with source hashes, laid out for prompt-cache reuse.
-- **Install-time paths.** Every Claude `SKILL.md` refers to helper scripts as `__QUOIN_HOME__/scripts/...`. The installer replaces that placeholder with the absolute deploy root when it copies skills to `~/.claude/skills/`.
+- **Install-time paths.** Every Claude `SKILL.md` refers to helper scripts as `${CLAUDE_PLUGIN_ROOT}/scripts/...`. The installer replaces that placeholder with the absolute deploy root when it copies skills to `~/.claude/skills/`.
 - **Subagent orchestration.** Almost every Claude skill names the Agent tool or a `subagent_type`. Orchestrating skills (`run`, `thorough_plan`, `run_hard`) chain other skills this way.
 - **Hooks.** Shell hooks registered on nine event stanzas in `~/.claude/settings.json` (prompt submit, pre- and post-compact, session start, session end, worktree create, stop) maintain session history, run-continuation sentinels and end-of-session reconciliation.
 - **Cost capture.** `cost_from_jsonl.py`, `agent_transcript_cost.py` and related scripts read Claude Code session JSONL files and a Claude price table.
@@ -175,7 +175,7 @@ metadata:
 
 ### Body content
 
-Each body is assembled from the portable intent document plus a runtime-neutral procedure. It follows Agent Skills guidance: under 500 lines, one level of references, and paths relative to the skill root. It contains no §0 or §0' block, no Agent-tool instructions and no `__QUOIN_HOME__` placeholders. Where a Claude skill delegates to a subagent, the portable body states the delegation as a contract ("run the critic phase in a fresh context if the runtime supports delegation; otherwise run it inline"), using the envelope in `handoff-format.md`. Each overlay can then bind that contract to a native subagent.
+Each body is assembled from the portable intent document plus a runtime-neutral procedure. It follows Agent Skills guidance: under 500 lines, one level of references, and paths relative to the skill root. It contains no §0 or §0' block, no Agent-tool instructions and no `${CLAUDE_PLUGIN_ROOT}` placeholders. Where a Claude skill delegates to a subagent, the portable body states the delegation as a contract ("run the critic phase in a fresh context if the runtime supports delegation; otherwise run it inline"), using the envelope in `handoff-format.md`. Each overlay can then bind that contract to a native subagent.
 
 ### Shared resources
 

@@ -1,0 +1,14 @@
+{
+  "name": "quoin",
+  "owner": {
+    "name": "IvGor"
+  },
+  "description": "Quoin workflow plugin, installed by `quoin install`.",
+  "plugins": [
+    {
+      "name": "quoin",
+      "source": "./",
+      "description": "Quoin workflow plugin for Claude Code"
+    }
+  ]
+}

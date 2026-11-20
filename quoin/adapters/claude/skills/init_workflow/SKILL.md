@@ -1,129 +1,14 @@
 ---
 name: init_workflow
-description: "Bootstraps the workflow in a project (.workflow_artifacts/, /discover, quickstart). Use for: /init_workflow, 'set up dev workflow'. Needs install.sh first (rules in __QUOIN_HOME__/CLAUDE.md)."
+description: "Bootstraps the workflow in a project (.workflow_artifacts/, /discover, quickstart). Use for: /init_workflow, 'set up dev workflow'. Needs install.sh first (rules in ${CLAUDE_PLUGIN_ROOT}/CLAUDE.md)."
 model: opus
 ---
 
 # Initialize Development Workflow
 
-
 *Portable intent doc: `quoin/core/skills/init_workflow.md`*
 
 You set up the complete development workflow system in a project folder. This is the one-time bootstrap that makes all workflow commands available for a project.
-
-## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
-
-This skill runs in the user's current session. If the session is polluted (high context from
-prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
-
-Detection:
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
-    It scores the current session transcript; threshold POLLUTION_THRESHOLD
-    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
-  - Output starting `OVER|`: session is polluted.
-  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
-
-Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
-  Determine dispatch contract fields:
-    - Use the current working directory as the project root absolute path.
-
-  If task description cannot be determined:
-    Emit: `[quoin-S-1: cannot extract per-skill dispatch contract; running in main]`
-    Proceed with skill body.
-
-  Otherwise spawn an Agent subagent:
-    model: "opus"
-    description: "init_workflow — pollution-isolated dispatch"
-    prompt: "[no-redispatch]\n/init_workflow <project root absolute path>"
-
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path:
-  Full AskUserQuestion Question/Header/description wording for every branch below:
-  memory/dispatch-guide.md §0' verbose reference ("Verbatim AskUserQuestion wording").
-  If Agent tool unavailable or errors — classify the error first:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0' dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-autonomous: §0' dispatch failed; proceeding fail-OPEN at current tier]` and proceed
-    with skill body (treat as bare [no-redispatch]).
-  - 1M-credit-class: if the error text contains the substring
-      `Usage credits required for 1M context`:
-      The §0' opus dispatch hit a 1M-context credit mismatch (IVG-89). Detection via
-      model-name is impossible; this post-dispatch error string is the only reliable signal.
-      Issue an `AskUserQuestion` — Option 1 label "Abort — I'll switch with /model first";
-      Option 2 label "Proceed in-session at parent tier".
-      On Option 1: print `[quoin: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /init_workflow]` and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin: 1M-context credit mismatch; proceeding in-session at
-      parent tier — run /model to switch to standard context for a permanent fix]` and
-      proceed with skill body.
-  - Any other error (non-1M): Issue an `AskUserQuestion` (generic wording; Option 1 = abort,
-      Option 2 = proceed in the current polluted session).
-      On Option 1: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and proceed with skill body.
-
-Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
-proceed to skill body.
-
-## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
-This skill is declared model: "opus". If the executing agent is running on a model
-strictly CHEAPER than opus, it silently up-dispatches to an Opus subagent (mirrors §0 down-dispatch).
-
-<!-- §0doubleprime-begin -->
-Detection:
-  - Read your current model from system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus. declared_tier = opus.
-  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
-    (silent skip — no advisory; this is explicit opt-out behavior by design).
-  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
-  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
-
-On fire (happy path — silent up-dispatch):
-  spawn an Agent subagent:
-    model: "opus"
-    description: "init_workflow — min-tier up-dispatch"
-    prompt: "[no-redispatch]\n<original user input verbatim>"
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
-description wording for every branch below: memory/dispatch-guide.md §0″ verbose reference
-("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0″ dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-mintier-autonomous: §0″ dispatch failed; proceeding fail-OPEN at current tier]` and
-    proceed to skill body (treat as bare [no-redispatch]).
-
-  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
-      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
-      §0″ verbose reference):
-        Option 1:
-          label: "Abort — I'll switch with /model first"
-        Option 2:
-          label: "Proceed in-session at parent tier"
-      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /init_workflow]` and STOP.
-      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on opus up-dispatch;
-      proceeding in-session at parent tier — run /model to switch to standard context]`
-      and proceed to skill body (treat as bare [no-redispatch]).
-
-  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
-        Option 1:
-          label: "Abort — run from an Opus session"
-        Option 2:
-          label: "Proceed at current tier (under-powered)"
-      On Option 1: print `[quoin-mintier: aborted; re-invoke /init_workflow from an Opus session]` and STOP.
-      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
-<!-- §0doubleprime-end -->
 
 ## When to use
 
@@ -133,13 +18,13 @@ description wording for every branch below: memory/dispatch-guide.md §0″ verb
 
 ## Prerequisites
 
-`install.sh` must have been run first. In user scope it installs skills to `__QUOIN_HOME__/skills/` and writes workflow rules to `__QUOIN_HOME__/CLAUDE.md`; in project scope it installs to `<project>/.claude/skills/` and writes workflow rules to `<project>/CLAUDE.md`. This skill handles per-project initialization only — not the one-time machine setup.
+`install.sh` must have been run first. In user scope it installs skills to `${CLAUDE_PLUGIN_ROOT}/skills/` and writes workflow rules to `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`; in project scope it installs to `<project>/.claude/skills/` and writes workflow rules to `<project>/CLAUDE.md`. This skill handles per-project initialization only — not the one-time machine setup.
 
 ## Session bootstrap
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/init_workflow` initializes a project, not a task. Cost tracking requires a task context. Append to the cost ledger only if you were invoked as part of a task (e.g., via `/run`). Otherwise, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `init-workflow` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/init_workflow` initializes a project, not a task. Cost tracking requires a task context. Append to the cost ledger only if you were invoked as part of a task (e.g., via `/run`). Otherwise, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `init-workflow` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -202,8 +87,8 @@ If `memory/` exists at the project root (but `.workflow_artifacts/` does not), o
 Migration commands (on yes):
 ```bash
 mkdir -p .workflow_artifacts
-python3 __QUOIN_HOME__/scripts/fsops.py mv "memory" ".workflow_artifacts/memory"
-[ -d finalized ] && python3 __QUOIN_HOME__/scripts/fsops.py mv "finalized" ".workflow_artifacts/finalized"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "memory" ".workflow_artifacts/memory"
+[ -d finalized ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "finalized" ".workflow_artifacts/finalized"
 ```
 
 **Task folder detection** — also scan the project root for task folders to migrate:
@@ -211,7 +96,7 @@ python3 __QUOIN_HOME__/scripts/fsops.py mv "memory" ".workflow_artifacts/memory"
 - Qualifies as a task folder if it contains BOTH `current-plan.md` AND at least one of `critic-response-*.md` or `review-*.md`
 - Also qualifies: any non-git-repo directory containing a `finalized/` subdirectory (parent task container)
 - Present detected list to user, ask confirmation per folder before moving
-- Move confirmed folders: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-name>" ".workflow_artifacts/<task-name>"`
+- Move confirmed folders: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<task-name>" ".workflow_artifacts/<task-name>"`
 
 **Legacy detection:** Check for `quoin/memory/` — this is the old layout where memory was nested inside quoin. If found:
 
@@ -226,21 +111,21 @@ python3 __QUOIN_HOME__/scripts/fsops.py mv "memory" ".workflow_artifacts/memory"
 If the user confirms, run:
 ```bash
 mkdir -p .workflow_artifacts
-python3 __QUOIN_HOME__/scripts/fsops.py mv "quoin/memory" ".workflow_artifacts/memory"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "quoin/memory" ".workflow_artifacts/memory"
 ```
 
 If `.workflow_artifacts/memory/` already exists (partial migration), merge by copying missing files only — never overwrite existing ones.
 
-**Old symlinks cleanup:** Check for `.claude/skills/` containing symlinks into `quoin/skills/`. If found, remove them — skills are now global at `__QUOIN_HOME__/skills/`:
+**Old symlinks cleanup:** Check for `.claude/skills/` containing symlinks into `quoin/skills/`. If found, remove them — skills are now global at `${CLAUDE_PLUGIN_ROOT}/skills/`:
 ```bash
 for f in .claude/skills/*/; do
-  [ -L "${f%/}" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "${f%/}"
+  [ -L "${f%/}" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "${f%/}"
 done
 ```
 
 **Old skills directory:** If `quoin/skills/` exists, it is no longer needed. Offer to remove it:
 ```
-quoin/skills/ is no longer needed (skills live at __QUOIN_HOME__/skills/).
+quoin/skills/ is no longer needed (skills live at ${CLAUDE_PLUGIN_ROOT}/skills/).
 Remove it? (yes/no)
 ```
 
@@ -309,12 +194,12 @@ Create the memory structure under `.workflow_artifacts/` at the project root:
 │   │   └── workflow-suggestions.md   ← Tier 3 insight suggestions
 ```
 
-Note: Skills live at `__QUOIN_HOME__/skills/` (installed by `install.sh`), and the QUICKSTART command
-reference is deployed by `install.sh` to `__QUOIN_HOME__/QUICKSTART.md`. The interactive HTML guide lives
+Note: Skills live at `${CLAUDE_PLUGIN_ROOT}/skills/` (installed by `install.sh`), and the QUICKSTART command
+reference is deployed by `install.sh` to `${CLAUDE_PLUGIN_ROOT}/QUICKSTART.md`. The interactive HTML guide lives
 in your Quoin source clone at `<your-quoin-clone>/Workflow-User-Guide.html` — the only artifact
 /init_workflow still references from the source clone.
 
-Skills are already at `__QUOIN_HOME__/skills/` (installed by `install.sh`). Do not create a `skills/` directory in the project.
+Skills are already at `${CLAUDE_PLUGIN_ROOT}/skills/` (installed by `install.sh`). Do not create a `skills/` directory in the project.
 
 ```bash
 mkdir -p .workflow_artifacts/memory/sessions .workflow_artifacts/memory/daily .workflow_artifacts/memory/weekly
@@ -339,7 +224,7 @@ For files that should start empty but exist as placeholders:
   # Workflow Rules
 
   Reference summary of the quoin system for Claude.
-  See __QUOIN_HOME__/memory/workflow-catalog.md for the full rules (plus this project's own workflow-rules file, deployed as `<project>/CLAUDE.md` in project scope or `__QUOIN_HOME__/CLAUDE.md` in user scope).
+  See ${CLAUDE_PLUGIN_ROOT}/memory/workflow-catalog.md for the full rules (plus this project's own workflow-rules file, deployed as `<project>/CLAUDE.md` in project scope or `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md` in user scope).
   ```
 - `.workflow_artifacts/memory/workflow-suggestions.md` — create with the template header:
   ```markdown
@@ -379,7 +264,7 @@ This ensures `.workflow_artifacts/` is gitignored in every project.
 ### Step 6: Run /discover
 
 Before invoking `/discover`, handle the bootstrap marker (crash-safe de-dup with `/discover`'s repo-spec offer, D-05):
-1. **Stale pre-clear:** drop any marker left by a prior aborted bootstrap: `python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`
+1. **Stale pre-clear:** drop any marker left by a prior aborted bootstrap: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`
 2. **Write a fresh marker:** `: > .workflow_artifacts/.init-bootstrap-active` (create empty; `.workflow_artifacts/` is already gitignored)
 
 This marker signals to `/discover` that repo-spec seeding is owned by `/init_workflow` Step 6.7, so `/discover` MUST suppress its own repo-spec draft/refresh offer while the marker is present AND self-clear it after honoring — the concrete, crash-safe de-dup mechanism for R-04/R-31/R-38 (see D-05). The marker path is the shared signal both skills key on.
@@ -404,7 +289,7 @@ Otherwise, detect Serena using `ToolSearch select:mcp__serena__activate_project`
 **Branch (a) — Serena ABSENT (no schema AND no plugin file):**
 
 If the ToolSearch probe returns no schema, run a filesystem pre-check:
-- Plugin file: `__QUOIN_HOME__/plugins/marketplaces/claude-plugins-official/external_plugins/serena/.mcp.json`
+- Plugin file: `${CLAUDE_PLUGIN_ROOT}/plugins/marketplaces/claude-plugins-official/external_plugins/serena/.mcp.json`
 - `uvx` on PATH: `command -v uvx`
 
 If neither the schema nor the plugin file is found, offer installation:
@@ -433,7 +318,7 @@ On **"Install Serena"**: guide the user through the following steps (Serena is a
    brew install uv
    ```
 
-2. **Install the Serena plugin** in Claude Code. Preferred: run `/plugin` in your Claude Code session, browse to `claude-plugins-official`, and install `serena`. Manual fallback — add to `__QUOIN_HOME__/.mcp.json` (or the project `.mcp.json`):
+2. **Install the Serena plugin** in Claude Code. Preferred: run `/plugin` in your Claude Code session, browse to `claude-plugins-official`, and install `serena`. Manual fallback — add to `${CLAUDE_PLUGIN_ROOT}/.mcp.json` (or the project `.mcp.json`):
    ```json
    {
      "mcpServers": {
@@ -580,10 +465,10 @@ On **"Describe it now"**: elicit the repo's purpose, goals, core capabilities, a
   - `## Acceptance criteria`
   - `## Non-goals`
 
-Write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then validate:
+Write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then validate:
 
 ```bash
-python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py .workflow_artifacts/spec.md
 ```
 
 Expect exit 0 — this auto-detects artifact type `spec` (required sections `[## Context, ## Acceptance criteria]`; all 5 headings are within the allowed union).
@@ -591,7 +476,7 @@ Expect exit 0 — this auto-detects artifact type `spec` (required sections `[##
 **Marker cleanup (last action of Step 6.7, run on EVERY branch — describe, skip, or already-exists):**
 
 ```bash
-python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"
 ```
 
 This is a belt-and-suspenders no-op: `/discover` self-clears the marker when it honors it during Step 6, so the marker is normally already gone by the time Step 6.7 runs. `fsops.py rm` is a no-op when the file is already absent.
@@ -615,10 +500,10 @@ Safety check: if `(project)/dev-workflow/install.sh` OR `(project)/dev-workflow/
 
 **Copy QUICKSTART from the deployed location:**
 
-`install.sh` deploys `quoin/QUICKSTART.md` to `__QUOIN_HOME__/QUICKSTART.md` at install time. Step 7 reads
+`install.sh` deploys `quoin/QUICKSTART.md` to `${CLAUDE_PLUGIN_ROOT}/QUICKSTART.md` at install time. Step 7 reads
 from that stable path — no user prompt needed.
 
-- **Source path:** `__QUOIN_HOME__/QUICKSTART.md` (deployed by `install.sh`)
+- **Source path:** `${CLAUDE_PLUGIN_ROOT}/QUICKSTART.md` (deployed by `install.sh`)
 - **Destination:** `.workflow_artifacts/QUICKSTART.md`
 
 ```bash
@@ -628,7 +513,7 @@ else
   cat > .workflow_artifacts/QUICKSTART.md <<'EOF'
 # Quoin — Quickstart (fallback)
 
-The full QUICKSTART could not be found at __QUOIN_HOME__/QUICKSTART.md.
+The full QUICKSTART could not be found at ${CLAUDE_PLUGIN_ROOT}/QUICKSTART.md.
 This means install.sh has not been run, or was run from an older version.
 
 To get the full command reference, re-run install.sh from your Quoin source clone:
@@ -636,7 +521,7 @@ To get the full command reference, re-run install.sh from your Quoin source clon
 
 In the meantime:
   - Type /help inside Claude Code to see available slash commands.
-  - Browse the user skills directory at __QUOIN_HOME__/skills/ for per-skill SKILL.md files.
+  - Browse the user skills directory at ${CLAUDE_PLUGIN_ROOT}/skills/ for per-skill SKILL.md files.
   - Open the interactive HTML guide at <your-quoin-clone>/Workflow-User-Guide.html in your browser.
 EOF
 fi
@@ -657,7 +542,7 @@ AskUserQuestion(
   question="Would you like to set up a weekly automated discovery refresh?",
   options=[
     {label: "Register weekly refresh",
-     description: "Register a /schedule routine (quoin-discovery-refresh) to refresh discovery memory every Monday at 06:00. See __QUOIN_HOME__/memory/discovery-refresh-routine.md for details."},
+     description: "Register a /schedule routine (quoin-discovery-refresh) to refresh discovery memory every Monday at 06:00. See ${CLAUDE_PLUGIN_ROOT}/memory/discovery-refresh-routine.md for details."},
     {label: "Skip for now",
      description: "Skip automated refresh setup. The session-start banner (S-5) will prompt you when discovery is stale."}
   ]
@@ -665,7 +550,7 @@ AskUserQuestion(
 ```
 
 On **"Register weekly refresh"**: instruct the user to run `/schedule` with the payload from
-`__QUOIN_HOME__/memory/discovery-refresh-routine.md` (reference the file; do not duplicate the
+`${CLAUDE_PLUGIN_ROOT}/memory/discovery-refresh-routine.md` (reference the file; do not duplicate the
 payload here). Note the cloud-sandbox limitation: the routine may be a no-op if repos live on
 local Drive. Print `[quoin: discovery-refresh-routine registered — see discovery-refresh-routine.md for details]`.
 

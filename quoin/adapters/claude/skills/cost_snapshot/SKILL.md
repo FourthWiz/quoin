@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -127,7 +127,7 @@ Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sent
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/cost_snapshot` is a read-only reporting skill. Append to the cost ledger only if a task context is clearly active (e.g., you were invoked mid-task and the task name is unambiguous). If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cost-snapshot` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/cost_snapshot` is a read-only reporting skill. Append to the cost ledger only if a task context is clearly active (e.g., you were invoked mid-task and the task name is unambiguous). If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cost-snapshot` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -222,10 +222,10 @@ If `npx` or `ccusage` is not available (binary not found), OR every ccusage
 call returns non-zero, fall back to `cost_from_jsonl.py`:
 
   # Per-UUID mode (parallel with the ccusage `-i UUID --json` path):
-  python3 __QUOIN_HOME__/scripts/cost_from_jsonl.py session -i UUID --json
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_from_jsonl.py session -i UUID --json
 
   # Bulk mode (parallel with `ccusage session --since DATE --json`):
-  python3 __QUOIN_HOME__/scripts/cost_from_jsonl.py session --json --since DATE
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cost_from_jsonl.py session --json --since DATE
 
 The output JSON shape is identical to ccusage (see /cost_snapshot Step 2
 parser). Parse it the same way.
@@ -249,7 +249,7 @@ For individual call timeouts or errors, record cost as `null` for that UUID and 
 ## §V Reconcile (read-only — no side-effect check)
 
 <!-- §V-reconcile-begin -->
-Before surfacing any task/PR status, run `python3 __QUOIN_HOME__/scripts/verify_claims.py --reconcile-tasks --project-root <project-root>` and derive the displayed status from the reconcile table, not from a cached narrative alone. If the reconcile exits 8, surface the contradiction rather than silently reporting the narrative version.
+Before surfacing any task/PR status, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --reconcile-tasks --project-root <project-root>` and derive the displayed status from the reconcile table, not from a cached narrative alone. If the reconcile exits 8, surface the contradiction rather than silently reporting the narrative version.
 <!-- §V-reconcile-end -->
 
 ### Step 3: Print summary
@@ -281,7 +281,7 @@ Each `$X.XX` total is `resolved_total` for that scope. When the corresponding `u
 
 When today's fallback total (from `today_fallback_by_task`) is > 0 for a task, append ` (<K> fallback fires today)` after the session count for that task in the "Open tasks" block. When 0, no marker is shown. Similarly, if the lifetime 7th-column sum across all ledgers is > 0, append ` (<K> fallback fires)` after the lifetime session count. If today's total fallback fires across all tasks is > 0, append ` (<K> fallback fires today)` after the Today session count. Never print fallback-fire markers when the count is 0.
 
-**Per-stage breakdown.** For each open task whose ledger has a col-8 `stage=` key, run `python3 __QUOIN_HOME__/scripts/parallel_stages.py costs --ledger <ledger>`. It prints `{"stages": {"S-01": {"usd", "rows", "unresolved"}, ..., "untagged": {...}}}`. Indent one line per stage under that task, `untagged` last. The same `~`/`(partial)` rule applies when a stage has `unresolved > 0`. Omit the breakdown for tasks with no stage-tagged rows.
+**Per-stage breakdown.** For each open task whose ledger has a col-8 `stage=` key, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parallel_stages.py costs --ledger <ledger>`. It prints `{"stages": {"S-01": {"usd", "rows", "unresolved"}, ..., "untagged": {...}}}`. Indent one line per stage under that task, `untagged` last. The same `~`/`(partial)` rule applies when a stage has `unresolved > 0`. Omit the breakdown for tasks with no stage-tagged rows.
 
 Formatting rules:
 - Right-align the dollar amounts (pad task names to consistent width)

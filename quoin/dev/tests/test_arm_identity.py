@@ -22,10 +22,11 @@ from quoin.benchmarks.scripts import run_three_arm_gate as gate
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = Path(__file__).parent / "fixtures" / "benchmark_streams"
+LEGACY_ARM = Path(__file__).parent / "fixtures" / "legacy_arm"
 
 
 def _installer():
-    return gate._load_arm_installer(REPO_ROOT)
+    return gate._load_arm_installer(LEGACY_ARM)
 
 
 def _canonical():
@@ -223,40 +224,40 @@ def _fake_quoin_home(tmp_path, extra=()):
         (claude / "skills" / name / "SKILL.md").write_text("x")
     claude.joinpath("CLAUDE.md").write_text("\n".join(ai.RULES_MARKERS))
     hooks = {}
-    for event, matcher, base in gate.arm_registered_stanzas(REPO_ROOT):
+    for event, matcher, base in gate.arm_registered_stanzas(LEGACY_ARM):
         hooks.setdefault(event, []).append(
             {"matcher": matcher, "hooks": [{"type": "command", "command": f"{claude}/hooks/{base}"}]}
         )
     (claude / "settings.json").write_text(json.dumps({"hooks": hooks}))
     (claude / "hooks").mkdir()
     for name in gate.HOOK_SCRIPTS:
-        src = REPO_ROOT / "quoin" / "hooks" / name
+        src = LEGACY_ARM / "quoin" / "hooks" / name
         (claude / "hooks" / name).write_bytes(installer.expected_deployed_content(src, claude))
     return home
 
 
 def test_quoin_sandbox_passes_and_detects_problems(tmp_path):
     home = _fake_quoin_home(tmp_path)
-    assert ai.check_quoin_sandbox(home, REPO_ROOT) == []
+    assert ai.check_quoin_sandbox(home, LEGACY_ARM) == []
     missing = _canonical()[0]
     import shutil
 
     shutil.rmtree(home / ".claude" / "skills" / missing)
-    assert any(missing in p for p in ai.check_quoin_sandbox(home, REPO_ROOT))
+    assert any(missing in p for p in ai.check_quoin_sandbox(home, LEGACY_ARM))
 
 
 def test_quoin_sandbox_markers_stripped(tmp_path):
     home = _fake_quoin_home(tmp_path)
     (home / ".claude" / "CLAUDE.md").write_text("no markers")
-    assert any("markers" in p for p in ai.check_quoin_sandbox(home, REPO_ROOT))
+    assert any("markers" in p for p in ai.check_quoin_sandbox(home, LEGACY_ARM))
 
 
 def test_quoin_sandbox_extras_exact_vs_subset(tmp_path):
     extras = ("context-tracker", "next_steps 2", "test-model-check")
     home = _fake_quoin_home(tmp_path, extra=extras)
-    assert ai.check_quoin_sandbox(home, REPO_ROOT, exact=True)
-    assert ai.check_quoin_sandbox(home, REPO_ROOT, exact=False) == []
-    assert ai.extra_skills(home, REPO_ROOT) == sorted(extras)
+    assert ai.check_quoin_sandbox(home, LEGACY_ARM, exact=True)
+    assert ai.check_quoin_sandbox(home, LEGACY_ARM, exact=False) == []
+    assert ai.extra_skills(home, LEGACY_ARM) == sorted(extras)
 
 
 def test_expected_set_is_the_constant_not_the_source_tree():

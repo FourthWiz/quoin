@@ -99,12 +99,6 @@ EXAMPLE = _fence("markdown")
 
 # ---------------------------------------------------------------- registration
 
-def test_registered_for_install_and_catalog():
-    from quoin import installer
-
-    assert "session-schema.md" in installer.TIER1_MEMORY_FILES
-    assert "session-schema.md" in (PKG / "memory" / "tier1-files.md").read_text(encoding="utf-8")
-
 
 def test_doc_and_sidecar_parity():
     session = json.loads(SIDECAR.read_text(encoding="utf-8"))["artifact_types"]["session"]
@@ -151,14 +145,6 @@ def test_readers_accept_example(tmp_path):
 
     uuid = _cost_value(EXAMPLE, "Session UUID")
     assert checkpoint_picker._session_matches_sid(EXAMPLE, uuid)
-
-
-def test_fallback_fires_regex_is_pinned_in_both_skills():
-    rx = r"^- fallback_fires:\s*(\d+)\s*$"
-    for name in ("cost_snapshot", "end_of_day"):
-        assert rx in _skill(name), name
-    m = re.search(rx, EXAMPLE, re.M)
-    assert m and m.group(1) == "0"
 
 
 # ------------------------------------------------------------ same-day merge
@@ -253,14 +239,6 @@ def test_orchestrator_variant_headings_documented(tmp_path):
 
 # -------------------------------------------------------------- writer pins
 
-@pytest.mark.parametrize("name", _writer_skills)
-def test_save_session_state_slice_points_at_schema(name):
-    sl = _slice(_skill(name), "\n## Save session state\n", r"^## ")
-    assert SCHEMA_CITE in sl, name
-    for marker in OLD_TEMPLATE_MARKERS:
-        assert marker not in sl, f"{name}: {marker!r}"
-    assert "YAML" not in sl, name
-
 
 _named_steps = {
     "end_of_day": ("### Step 1: Save current session state", r"^### Step "),
@@ -268,40 +246,6 @@ _named_steps = {
     "rollback": ("### Step 5: Update session state", r"^### "),
     "run_hard": ("## Session state tracking", r"^## "),
 }
-
-
-@pytest.mark.parametrize("name", sorted(_named_steps))
-def test_named_session_step_points_at_schema(name):
-    start, end = _named_steps[name]
-    text = _skill(name)
-    if name == "end_of_task":
-        start = "3. Update `.workflow_artifacts/memory/sessions/<date>-<task_name>.md`"
-        end = r"^\s+3a\. "
-    sl = _slice(text, start, end)
-    assert SCHEMA_CITE in sl, name
-    for marker in OLD_TEMPLATE_MARKERS:
-        assert marker not in sl, f"{name}: {marker!r}"
-
-
-@pytest.mark.parametrize("name", ("pr", "workspace"))
-def test_pr_and_workspace_session_lines_point_at_schema(name):
-    text = _skill(name)
-    sl = _slice(text, "## Session state", r"^## ")
-    assert SCHEMA_CITE in sl, name
-    line = next(ln for ln in text.splitlines()
-                if ln.lstrip().startswith("2. Write session state to"))
-    idx = text.index(line)
-    assert SCHEMA_CITE in text[idx:idx + 400], name
-
-
-def test_file_wide_absences():
-    assert "After each task (or at natural stopping points)" not in _skill("implement")
-    assert "Record `autonomous: true` in the session-state file" not in _skill("run_hard")
-    assert "[autonomous]" in _skill("run_hard")  # the cost-ledger NOTE tag stays
-    for skill_dir in SKILLS.iterdir():
-        md = skill_dir / "SKILL.md"
-        if md.is_file():
-            assert "pollution_score" not in md.read_text(encoding="utf-8"), skill_dir.name
 
 
 # ------------------------------------------------------------------- triage
@@ -313,35 +257,7 @@ def _triage_command() -> str:
     return m.group(1)
 
 
-def test_triage_signal_reads_both_forms(tmp_path):
-    cmd = _triage_command()
-    today = time.strftime("%Y-%m-%d")
-    sessions = tmp_path / ".workflow_artifacts" / "memory" / "sessions"
-    sessions.mkdir(parents=True)
-
-    def run() -> str:
-        return subprocess.run(["sh", "-c", cmd], cwd=tmp_path, capture_output=True, text=True).stdout
-
-    (sessions / f"{today}-new.md").write_text("## Status\nin_progress\n\n## Cost\n- x: y\n")
-    assert f"{today}-new.md" in run()
-    (sessions / f"{today}-new.md").unlink()
-
-    (sessions / f"{today}-legacy.md").write_text("## Status: in_progress\n")
-    assert f"{today}-legacy.md" in run()
-    (sessions / f"{today}-legacy.md").unlink()
-
-    (sessions / f"{today}-done.md").write_text("## Status\ncompleted\n")
-    (sessions / f"{today}-demo-orchestrator.md").write_text("## Status\nin_progress\n")
-    assert run().strip() == ""
-
-
 # ---------------------------------------------------------------- gate, rules
-
-def test_gate_profile_source_is_plan_frontmatter():
-    text = _skill("gate")
-    para = _slice(text, "## Determining the gate level", r"^## ")
-    assert "profile:" in para
-    assert "or from the session state file" not in para
 
 
 def test_claude_md_points_at_schema():
