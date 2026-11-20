@@ -394,7 +394,6 @@ def _render_full(result: PhaseResult, task_name: str, active_node: str, label: s
     lines.append(f"quoin pipeline -- {task_name}")
     lines.append("")
 
-    # Build pipeline row with active node marked
     parts: list[str] = []
     for _, node in _PIPELINE:
         if node == active_node:
@@ -418,7 +417,6 @@ def _render_full(result: PhaseResult, task_name: str, active_node: str, label: s
     lines.append(prefix + " you are here")
     lines.append("")
 
-    # Phase detail
     lines.append(f"phase: {label}")
     if result.phase == "planning" and result.critic_rounds > 0:
         # Show the plan→critic loop progress
@@ -700,7 +698,6 @@ def main(argv=None) -> int:  # type: ignore[assignment]  # argv: list[str] | Non
                         help="detect in-progress implement via git diff (requires git)")
     args = parser.parse_args(argv)
 
-    # Resolve project root
     project_root_str = args.project_root
     if project_root_str:
         project_root = Path(project_root_str).resolve()
@@ -748,7 +745,6 @@ def _resolve_task_dir(args: argparse.Namespace, project_root: Path) -> tuple[Opt
                 return Path(task_dir), ""
             except Exception:
                 pass
-        # Fallback: direct construction
         task_dir = project_root / ".workflow_artifacts" / args.task
         if not task_dir.is_dir():
             return None, f"Task directory not found: {task_dir}"

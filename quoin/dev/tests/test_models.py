@@ -280,7 +280,6 @@ class TestSetProviderModelsInplace:
         assert provider["api_key"] == sentinel_key
         # transformer must be unchanged.
         assert provider["transformer"] == {"use": ["openrouter"]}
-        # models list must contain our new slugs.
         for slug in new_models:
             assert slug in provider["models"]
 
@@ -1135,7 +1134,6 @@ class TestCmdModelsReset:
         def run_with_flag(flag: bool) -> tuple[int, str]:
             # Reset the CCR config to same state before each run.
             _write_ccr_config(tmp_path)
-            # Remove prior backups.
             for bak in config_path.parent.glob("*.bak-*"):
                 bak.unlink()
             return self._run(monkeypatch, tmp_path, native_flag=flag)
@@ -1201,7 +1199,6 @@ class TestImportIsolation:
         """R-05: quoin.installer import must not pull in quoin.models."""
         # Remove models from sys.modules if already loaded (from earlier tests).
         sys.modules.pop("quoin.models", None)
-        # Re-import installer.
         import quoin.installer  # noqa: F401 (side-effect import)
         importlib.reload(quoin.installer)
         assert "quoin.models" not in sys.modules
@@ -1313,7 +1310,6 @@ class TestCliWiring:
             monkeypatch, tmp_path, ["models"]
         )
         assert rc == 0
-        # Show prints all three tiers.
         for tier in TIER_KEYS:
             assert tier in out
 

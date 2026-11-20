@@ -118,7 +118,6 @@ def validate_slug(value: str) -> tuple[str, list[str]]:
         ]
         return (resolved, warnings)
 
-    # Implausible: build a helpful rejection message.
     alias_examples = ", ".join(f"{k!r} → {v!r}" for k, v in FRIENDLY_ALIASES.items())
     raise SlugRejected(
         f"quoin: {value!r} is not a recognised slug (no 'provider/model' shape).\n"
@@ -141,7 +140,7 @@ def read_effective_models(home: pathlib.Path | None = None) -> dict[str, str]:
     - Unknown tier keys in the user file are ignored (warn once).
     - Only haiku/sonnet/opus are honoured.
     """
-    models = dict(DEFAULT_MODELS)  # start from defaults
+    models = dict(DEFAULT_MODELS)
     path = quoin_models_path(home=home)
 
     if not path.exists():
@@ -434,7 +433,6 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
     tier: str = args.tier
     model_input: str = args.model
 
-    # Validate tier.
     if tier not in TIER_KEYS:
         print(
             f"quoin: unknown tier {tier!r}. Valid tiers: {', '.join(TIER_KEYS)}",
@@ -452,7 +450,6 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
     for w in warnings:
         print(f"quoin: warning: {w}", file=sys.stderr)
 
-    # Write models.json.
     models = read_effective_models(home=home_override)
     models[tier] = slug
     models_path = write_models(models, home=home_override)
@@ -488,7 +485,6 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
             ),
         )
 
-    # Re-author CCR Router keys if a CCR config exists.
     config_path = ccr_config.ccr_config_path(home=home_override)
     if not config_path.exists():
         print(
@@ -575,7 +571,6 @@ def _cmd_models_preset(args: argparse.Namespace) -> int:
             ),
         )
 
-    # Re-author CCR Router keys if a CCR config exists.
     config_path = ccr_config.ccr_config_path(home=home_override)
     if not config_path.exists():
         print(

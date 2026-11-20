@@ -22,7 +22,6 @@ TIER1_MEMORY_FILES = (
     "format-kit-pitfalls.md",
     "sleep-signals.yaml",
     "cache-guide.md",
-    # Added 2026-05-15: extracted verbose sections from CLAUDE.md
     "hooks-table.md",
     "dispatch-guide.md",
     "lifecycle-guide.md",
@@ -642,7 +641,7 @@ CORE_SCRIPTS = (
     "classify_critic_issues.py",
     "status_graph.py",
     "cost_event.py",              # required by dashboard_model.py (sibling core load)
-    "dashboard_model.py",         # T-11: deferred from stage 1 — added here (D-11)
+    "dashboard_model.py",
     "dispatch_sidecar.py",        # wrapped impl; required by ~/.claude/scripts/dispatch_sidecar.py parents[1] loader
     "git_root_for_dispatch.py",   # wrapped impl; required by ~/.claude/scripts/git_root_for_dispatch.py parents[1] loader
     "branch_hygiene.py",          # wrapped impl; required by ~/.claude/scripts/branch_hygiene.py parents[1] loader
@@ -1414,7 +1413,6 @@ def deploy_hooks(
     # settings.json lives inside dest_root (~/.claude/settings.json)
     settings_path = dest_root / "settings.json"
 
-    # Load existing settings or start fresh
     original_text: str | None = None
     if settings_path.exists():
         try:

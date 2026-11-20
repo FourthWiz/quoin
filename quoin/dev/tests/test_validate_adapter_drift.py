@@ -114,14 +114,12 @@ def _make_minimal_repo(tmp_path: Path) -> Path:
     adapter_dir.mkdir(parents=True)
     (adapter_dir / "SKILL.md").write_text(_ADAPTER_FULL, encoding="utf-8")
 
-    # Manifest
     manifest_dir = tmp_path / "quoin" / "core" / "workflow"
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "skills.json").write_text(
         json.dumps(_MINIMAL_MANIFEST, indent=2), encoding="utf-8"
     )
 
-    # install.sh
     (tmp_path / "quoin" / "install.sh").write_text(_INSTALL_SH, encoding="utf-8")
 
     return tmp_path
@@ -514,7 +512,6 @@ def _make_minimal_repo_with_core_script(tmp_path: Path, wrapper_content: str = "
     core_scripts.mkdir(parents=True, exist_ok=True)
     (core_scripts / "bar.py").write_text(_CORE_SCRIPT_BODY, encoding="utf-8")
 
-    # Create wrapper directory
     scripts_dir = tmp_path / "quoin" / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
 

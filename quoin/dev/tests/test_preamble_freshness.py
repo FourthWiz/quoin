@@ -18,7 +18,6 @@ import sys
 import pytest
 import yaml
 
-# Locate repo root and quoin dir
 HERE = pathlib.Path(__file__).resolve().parent
 QUOIN_DIR = HERE.parent.parent  # quoin/dev/tests/ -> quoin/dev/ -> quoin/
 REPO_ROOT = QUOIN_DIR.parent    # quoin/ -> project root

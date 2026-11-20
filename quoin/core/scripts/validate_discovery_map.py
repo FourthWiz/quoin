@@ -366,7 +366,6 @@ def _check_path_fields(map_obj: dict) -> List[str]:
                     val = task[fld]
                     if isinstance(val, str) and _bad_repo_relative(val):
                         errors.append(f"DM-09: tasks.{bucket}[{i}].{fld}: path must be repo-relative (no './' or '/' prefix, forward slashes only), got '{val}'")
-                # Check stage paths
                 stages = task.get("stages", [])
                 if not isinstance(stages, list):
                     continue
@@ -380,7 +379,6 @@ def _check_path_fields(map_obj: dict) -> List[str]:
                         if isinstance(val, str) and _bad_repo_relative(val):
                             errors.append(f"DM-09: tasks.{bucket}[{i}].stages[{j}].{fld}: path must be repo-relative (no './' or '/' prefix, forward slashes only), got '{val}'")
 
-    # repos
     repos = map_obj.get("repos", [])
     if isinstance(repos, list):
         for i, repo in enumerate(repos):

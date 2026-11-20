@@ -70,7 +70,6 @@ def test_sec0_is_first_body_h2():
     lines = _lines()
     h1_idx = next((i for i, ln in enumerate(lines) if ln.startswith("# ") and not ln.startswith("## ")), None)
     assert h1_idx is not None, "cleanup/SKILL.md is missing an H1 heading"
-    # Find first ## heading after H1
     first_h2_idx = next(
         (i for i, ln in enumerate(lines) if i > h1_idx and ln.startswith("## ")),
         None,
@@ -188,7 +187,6 @@ def test_recovery_is_manual_mv_not_sleep_restore():
 
 def test_no_literal_tilde_claude():
     text = _text()
-    # grep for literal ~/.claude/ (tilde followed by .claude/)
     matches = re.findall(r"~/\.claude/", text)
     assert len(matches) == 0, (
         f"cleanup/SKILL.md contains {len(matches)} literal '~/.claude/' reference(s). "

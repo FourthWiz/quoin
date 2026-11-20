@@ -425,7 +425,6 @@ def _assert_kdl_valid(kdl: str) -> None:
         assert not stripped.startswith("name="), f"Leaked 'name=' line in KDL: {ln!r}"
         assert not stripped.startswith("cmd="), f"Leaked 'cmd=' line in KDL: {ln!r}"
 
-    # Balanced braces
     assert kdl.count("{") == kdl.count("}"), "Unbalanced braces in KDL"
 
     # I-02: every args line must escape inner double-quotes as \" — there must be
@@ -1639,7 +1638,6 @@ def test_bare_launch_reuses_saved(tmp_path: Path) -> None:
     state_dir = fake_home / ".config" / "agentdesk"
     state_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derive the key by running _agentdesk_layout_key
     key_script = textwrap.dedent(f"""
         source "{AGENTDESK_ZSH}"
         project_root="$(_agentdesk_realpath "{tmp_path}")"
@@ -1658,7 +1656,6 @@ def test_bare_launch_reuses_saved(tmp_path: Path) -> None:
     key = key_result.stdout.strip()
     assert key, "derived key must not be empty"
 
-    # Write pre-seeded state
     (state_dir / "last-layout").write_text(f"{key}=__FIXED__\n")
 
     result = _run_agentdesk_state("", tmp_path)
@@ -1795,7 +1792,6 @@ def test_corrupt_saved_failopen_nontty(tmp_path: Path) -> None:
     state_dir = fake_home / ".config" / "agentdesk"
     state_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derive the key
     key_script = textwrap.dedent(f"""
         source "{AGENTDESK_ZSH}"
         project_root="$(_agentdesk_realpath "{tmp_path}")"

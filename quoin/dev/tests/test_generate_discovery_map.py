@@ -170,7 +170,6 @@ def test_matches_golden_missing_optional():
 
     assert result_masked == golden
 
-    # Assert optional keys are absent
     assert "extensions" not in result
     assert "dependency_hints" not in result
     assert "memory_md_index" not in result.get("memory", {})
@@ -191,7 +190,6 @@ def test_default_output_path(tmp_path):
     with open(expected_out, encoding="utf-8") as fh:
         data = json.load(fh)
     assert data["schema_version"] == 1
-    # Cleanup
     expected_out.unlink(missing_ok=True)
 
 
@@ -310,32 +308,15 @@ def test_validate_fail_blocks_write(tmp_path, monkeypatch):
 
     out_file = tmp_path / "discovery-map.json"
 
-    # Use subprocess to test the CLI behavior (since main() uses module-level generate_map)
-    # We test via the CLI subprocess since monkeypatching won't affect the subprocess
-    # Instead, we test the validate-before-write logic directly via the main() function
-    # by providing a fixture that will fail — we use a different approach:
-    # call main() with --validate against a simple invocation and confirm it checks
-    # For TG-12 we test: if validation finds errors, exit=1 and file not written.
-    # We do this by using a temporary copy of the generator and patching validate.
-
-    # Simpler approach: create a custom test that bypasses via the internal API
-    # We manually test: generate_map → inject bad data → validate → expect error
     bad_map = {"schema_version": 99, "generated_at": _PINNED_NOW}
     errors = validate(bad_map)
     assert len(errors) > 0, "Expected validation to fail on bad map"
 
-    # Now test that write is NOT called when errors exist — via subprocess CLI
-    # Create a tiny fixture that we can tamper with
     bad_fixture = tmp_path / "bad-project"
     bad_fixture.mkdir()
     wa = bad_fixture / ".workflow_artifacts"
     wa.mkdir()
 
-    # Use subprocess to invoke the CLI with a monkey-patched validator path that always fails
-    # Instead, we test the path directly: call main() and redirect output
-    # The cleanest test: create a real valid fixture, generate it, then check validation works
-    # For the "blocks write" path: validate is called BEFORE write; if errors, return 1
-    # We verify this logic is correct by calling validate() on a bad map and asserting no write
     out_path = tmp_path / "out.json"
     bad_map2 = {"schema_version": 2}  # missing required fields
     errors2 = validate(bad_map2)
@@ -352,7 +333,6 @@ def test_deployment_flat_layout_import(tmp_path):
     shutil.copy(_CANONICAL_SCRIPT, flat_dir / "generate_discovery_map.py")
     shutil.copy(_VALIDATOR_SCRIPT, flat_dir / "validate_discovery_map.py")
 
-    # Load generator from flat dir
     flat_gen = _load_module(flat_dir / "generate_discovery_map.py", "_flat_gen")
 
     # Call generate_map on minimal fixture — should work including validator load

@@ -1033,7 +1033,6 @@ def test_ambiguity_two_distinct_tasks_recent_returns_picker(tmp_path, monkeypatc
     cands = verdict["candidates"]
     assert len(cands) == 2, cands
     assert {c["task"] for c in cands} == {"alpha", "beta"}, cands
-    # mtime-descending
     assert cands[0]["mtime"] >= cands[1]["mtime"], cands
     assert cands[0]["task"] == "alpha", cands  # NOW is freshest
 

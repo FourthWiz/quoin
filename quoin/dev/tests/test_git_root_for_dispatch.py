@@ -83,7 +83,6 @@ def test_single_repo_plan_mode(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     repo = make_git_repo(project_root / "repo-a")
-    # Create a file inside the repo
     src_file = repo / "src" / "main.py"
     src_file.parent.mkdir()
     src_file.write_text("# main")

@@ -219,7 +219,6 @@ def test_install_fresh_clone_lists_gate_in_migrated_skills():
     """
     target = PKG_DIR / "dev" / "tests" / "test_install_fresh_clone.py"
     text = target.read_text(encoding="utf-8")
-    # Find the MIGRATED_SKILLS tuple region and check gate is inside it.
     tuple_start = text.find('MIGRATED_SKILLS = (')
     assert tuple_start != -1, (
         "test_install_fresh_clone.py missing MIGRATED_SKILLS tuple — "

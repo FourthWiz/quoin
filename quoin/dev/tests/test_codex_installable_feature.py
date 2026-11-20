@@ -311,7 +311,6 @@ def test_generator_check_covers_codex_adapter_assets():
 def test_generator_check_passes_on_matching_output():
     """--check must exit 0 when AGENTS.md matches rendered output."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Generate first
         subprocess.run(
             [sys.executable, str(GENERATOR_PATH), "--project-root", tmpdir],
             check=True, capture_output=True,
@@ -352,7 +351,6 @@ def test_generated_agents_md_preserves_architectural_boundaries():
         assert "global Codex install" not in content or "not" in content.lower(), (
             "Generated AGENTS.md must not promise global Codex install"
         )
-        # Must mention .workflow_artifacts/
         assert ".workflow_artifacts/" in content, (
             "Generated AGENTS.md must describe .workflow_artifacts/ layout"
         )

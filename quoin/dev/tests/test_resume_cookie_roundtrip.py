@@ -22,7 +22,6 @@ MAX_BYTES = 2048  # 2 KB cap
 
 def _write_cookie(path: pathlib.Path, fields: dict, body: str) -> None:
     """Write a resume cookie using the allowlist + atomic-rename pattern."""
-    # Validate allowlist
     extra = set(fields.keys()) - ALLOWLIST
     if extra:
         raise ValueError(f"Non-allowlisted fields: {extra}")
@@ -36,7 +35,6 @@ def _write_cookie(path: pathlib.Path, fields: dict, body: str) -> None:
 
     # Enforce 2 KB cap by truncating body
     while len(content.encode("utf-8")) > MAX_BYTES and "\n" in body:
-        # Truncate last line
         body = "\n".join(body.splitlines()[:-1])
         content = "\n".join(frontmatter_lines) + "\n" + body
 
@@ -53,7 +51,6 @@ def _read_cookie(path: pathlib.Path):
     if not text.startswith("---"):
         return None
 
-    # Parse frontmatter
     lines = text.splitlines()
     end_fm = lines.index("---", 1)
     fm_lines = lines[1:end_fm]
@@ -63,7 +60,6 @@ def _read_cookie(path: pathlib.Path):
             k, v = line.split(":", 1)
             fields[k.strip()] = v.strip()
 
-    # Check expiry
     expires_str = fields.get("expires")
     if expires_str:
         try:

@@ -43,7 +43,6 @@ def restore_entry(forgotten_file: Path, temp_dir: Path, today_insights: Path) ->
     """
     content = forgotten_file.read_text(encoding="utf-8")
 
-    # Split on "---" separators to get blocks
     blocks = re.split(r"\n---\n", content)
 
     overall_success = True
@@ -77,7 +76,6 @@ def restore_entry(forgotten_file: Path, temp_dir: Path, today_insights: Path) ->
         if not entry_text:
             continue
 
-        # Attempt restore
         if source_path.exists():
             # Case 1: original path exists — append
             try:
@@ -145,7 +143,6 @@ def restore_entry_with_failure_check(forgotten_file: Path, temp_dir: Path, today
             except OSError:
                 pass  # try next target below
         else:
-            # Try today's insights
             try:
                 today_insights.parent.mkdir(parents=True, exist_ok=True)
                 forgotten_date = forgotten_file.stem
@@ -262,7 +259,6 @@ def test_case2_original_path_gone():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Set up temp forgotten dir
         forgotten_dir = tmp / "forgotten"
         forgotten_dir.mkdir()
         tmp_forgotten = forgotten_dir / "2026-03-10.md"
@@ -308,7 +304,6 @@ def test_case3_neither_writable():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Set up temp forgotten dir
         forgotten_dir = tmp / "forgotten"
         forgotten_dir.mkdir()
         tmp_forgotten = forgotten_dir / "2026-03-10.md"

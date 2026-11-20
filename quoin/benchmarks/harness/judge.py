@@ -57,7 +57,6 @@ def normalize_patch(patch_text: str) -> str:
     patch_text = patch_text.replace("\r\n", "\n").replace("\r", "\n")
     # Step 1: strip trailing whitespace per line
     lines = [line.rstrip() for line in patch_text.split("\n")]
-    # Reconstruct
     normalized = "\n".join(lines)
     # Step 3: ensure exactly one trailing newline
     normalized = normalized.rstrip("\n") + "\n"
@@ -261,7 +260,6 @@ def judge_swebench_lite(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # Normalize the patch before evaluation
         raw_patch = patch_path.read_text(encoding="utf-8", errors="replace")
         normalized_patch = normalize_patch(raw_patch)
 
@@ -337,7 +335,6 @@ def _parse_swebench_output(
     """Parse swebench evaluation output to extract pass/fail verdict."""
     # SWE-bench writes results to a JSONL file in the output directory
     if evidence_dir:
-        # Look for a results file
         for results_file in sorted(evidence_dir.glob("*.json")):
             try:
                 data = json.loads(results_file.read_text(encoding="utf-8"))

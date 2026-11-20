@@ -122,7 +122,6 @@ class TestSessionAgeGuard:
         This is a structural/unit test: we import the module directly and check
         that _file_birth_time prefers st_birthtime when it is non-zero.
         """
-        # Import the helper by path
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("session_age_guard", SCRIPT)

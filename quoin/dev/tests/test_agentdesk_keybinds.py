@@ -114,7 +114,6 @@ def test_alt_s_bind_in_awk_script() -> None:
 def test_manage_fn_has_idempotency_guard() -> None:
     """manage_zellij_keybinds() contains an idempotency guard checking for the sentinel."""
     src = SETUP_SH.read_text(encoding="utf-8")
-    # Find the function body
     fn_start = src.find("manage_zellij_keybinds()")
     assert fn_start != -1, "manage_zellij_keybinds() not found"
     # The sentinel check must appear after the function definition

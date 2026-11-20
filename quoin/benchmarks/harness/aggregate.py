@@ -130,7 +130,6 @@ def aggregate_run(
 
     cells_data: dict[str, dict] = {}
 
-    # Discover cells
     cell_dirs = [d for d in run_path.iterdir() if d.is_dir()]
 
     for cell_dir in sorted(cell_dirs):
@@ -150,7 +149,6 @@ def aggregate_run(
             task_id = task_dir.name
             task_ids.append(task_id)
 
-            # Load judge.json
             judge_path = task_dir / "judge.json"
             verdict = "error"
             if judge_path.exists():
@@ -160,7 +158,6 @@ def aggregate_run(
                 except Exception:
                     pass
 
-            # Load metrics.json
             m: dict = {}
             have_metrics = False
             metrics_path = task_dir / "metrics.json"
@@ -221,7 +218,6 @@ def aggregate_run(
         if cell in CLAUDE_CELLS and mean_cost and mean_cost > 0:
             headline = pass_at_1 / mean_cost
 
-        # Wilson CI
         ci_lower, ci_upper = _wilson_ci(n_pass, n_tasks)
 
         cells_data[cell] = {
@@ -268,7 +264,6 @@ def aggregate_run(
             ]
             mcnemar_p = _mcnemar_pvalue(simple_verdicts, quoin_verdicts)
 
-    # Build summary
     cells_clean = {
         cell: {k: v for k, v in data.items() if not k.startswith("_")}
         for cell, data in cells_data.items()
@@ -285,14 +280,12 @@ def aggregate_run(
     tiered_md = _build_tiered_section(summary, run_path, suite_path)
     review_md = _build_review_section(summary, run_path, suite_path)
 
-    # Write summary.json
     summary_json_path = run_path / "summary.json"
     summary_json_path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
-    # Write summary.md
     summary_md = _render_markdown_report(summary, cells_data, run_id)
     if tiered_md:
         summary_md = summary_md + tiered_md
@@ -508,7 +501,6 @@ def _render_cell_table(
 
 def _render_rank_order_table(cells_data: dict) -> str:
     """Render a task × cell rank-order table."""
-    # Collect all task IDs across all cells
     all_task_ids: list[str] = []
     for data in cells_data.values():
         for tid in data.get("_task_ids", []):

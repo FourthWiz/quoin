@@ -400,13 +400,11 @@ def main() -> None:
 
     report = check_invariants(args.run_dir, args.run_id)
 
-    # Write invariants-report.md
     output_path = args.output or (run_path / "invariants-report.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(report.to_markdown(), encoding="utf-8")
     print(f"Report written to: {output_path}")
 
-    # Print summary
     pass_count = sum(1 for r in report.results if r.status == "PASS")
     warn_count = sum(1 for r in report.results if r.status == "WARN")
     fail_count = sum(1 for r in report.results if r.status == "FAIL")

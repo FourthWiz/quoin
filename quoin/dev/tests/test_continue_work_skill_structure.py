@@ -55,10 +55,8 @@ def test_s0_model_dispatch_section_present():
 def test_s0_block_uses_sonnet_not_haiku():
     """§0 block must reference sonnet tier, not haiku."""
     content = _read_skill()
-    # Find the §0 block
     s0_start = content.find("## §0 Model dispatch")
     assert s0_start >= 0, "§0 block not found"
-    # Extract from §0 to the next ## heading
     s0_end = content.find("\n## ", s0_start + 1)
     s0_block = content[s0_start:s0_end] if s0_end >= 0 else content[s0_start:]
 
@@ -89,15 +87,12 @@ def test_skill_overrides_is_name_only():
     """SKILL_OVERRIDES must have continue_work: 'name-only' (NOT 'on')."""
     installer = REPO_ROOT / "src" / "quoin" / "installer.py"
     content = installer.read_text(encoding="utf-8")
-    # Find SKILL_OVERRIDES dict
     overrides_match = re.search(r"SKILL_OVERRIDES\s*:\s*dict\[.*?\]\s*=\s*\{([^}]+)\}", content, re.DOTALL)
     assert overrides_match, "SKILL_OVERRIDES dict not found"
     overrides_block = overrides_match.group(1)
-    # Check continue_work is name-only
     assert '"continue_work": "name-only"' in overrides_block, (
         f"Expected '\"continue_work\": \"name-only\"' in SKILL_OVERRIDES, got block:\n{overrides_block}"
     )
-    # Explicitly confirm it's NOT "on"
     assert '"continue_work": "on"' not in overrides_block, (
         "continue_work must not be 'on' in SKILL_OVERRIDES"
     )

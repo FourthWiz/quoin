@@ -541,7 +541,6 @@ def _parse_force_include_keys(pyproject_text: str) -> set:
     header = "[tool.hatch.build.targets.wheel.force-include]"
     lines = pyproject_text.splitlines()
 
-    # Find the header line index
     header_idx = None
     for i, line in enumerate(lines):
         if line.strip() == header:

@@ -259,14 +259,12 @@ def _resolve_dest_root(args: argparse.Namespace) -> pathlib.Path:
     raw_dir = parts[1] if len(parts) == 2 else None
     project_dir = pathlib.Path(raw_dir or os.getcwd()).resolve()
 
-    # Refuse root and home as project dir
     if project_dir == pathlib.Path("/") or project_dir == pathlib.Path.home():
         _abort(
             f"quoin: --scope project resolved to {project_dir}; "
             "refusing to use root or home directory as project root"
         )
 
-    # Refuse if parent is not writable
     if not os.access(project_dir, os.W_OK):
         _abort(
             f"quoin: --scope project dir {project_dir} is not writable"
@@ -418,11 +416,9 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     source_dir_explicit = args.source_dir is not None
     source_dir = _resolve_source_dir(args.source_dir)
 
-    # Prompt for scope when not explicitly provided on the CLI
     if getattr(args, "scope", None) is None:
         args.scope = _prompt_scope()
 
-    # Resolve dest_root via --scope flag
     dest_root = _resolve_dest_root(args)
     scope: str = getattr(args, "scope", None) or "user"
     is_project_mode = scope.startswith("project")
@@ -547,7 +543,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     if is_project_mode:
         allow_writes = False  # T-07 MAJ-6: project installs never write to source tree
 
-    # Emit mode banner
     mode_label = "project mode" if is_project_mode else "user mode"
     print(f"Installing under {dest_root.resolve()} ({mode_label})")
 
@@ -574,7 +569,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     previous_manifest = installer.read_deploy_manifest(dest_root)
     installer.start_deploy_record()
 
-    # T-04
     installer.deploy_memory(source_dir, dest_root)
     installer.deploy_quickstart(source_dir, dest_root)
 
@@ -586,7 +580,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     # same ordering rationale as regenerate_pollution_dispatch above.
     installer.regenerate_verification_step(source_dir, allow_writes=allow_writes)
 
-    # T-05
     installer.deploy_skills(source_dir, dest_root)
     installer.apply_context_tracker(source_dir, dest_root, mode=ct_mode)
     installer.apply_workflow_tasks(source_dir, dest_root, mode=wt_mode)
@@ -598,7 +591,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     installer.cleanup_obsolete_skills(dest_root)
     installer.cleanup_obsolete_memory(dest_root)
 
-    # Hooks
     try:
         autocompact_pct, autocompact_window, clear_autocompact_env = _validate_autocompact_args(args)
     except ValueError as exc:
@@ -699,7 +691,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     # T-07: preamble regeneration last
     installer.regenerate_preambles(source_dir, allow_writes=allow_writes)
 
-    # Dev deps (if --dev)
     if args.dev:
         installer.install_dev_deps()
 
@@ -1393,7 +1384,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     print(f"Python: {sys.version.split()[0]}")
     print()
 
-    # Resolve dest_root via --scope (T-08: project-mode support)
     scope: str = getattr(args, "scope", None) or "user"
     is_project_mode = scope.startswith("project")
     if is_project_mode:
@@ -1431,7 +1421,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             errors.append(f"Missing memory file: {fname}")
     print()
 
-    # Scripts
     print(f"Scripts ({dest_label}/scripts/):")
     for fname in installer.DEPLOYED_SCRIPTS:
         p = dest_root / "scripts" / fname
@@ -1443,7 +1432,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     print()
 
-    # Core scripts
     print(f"Core scripts ({dest_label}/core/scripts/):")
     for fname in installer.CORE_SCRIPTS:
         p = dest_root / "core" / "scripts" / fname
@@ -1455,7 +1443,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     print()
 
-    # Core workflow docs
     print(f"Core workflow ({dest_label}/core/workflow/):")
     for fname in installer.CORE_WORKFLOW_FILES:
         p = dest_root / "core" / "workflow" / fname
@@ -1480,7 +1467,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     print()
 
-    # Skills
     print(f"Skills ({dest_label}/skills/):")
     for skill in installer.CANONICAL_SKILLS:
         p = dest_root / "skills" / skill
@@ -1525,7 +1511,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
                     + ", ".join(shadowed)
                 )
 
-    # CLAUDE.md marker count
     if is_project_mode:
         # In project mode, CLAUDE.md is at the project root (parent of .claude/)
         claude_md = dest_root.parent / "CLAUDE.md"
@@ -4615,7 +4600,6 @@ def main(argv: list[str] | None = None) -> int:
             return _models._cmd_models_preset(args)
         if args.models_command == "reset":
             return _models._cmd_models_reset(args)
-        # Bare 'quoin models' → show mapping.
         return _models._cmd_models_show(args)
     elif args.command == "run":
         if args.takeover and args.autonomous:

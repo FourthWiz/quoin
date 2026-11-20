@@ -149,7 +149,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Resolve project root
     if args.project_root is None:
         project_root = Path.cwd()
         print(
@@ -159,7 +158,6 @@ def main() -> int:
     else:
         project_root = Path(args.project_root).resolve()
 
-    # Derive project hash and locate the projects directory
     project_hash = _project_hash(project_root)
     projects_base = Path.home() / ".claude" / "projects"
     project_dir = projects_base / project_hash
@@ -174,7 +172,6 @@ def main() -> int:
         print("OK|0.00|")
         return 0
 
-    # Find the target jsonl
     if env_uuid:
         target = _find_uuid_jsonl(projects_base, project_dir, env_uuid)
         if target is None:
@@ -213,7 +210,6 @@ def main() -> int:
 
     target_file = jsonl_files[0]
 
-    # Compute age
     try:
         stat = target_file.stat()
     except OSError as exc:

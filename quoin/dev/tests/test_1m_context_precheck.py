@@ -130,7 +130,6 @@ S0_DEAD_END_MARKER   = "<!-- §0-1m-context-precheck-end -->"
 S0_WF_BEGIN_MARKER = "<!-- §0-worktree-fallback-begin -->"
 S0_WF_END_MARKER   = "<!-- §0-worktree-fallback-end -->"
 
-# §0 section heading
 S0_SECTION_HEADING  = "## §0 Model dispatch"
 S0_DISPATCH_TRIGGER = "If current_tier > declared_tier"
 
@@ -150,7 +149,6 @@ S0P_1M_CORE_SUBSTRING = "Usage credits required for 1M context"
 S0P_1M_OPTION_LABEL_ABORT   = "Abort — I'll switch with /model first"
 S0P_1M_OPTION_LABEL_PROCEED = "Proceed in-session at parent tier"
 
-# §0' section heading
 S0P_SECTION_HEADING  = "## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)"
 S0P_DISPATCH_ANCHOR  = "Dispatch action (when pollution detected"
 S0P_FAILOPEN_ANCHOR  = "Fail-OPEN path:"
@@ -385,7 +383,6 @@ class TestSection0PrimePrecheck:
         if idx == -1:
             return ""
         rest = text[idx:]
-        # Find the next ## heading after the section heading line
         next_h2 = rest.find("\n## ", len(S0P_SECTION_HEADING))
         return rest if next_h2 == -1 else rest[:next_h2]
 
@@ -433,7 +430,6 @@ class TestSection0PrimePrecheck:
         """Both AskUserQuestion option labels appear in the §0' Fail-OPEN section."""
         text = self._read(skill)
         block = self._extract_s0p_block(text)
-        # Locate the Fail-OPEN section within the block
         failopen_idx = block.find(S0P_FAILOPEN_ANCHOR)
         assert failopen_idx != -1, f"[{skill}] Fail-OPEN anchor not found"
         failopen_text = block[failopen_idx:]

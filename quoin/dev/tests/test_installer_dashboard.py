@@ -22,7 +22,6 @@ import pytest
 from quoin import installer
 from quoin.cli import main as _cli_main
 
-# Paths
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _QUOIN_SRC = _REPO_ROOT / "quoin"  # package source dir (has skills/, scripts/, core/)
 _SRC = _REPO_ROOT / "src"

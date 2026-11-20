@@ -149,7 +149,6 @@ def patch_text(text: str, skill: str) -> str | None:
             f"(expected exactly 1): {SPAWN_AGENT_ANCHOR!r}"
         )
     spawn_idx = spawn_indices[0]
-    # Insert DECIDE_BLOCK as a new set of lines before the spawn line
     decide_lines = [line + "\n" for line in DECIDE_BLOCK.splitlines()]
     lines = lines[:spawn_idx] + decide_lines + lines[spawn_idx:]
 

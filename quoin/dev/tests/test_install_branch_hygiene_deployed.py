@@ -21,13 +21,11 @@ from pathlib import Path
 
 import pytest
 
-# Paths
 REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/ repo root
 INSTALL_SH = REPO_ROOT / "quoin" / "install.sh"
 WRAPPER_SRC = REPO_ROOT / "quoin" / "scripts" / "branch_hygiene.py"
 CORE_IMPL_SRC = REPO_ROOT / "quoin" / "core" / "scripts" / "branch_hygiene.py"
 
-# installer.py is at src/quoin/installer.py
 INSTALLER_PY = REPO_ROOT / "src" / "quoin" / "installer.py"
 
 # ---------------------------------------------------------------------------

@@ -251,7 +251,7 @@ def parse_session_today(
 # T-02: per-(path,mtime) memo cache helper
 # ---------------------------------------------------------------------------
 
-_CACHE_MISS = object()  # sentinel
+_CACHE_MISS = object()
 
 
 def _cache_get(cache: Optional[dict], path: Path) -> Any:
@@ -442,7 +442,6 @@ def _local_day_bounds(now: Optional[datetime] = None):
     """Return (day_start_utc, day_end_utc) for today in local timezone."""
     if now is None:
         now = datetime.now()
-    # Local midnight today
     local_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     local_tomorrow = local_today + timedelta(days=1)
     # Convert to UTC via astimezone (handles DST correctly)
@@ -495,7 +494,6 @@ def aggregate_today(
     full_model_tok: Dict[str, int] = {}
     today_partial = False  # T-05 CRIT-1: True if any today-file contributed unpriced rows
 
-    # Convert day_start_utc to float for mtime comparison
     day_start_ts = day_start_utc.timestamp()
 
     for fpath_str in jsonl_files:
@@ -600,7 +598,6 @@ def render_compact(
     """
     lines = []
 
-    # Header: scope label
     scope_label = "(all)" if snap.scope == "global" else "(proj)"
     header = f"TOKEN SPEND {scope_label}"
     lines.append(header[:width])
@@ -629,12 +626,10 @@ def render_compact(
             # All rows were na — omit block (just leave partial note out)
             pass
         else:
-            # Divider
             divider_suffix = " (partial)" if snap.by_task_partial else ""
             divider = f"── by task{divider_suffix} ──"
             lines.append(divider[:width])
 
-            # Top N tasks by today-USD
             sorted_tasks = sorted(snap.by_task.items(), key=lambda kv: kv[1], reverse=True)
             for task_name, usd in sorted_tasks[:task_limit]:
                 if usd <= 0:
@@ -643,7 +638,6 @@ def render_compact(
                 line = _fmt_amount_line(task_name, usd, None, width)
                 lines.append(line)
 
-    # Footer
     interval_str = f"⟳ {interval}s"
     live_str = "live" if live else "once"
     footer = f"{interval_str}   {live_str}"
@@ -673,7 +667,6 @@ def _fmt_amount_line(label: str, usd: float, pct: Optional[float], width: int) -
     label_budget = max(1, width - right_total - 2)  # 2 spaces gap
     label_trunc = label[:label_budget]
 
-    # Build with padding
     spaces = width - len(label_trunc) - right_total
     spaces = max(1, spaces)
     line = f"{label_trunc}{' ' * spaces}{amount_str}{right_part}"
@@ -832,12 +825,10 @@ def main(argv=None) -> int:  # type: ignore[assignment]
         project_root = _find_project_root(Path.cwd())
 
     if args.once or (args.watch is None and args.interval is None):
-        # Single-shot
         output, code = _run_once(args, project_root)
         print(output)
         return code
 
-    # Watch mode
     _watch_loop(args, effective_interval, project_root)
     return 0
 

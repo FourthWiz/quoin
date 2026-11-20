@@ -110,13 +110,11 @@ def _build_memory_dir(root: Path, links: list[str], files: list[str]) -> Path:
     *links* — list of .md filenames referenced in MEMORY.md
     *files* — list of .md fact-files to create on disk (excluding MEMORY.md)
     """
-    # Build MEMORY.md content with one link per entry
     lines = []
     for fname in links:
         title = fname.replace(".md", "").replace("_", " ").title()
         lines.append(f"- [{title}]({fname}) — auto-generated test fixture")
     (root / "MEMORY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    # Create fact-files
     for fname in files:
         (root / fname).write_text(f"# {fname}\nTest fixture content.\n", encoding="utf-8")
     return root
@@ -138,7 +136,6 @@ def test_valid_set_ok(tmp_path):
     assert result["orphans"] == []
     assert result["forward"] == []
 
-    # main() exit code
     rc = MC.main([str(mem_dir)])
     assert rc == 0, f"Expected exit 0, got {rc}"
 

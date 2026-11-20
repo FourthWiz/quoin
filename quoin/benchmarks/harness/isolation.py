@@ -60,7 +60,6 @@ def create_task_worktree(
     -------
     Path to the newly created worktree directory.
     """
-    # Create a unique temp directory for this worktree
     worktree_name = f"quoin-bench-{run_id}-{cell}-{task_id}"
     worktree_parent = Path(tempfile.gettempdir()) / "quoin-benchmarks"
     worktree_parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +77,6 @@ def create_task_worktree(
         except Exception:
             shutil.rmtree(worktree_path, ignore_errors=True)
 
-    # Create fresh worktree
     cmd = ["git", "worktree", "add"]
     if pinned_commit:
         cmd += [str(worktree_path), pinned_commit]

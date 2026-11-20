@@ -218,7 +218,6 @@ def main(argv=None) -> int:  # type: ignore[assignment]
         # Always exit 0 (write errors already swallowed in write_probe)
         return 0
 
-    # No mode selected — silent exit 0
     return 0
 
 

@@ -132,7 +132,6 @@ V05_STAGE_DIR_RE = re.compile(r'^stage-\d+$')
 # V-06: ## For human heading
 FOR_HUMAN_RE = re.compile(r'^## For human\s*$', re.MULTILINE)
 
-# Fenced code block delimiter
 FENCE_RE = re.compile(r'^```', re.MULTILINE)
 
 # Inline-code span — handles single and multi-backtick runs per CommonMark:
@@ -260,7 +259,6 @@ def check_v01(text, failures):
         # No frontmatter — V-01 passes (missing frontmatter is allowed)
         return
 
-    # Find closing ---
     rest = text[3:]
     end = rest.find('\n---')
     if end == -1:
@@ -316,7 +314,6 @@ def check_v03(text, failures):
                         failures.append(
                             f'FAIL V-03: table missing header separator on line {i + 2}'
                         )
-                    # Advance past the table block
                     while i < len(lines) and TABLE_ROW_RE.match(lines[i].rstrip('\r')):
                         i += 1
                     continue
@@ -334,7 +331,6 @@ def check_v04(text, failures):
             continue
         if in_fence:
             continue
-        # Strip inline-code spans before scanning for XML
         clean = strip_inline_code(stripped)
 
         # Skip self-closing tags like <tag/>
@@ -512,12 +508,10 @@ def check_v06(text, artifact_class, failures):
 
     lines = text.split('\n')
 
-    # Find where frontmatter ends (if present)
     body_start = 0
     if text.startswith('---'):
         try:
             end_idx = text.index('\n---', 3)
-            # Count lines up to end of frontmatter
             fm_text = text[:end_idx + 4]
             body_start = fm_text.count('\n')
         except ValueError:
@@ -557,7 +551,6 @@ def check_v07(text, required_sections, failures):
     """V-07: required sections (per sidecar) are present."""
     if not required_sections:
         return
-    # Collect all top-level headings (## )
     in_fence = False
     found_headings = set()
     for line in text.split('\n'):
@@ -608,7 +601,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load artifact
     artifact_path = args.artifact
     if not os.path.isfile(artifact_path):
         print(f'validate_artifact.py: file not found: {artifact_path}', file=sys.stderr)
@@ -621,11 +613,9 @@ def main():
         print(f'validate_artifact.py: cannot read file: {e}', file=sys.stderr)
         sys.exit(2)
 
-    # Load sidecar
     sidecar_path = resolve_sidecar(args.sections_json)
     sidecar = load_sidecar(sidecar_path)
 
-    # Detect artifact type
     artifact_type = detect_type(artifact_path, args.type)
     type_config = get_type_config(sidecar, artifact_type)
     artifact_class = type_config.get('class', 'A')
@@ -635,7 +625,6 @@ def main():
     failures = []
     warnings = []
 
-    # Run all invariants independently
     check_v01(text, failures)
     check_v02(text, allowed_sections, failures)
     check_v03(text, failures)

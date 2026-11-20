@@ -247,7 +247,6 @@ def discover_repos(project_root: Path) -> list[Path]:
         if (root / ".git").exists():
             _add(root)
 
-        # depth-1 scan
         try:
             children = sorted(root.iterdir())
         except OSError:

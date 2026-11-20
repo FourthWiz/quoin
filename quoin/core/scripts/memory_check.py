@@ -106,7 +106,6 @@ def load_patterns(pattern_file: "Path | None") -> dict:
     current_key: "str | None" = None
 
     for raw_line in text.splitlines():
-        # Strip inline comments
         comment_pos = raw_line.find("#")
         line = raw_line[:comment_pos].rstrip() if comment_pos >= 0 else raw_line.rstrip()
 
@@ -186,7 +185,6 @@ def check(
     text = memory_md.read_text(encoding="utf-8")
 
     raw_targets = parse_links(text)
-    # Filter: only .md targets, skip URLs
     link_targets: list[str] = [
         t for t in raw_targets
         if t.endswith(".md") and "://" not in t
@@ -194,7 +192,6 @@ def check(
 
     fact_files = find_fact_files(memory_dir)
 
-    # S-3: apply pattern classifications
     patterns = load_patterns(pattern_file)
 
     # ignore: remove from fact-file set entirely (never reported)
@@ -303,7 +300,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    # Resolve memory directory
     if args.path:
         memory_dir = Path(args.path).resolve()
     else:
@@ -361,7 +357,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result))
         return 0 if result["ok"] else 1
 
-    # Human-readable output
     issues = 0
 
     if result["dangling"]:

@@ -14,7 +14,6 @@ Two-tier test:
 import importlib.util
 from pathlib import Path
 
-# Paths
 REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/ repo root
 WRAPPER_SRC = REPO_ROOT / "quoin" / "scripts" / "get_session_uuid.py"
 CORE_IMPL_SRC = REPO_ROOT / "quoin" / "core" / "scripts" / "get_session_uuid.py"

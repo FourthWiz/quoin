@@ -493,7 +493,6 @@ def format_report(
     lines.append(total_line)
     lines.append(sep_part)
 
-    # By phase
     lines.append("By phase:")
     for phase, data in sorted(report["by_phase"].items()):
         lines.append(f"  {phase:<20} ${data['cost']:.2f}  ({data['count']} sessions)")
@@ -523,14 +522,12 @@ def format_report(
                 )
         lines.append("")
 
-    # By model
     lines.append("By model:")
     for model, data in sorted(report["by_model"].items()):
         lines.append(f"  {model:<30} ${data['cost']:.2f}  ({data['count']} sessions)")
 
     lines.append("")
 
-    # Top N
     lines.append(f"Top {top_n} most expensive sessions:")
     for i, (cost, task_name, phase, uuid_short, date_str) in enumerate(
         report["top_sessions"], start=1
@@ -540,7 +537,6 @@ def format_report(
 
     lines.append("")
 
-    # Fallback-fire summary
     lines.append("Fallback-fire summary:")
     lines.append(
         f"  Total fallback fires: {report['total_fallback_fires']}"
@@ -632,13 +628,10 @@ def main() -> int:
                 print(mid)
         return 0
 
-    # Resolve project root
     project_root = pathlib.Path(args.project_root).resolve() if args.project_root else pathlib.Path.cwd()
 
-    # Resolve home for JSONL lookup
     home = pathlib.Path(args.home).resolve() if args.home else pathlib.Path.home()
 
-    # Compute project hash
     proj_hash = project_hash(str(project_root))
 
     # Discover / load ledger(s)
@@ -694,7 +687,6 @@ def main() -> int:
 
     print(output)
 
-    # --write-md
     if args.write_md:
         out_dir = project_root / ".workflow_artifacts" / "memory"
         try:

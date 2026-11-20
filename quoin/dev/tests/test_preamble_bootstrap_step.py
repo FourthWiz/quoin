@@ -18,7 +18,6 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 QUOIN_DIR = HERE.parent.parent  # quoin/dev/tests/ -> quoin/dev/ -> quoin/
 
-# Import SPAWN_TARGETS
 sys.path.insert(0, str(QUOIN_DIR / "scripts"))
 from build_preambles import SPAWN_TARGETS  # noqa: E402
 
@@ -110,7 +109,6 @@ def test_preamble_step_is_first_bootstrap_read(skill):
     assert preamble_lines, f"No preamble step found in {skill}/SKILL.md"
     preamble_line = preamble_lines[0]
 
-    # Find the other bootstrap read markers
     format_kit_lines = _find_line_numbers(lines, FORMAT_KIT_REF)
     glossary_lines = _find_line_numbers(lines, GLOSSARY_REF)
 

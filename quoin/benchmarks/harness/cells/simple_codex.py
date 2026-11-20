@@ -181,7 +181,6 @@ def invoke(
                 if event.get("type") in ("assistant", "message"):
                     turn_count += 1
             except json.JSONDecodeError:
-                # Not JSON — record as plain text event
                 events.append({"type": "stdout", "text": line})
 
         proc.wait(timeout=10)
@@ -217,7 +216,6 @@ def invoke(
         result["verdict"] = "error"
         result["transcript_events"] = [{"type": "error", "error": str(exc)}]
     finally:
-        # Clean up temp prompt file
         try:
             prompt_file.unlink(missing_ok=True)
         except Exception:
