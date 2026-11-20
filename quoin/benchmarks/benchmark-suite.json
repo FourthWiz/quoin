@@ -32,20 +32,6 @@
       "runtime": "codex",
       "quoin_enabled": true,
       "description": "Use Codex with repo-local Quoin guidance, preserving the portable workflow artifacts without assuming Codex global install paths or command files."
-    },
-    {
-      "id": "simple-opencode",
-      "label": "Simple OpenCode workflow",
-      "runtime": "opencode",
-      "quoin_enabled": false,
-      "description": "Use the pinned OpenCode binary with the same model, endpoint and native configuration as the Quoin cell, without the Quoin scaffold."
-    },
-    {
-      "id": "quoin-opencode",
-      "label": "Quoin + OpenCode workflow",
-      "runtime": "opencode",
-      "quoin_enabled": true,
-      "description": "Install the Quoin OpenCode scaffold into the work tree and use its workflow commands with the shared .workflow_artifacts/ layout, on the same model and endpoint as the simple cell."
     }
   ],
   "metrics": [

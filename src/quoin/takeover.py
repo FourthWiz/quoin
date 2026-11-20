@@ -314,8 +314,7 @@ def run_takeover(task: str, project_root: Path, ops: Optional[TakeoverOps] = Non
         else:
             ops.err(
                 f"the {lock_runtime} phase run for {task} is no longer running "
-                f"(pid {owner_pid}); its lock is stale. Clear it by re-running the phase "
-                "with quoin run --runtime opencode, or with quoin run " + task
+                f"(pid {owner_pid}); its lock is stale. Clear it with quoin run " + task
             )
         return EXIT_NO_CHILD
 

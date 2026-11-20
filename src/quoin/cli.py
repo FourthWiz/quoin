@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import importlib.resources
 import json
 import os
@@ -11,7 +10,6 @@ import runpy
 import shlex
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import textwrap
@@ -62,28 +60,11 @@ def _validate_autocompact_args(args: argparse.Namespace) -> tuple[int | None, in
     return pct, window, clear
 
 
-def _validate_context_tracker_args(args: argparse.Namespace) -> Optional[str]:
-    """Return "with", "remove" or None for the context-tracker mod flags.
-
-    Uses getattr defaults because callers (and tests) build Namespaces that
-    predate these flags. Raises ValueError when both are given.
-    """
-    with_ct = getattr(args, "with_context_tracker", False)
-    remove_ct = getattr(args, "remove_context_tracker", False)
-    if with_ct and remove_ct:
-        raise ValueError("--with-context-tracker cannot be combined with --remove-context-tracker")
-    if with_ct:
-        return "with"
-    if remove_ct:
-        return "remove"
-    return None
-
-
 def _validate_workflow_tasks_args(args: argparse.Namespace) -> Optional[str]:
     """Return "with", "remove" or None for the workflow-tasks mod flags.
 
-    Same shape as the context-tracker validator: getattr defaults for
-    Namespaces that predate the flags, ValueError when both are given.
+    getattr defaults for Namespaces that predate the flags, ValueError when
+    both are given.
     """
     with_wt = getattr(args, "with_workflow_tasks", False)
     remove_wt = getattr(args, "remove_workflow_tasks", False)
@@ -283,13 +264,8 @@ def _resolve_dest_root(args: argparse.Namespace) -> pathlib.Path:
 
 
 class _InstallAnswers(NamedTuple):
-    ct_mode: Optional[str]
     wt_mode: Optional[str]
-    agentdesk_run: bool
-    agentdesk_declined: bool
-    agentdesk_already: bool
     warned_mods: Tuple[str, ...]
-    agentdesk_refresh: bool = False
 
 
 def _ask_install_questions(
@@ -299,7 +275,6 @@ def _ask_install_questions(
     dest_root: pathlib.Path,
     *,
     is_project_mode: bool,
-    ct_mode: Optional[str],
     wt_mode: Optional[str],
 ) -> _InstallAnswers:
     """Ask every install question up front, before anything is written.
@@ -307,11 +282,10 @@ def _ask_install_questions(
     Questions appear only when stdin and stdout are both terminals. Explicit
     flags suppress their own question; an installed mod is refreshed silently.
     """
-    interactive = install_prompts.is_interactive()
-    modes = {"context-tracker": ct_mode, "workflow-tasks": wt_mode}
+    modes = {"workflow-tasks": wt_mode}
     warned: list = []
-    if interactive:
-        for mod in (installer.CONTEXT_TRACKER, installer.WORKFLOW_TASKS):
+    if install_prompts.is_interactive():
+        for mod in (installer.WORKFLOW_TASKS,):
             if modes[mod.name] is not None:
                 continue
             if installer.mod_state(mod, dest_root) == "installed":
@@ -339,26 +313,7 @@ def _ask_install_questions(
             ):
                 modes[mod.name] = "with"
                 warned.append(mod.name)
-
-    run = bool(getattr(args, "setup_agentdesk", False))
-    declined = False
-    already = False
-    refresh = False
-    if not is_project_mode and not run:
-        already = install_prompts.agentdesk_already_set_up(pathlib.Path.home() / ".zshrc")
-        if interactive and already:
-            refresh = install_prompts.ask_yes_no(
-                install_prompts.AGENTDESK_REFRESH_QUESTION, default=True
-            )
-        # The setup script installs Homebrew and a macOS cask, so other hosts
-        # only get the flag.
-        elif interactive and sys.platform == "darwin":
-            run = install_prompts.ask_yes_no(install_prompts.AGENTDESK_QUESTION, default=False)
-            declined = not run
-    return _InstallAnswers(
-        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned),
-        refresh,
-    )
+    return _InstallAnswers(modes["workflow-tasks"], tuple(warned))
 
 
 CLAUDE_MD_VARIANT_STATE_FILE = ".quoin-claude-md-variant"
@@ -487,49 +442,29 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
             )
 
     try:
-        ct_mode = _validate_context_tracker_args(args)
-    except ValueError as exc:
-        _abort(f"quoin: {exc}")
-    try:
         wt_mode = _validate_workflow_tasks_args(args)
     except ValueError as exc:
         _abort(f"quoin: {exc}")
-    if getattr(args, "setup_agentdesk", False) and is_project_mode:
-        _abort(
-            "quoin: --setup-agentdesk is only valid with --scope user "
-            "(agentdesk is user scope only)"
-        )
     answers = _ask_install_questions(
         args,
         installer,
         source_dir,
         dest_root,
         is_project_mode=is_project_mode,
-        ct_mode=ct_mode,
         wt_mode=wt_mode,
     )
-    ct_mode, wt_mode = answers.ct_mode, answers.wt_mode
-    mod_errors: list[str] = []
-    for preflight, mode in (
-        (installer.context_tracker_preflight, ct_mode),
-        (installer.workflow_tasks_preflight, wt_mode),
-    ):
-        errors, warnings = preflight(
-            source_dir,
-            dest_root,
-            mode=mode,
-            is_project_mode=is_project_mode,
-            home_dest_root=pathlib.Path.home() / ".claude",
-            cwd_dest_root=pathlib.Path.cwd() / ".claude",
-        )
-        if preflight is installer.context_tracker_preflight:
-            already_shown = "context-tracker" in answers.warned_mods
-        else:
-            already_shown = "workflow-tasks" in answers.warned_mods
+    wt_mode = answers.wt_mode
+    mod_errors, warnings = installer.workflow_tasks_preflight(
+        source_dir,
+        dest_root,
+        mode=wt_mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=pathlib.Path.home() / ".claude",
+        cwd_dest_root=pathlib.Path.cwd() / ".claude",
+    )
+    if "workflow-tasks" not in answers.warned_mods:
         for warning in warnings:
-            if not already_shown:
-                print(warning, file=sys.stderr)
-        mod_errors.extend(errors)
+            print(warning, file=sys.stderr)
     if mod_errors:
         # Every refusal is reported at once, before anything is written.
         for error in mod_errors:
@@ -581,12 +516,10 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     installer.regenerate_verification_step(source_dir, allow_writes=allow_writes)
 
     installer.deploy_skills(source_dir, dest_root)
-    installer.apply_context_tracker(source_dir, dest_root, mode=ct_mode)
     installer.apply_workflow_tasks(source_dir, dest_root, mode=wt_mode)
     installer.deploy_scripts(source_dir, dest_root)
     installer.deploy_core_scripts(source_dir, dest_root)
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
-    installer.deploy_dashboard_assets(source_dir, dest_root)  # T-12: SPA assets (D-11)
     installer.cleanup_obsolete_scripts(dest_root)
     installer.cleanup_obsolete_skills(dest_root)
     installer.cleanup_obsolete_memory(dest_root)
@@ -623,22 +556,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         )
         manifest.update(retry)
     installer.write_deploy_manifest(dest_root, manifest)
-
-    # agentdesk tool — user-mode only (user-level ~/.config/agentdesk/ location)
-    if not is_project_mode:
-        agentdesk_dest = pathlib.Path.home() / ".config" / "agentdesk"
-        installer.deploy_agentdesk(source_dir, agentdesk_dest)
-        if agentdesk_dest.exists() and not answers.agentdesk_run and not answers.agentdesk_already:
-            print()
-            print(
-                "To finish agentdesk setup (zellij, lazygit and fzf via Homebrew, plus a "
-                "~/.zshrc line), re-run the install with --setup-agentdesk."
-            )
-        try:
-            from quoin.streamdeck import notice as _sd_notice
-            _sd_notice.maybe_print()
-        except Exception:
-            pass
 
     # T-06: CLAUDE.md placement differs by mode (D-02)
     if is_project_mode:
@@ -714,69 +631,16 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     if record_path is not None:
         print(f"Wrote install record {record_path}")
 
-    # Last step: a failed agentdesk setup is only a warning, quoin is installed.
-    if answers.agentdesk_run and not is_project_mode:
-        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
-        print()
-        print(f"Running agentdesk setup ({script}) ...")
-        if not script.is_file():
-            print(
-                f"quoin: warning: agentdesk setup script not found at {script}; "
-                "re-run the install with --setup-agentdesk",
-                file=sys.stderr,
-            )
-        else:
-            rc = install_prompts.run_agentdesk_setup(script)
-            if rc == 0:
-                print("agentdesk setup finished")
-            else:
-                print(
-                    f"quoin: warning: agentdesk setup exited with status {rc}; quoin itself "
-                    "is installed. Re-run the install with --setup-agentdesk to retry.",
-                    file=sys.stderr,
-                )
-    elif answers.agentdesk_already and not is_project_mode:
-        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
-        if not answers.agentdesk_refresh:
-            if script.is_file():
-                print()
-                print(
-                    "To update the agentdesk layout to the version shipped with this "
-                    f"quoin, run: bash {script} --refresh"
-                )
-        elif script.is_file():
-            print()
-            rc = install_prompts.refresh_agentdesk(script)
-            if rc != 0:
-                print(
-                    f"quoin: warning: agentdesk refresh exited with status {rc}; quoin itself "
-                    f"is installed. Retry with: bash {script} --refresh",
-                    file=sys.stderr,
-                )
-
     return 0
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
     runtime = getattr(args, "runtime", "claude")
 
-    # --profile is only meaningful for --runtime opencode — check before dispatch
-    if getattr(args, "profile", None) is not None and runtime != "opencode":
-        _abort("quoin: --profile is only valid with --runtime opencode")
-
-    # --scope project cannot combine with --runtime codex or opencode — check before dispatch
+    # --scope project cannot combine with --runtime codex — check before dispatch
     scope: str = getattr(args, "scope", None) or "user"
-    if scope.startswith("project") and runtime in ("codex", "opencode"):
+    if scope.startswith("project") and runtime == "codex":
         _abort("quoin: --scope project is only valid with --runtime claude")
-
-    if runtime != "claude" and (
-        getattr(args, "with_context_tracker", False)
-        or getattr(args, "remove_context_tracker", False)
-    ):
-        _abort(
-            "quoin: --with-context-tracker/--remove-context-tracker are only "
-            "valid with --runtime claude"
-        )
 
     if runtime != "claude" and (
         getattr(args, "with_workflow_tasks", False)
@@ -787,343 +651,20 @@ def _cmd_install(args: argparse.Namespace) -> int:
             "valid with --runtime claude"
         )
 
-    if runtime != "claude" and getattr(args, "setup_agentdesk", False):
-        _abort("quoin: --setup-agentdesk is only valid with --runtime claude")
-
-    if runtime == "opencode":
-        return _cmd_opencode_install(args)
     if runtime == "codex":
         return _cmd_codex_init(args)
     if args.check:
         print(
-            "quoin: install --check is only supported with --runtime codex "
-            "or opencode; use 'quoin doctor' for Claude install health checks",
+            "quoin: install --check is only supported with --runtime codex; "
+            "use 'quoin doctor' for Claude install health checks",
             file=sys.stderr,
         )
         return 2
     return _cmd_claude_install(args)
 
 
-def _cmd_opencode_install(args: argparse.Namespace) -> int:
-    source_dir = _resolve_source_dir(args.source_dir)
-    from quoin.opencode_adapter.install import run_install
-
-    return run_install(
-        args.project_root,
-        source_dir,
-        getattr(args, "profile", None),
-        args.check,
-        sys.stdout,
-        sys.stderr,
-    )
-
-
-def _cmd_opencode_script(args: argparse.Namespace) -> int:
-    source_dir = _resolve_source_dir(args.source_dir)
-    from quoin.opencode_adapter import scripts
-
-    return scripts.run(args.name, args.script_args, source_dir)
-
-
 # Environment names the configuration pipeline reads; nothing else is ever
 # copied out of the real environment, so no credential variable can reach it.
-CONFIG_ENV_KEYS = ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY")
-
-
-def _opencode_config_env() -> dict:
-    return {key: os.environ[key] for key in CONFIG_ENV_KEYS if key in os.environ}
-
-
-def _print_findings(findings) -> None:
-    from quoin.opencode_adapter import errors
-
-    for finding in findings:
-        subject = " [%s]" % ", ".join(finding.subject) if finding.subject else ""
-        print("%s: %s%s" % (finding.code, errors.FINDING_MESSAGES[finding.code], subject), file=sys.stderr)
-
-
-def _opencode_config_evaluate(args: argparse.Namespace, *, allow_unqualified: bool):
-    """Evaluate the configuration; returns (evaluation, env, home) or an int
-    exit code after printing the reason."""
-    from quoin.opencode_adapter import compiler, paths
-    from quoin.opencode_adapter.errors import ConfigErrors
-    from quoin.opencode_adapter.roles import AllowUnqualifiedRefused
-
-    env = _opencode_config_env()
-    home = pathlib.Path.home()
-    try:
-        ev = compiler.evaluate(
-            project_root=pathlib.Path(args.project_root),
-            profile=args.profile,
-            env=env,
-            home=home,
-            now=datetime.now(timezone.utc),
-            allow_unqualified=allow_unqualified,
-        )
-    except ConfigErrors as exc:
-        for item in exc.errors:
-            print(str(item), file=sys.stderr)
-        return 2
-    except paths.AdapterDataMissing:
-        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
-        return 2
-    except AllowUnqualifiedRefused as exc:
-        print("quoin: %s" % exc, file=sys.stderr)
-        return 2
-    return ev, env, home
-
-
-_EXPLAIN_RUN_MISSING = "quoin: no effective-configuration record was found for that run"
-_EXPLAIN_RUN_INVALID = "quoin: the run id is not valid"
-_EXPLAIN_EXPORT_UNAVAILABLE = "quoin: no effective-configuration record is available to export for this configuration"
-_EXPLAIN_EXPORT_FAILED = "quoin: the export could not be written; check the profile storage directory"
-
-
-def _explain_persisted_run(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import explain, runstore
-
-    try:
-        run_id = runstore.check_run_id(args.run)
-        directory = runstore.inspect_store(pathlib.Path(args.project_root).resolve())
-        if directory is None:
-            print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
-            return 2
-        stored = runstore.load_record(directory, run_id)
-    except runstore.RunStoreError as exc:
-        print(_EXPLAIN_RUN_INVALID if exc.code == "invalid-run-id" else _EXPLAIN_RUN_MISSING, file=sys.stderr)
-        return 2
-    record = ((stored or {}).get("prepared") or {}).get("effective_config")
-    if not isinstance(record, dict):
-        print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
-        return 2
-    if args.json:
-        doc = {
-            "explain_format": explain.EXPLAIN_FORMAT,
-            "run_id": run_id,
-            "effective_config": explain.effective_section(record),
-        }
-        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
-    else:
-        sys.stdout.write(explain.render_record_text(record))
-    return 0
-
-
-def _explain_export(ev, record: dict, home) -> int:
-    from quoin.opencode_adapter import jsonio, profile_dirs
-
-    root = profile_dirs.adapter_root(os.environ, home)
-    try:
-        dirs = profile_dirs.prepare(root, ev.profile, ev.effective.classification)
-        jsonio.ensure_private_directory(dirs.exports)
-        name = "explain-%s.json" % str(record["digest"]).split(":", 1)[-1][:12]
-        target = dirs.exports / name
-        jsonio.write_private_atomic(target, jsonio.dump_canonical(record))
-    except (profile_dirs.ProfileDirError, jsonio.UnsafeDirectoryError, OSError, ValueError):
-        print(_EXPLAIN_EXPORT_FAILED, file=sys.stderr)
-        return 2
-    try:
-        shown = "~/" + str(target.relative_to(home))
-    except ValueError:
-        shown = "<state>/" + str(target.relative_to(root))
-    print("export written: %s" % shown, file=sys.stderr)
-    return 0
-
-
-def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, explain, paths, profile_dirs
-
-    if getattr(args, "run", None) is not None:
-        if getattr(args, "export", False):
-            print("quoin: --export cannot be combined with --run", file=sys.stderr)
-            return 2
-        return _explain_persisted_run(args)
-    got = _opencode_config_evaluate(args, allow_unqualified=False)
-    if isinstance(got, int):
-        return got
-    ev, env, home = got
-    try:
-        output_dir = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
-        result, gate = explain.try_build(ev)
-        drv = _make_opencode_driver(args.project_root)
-        try:
-            preview = drv.effective_preview(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
-        except paths.AdapterDataMissing:
-            raise
-        except Exception:  # noqa: BLE001 - defence in depth: explain never shows a traceback for a preview failure
-            preview = None
-        try:
-            launch_refusal = drv.offline_launch_refusal(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
-        except paths.AdapterDataMissing:
-            raise
-        except Exception:  # noqa: BLE001 - a failing offline check is shown as unavailable, never as a refusal
-            launch_refusal = explain.LAUNCH_CHECK_UNAVAILABLE
-        text = explain.render(
-            ev, redact=args.redact, as_json=args.json, compile_result=result,
-            output_dir=output_dir, gate_failure=gate,
-            effective=explain.NO_PREVIEW if preview is None else preview,
-            launch_refusal=launch_refusal,
-        )
-    except paths.AdapterDataMissing:
-        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
-        return 2
-    if getattr(args, "export", False):
-        if preview is None:
-            print(_EXPLAIN_EXPORT_UNAVAILABLE, file=sys.stderr)
-            return 2
-        code = _explain_export(ev, preview[0], home)
-        if code != 0:
-            return code
-    sys.stdout.write(text)
-    return 1 if (gate is not None or compiler.compile_blockers(ev)) else 0
-
-
-_COMPILE_IO_TEXT = "quoin: the compiled files could not be written or read; check the output directory"
-
-
-def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, paths, profile_dirs
-    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
-
-    got = _opencode_config_evaluate(args, allow_unqualified=args.allow_unqualified)
-    if isinstance(got, int):
-        return got
-    ev, env, home = got
-    output = args.output
-    if output is None:
-        output = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
-    try:
-        directory = compiler.resolve_output_dir(ev, output=output, env=env, home=home)
-    except compiler.OutputRefused as exc:
-        print("quoin: %s\n  fix: %s" % (exc, exc.fix), file=sys.stderr)
-        return 2
-    except OSError:
-        print(_COMPILE_IO_TEXT, file=sys.stderr)
-        return 2
-    try:
-        if args.check:
-            outcome = compiler.check(ev, directory)
-            if outcome.ok:
-                print("up to date")
-                return 0
-            print("stale: " + ", ".join(outcome.reasons))
-            return 1
-        result = compiler.build(ev)
-        written = compiler.write(result, directory)
-    except compiler.CompileBlocked as exc:
-        _print_findings(exc.findings)
-        return 1
-    except compiler.CompileGateError as exc:
-        print("quoin: %s [gate %s]" % (exc, exc.gate), file=sys.stderr)
-        return 1
-    except UnsafeDirectoryError as exc:
-        print("quoin: the output directory is not private enough: %s" % exc, file=sys.stderr)
-        return 2
-    except paths.AdapterDataMissing:
-        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
-        return 2
-    except OSError:
-        print(_COMPILE_IO_TEXT, file=sys.stderr)
-        return 2
-    print("compiled: %s" % written)
-    print("digest: %s" % result.digest)
-    print("launchable: %s" % ("true" if result.launchable else "false"))
-    return 0
-
-
-def _cmd_opencode_config_import_preview(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import import_preview, paths
-    from quoin.opencode_adapter.errors import ConfigErrors
-    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
-
-    if (args.confirm_model_id or args.force) and not args.apply:
-        print("quoin: --confirm-model-id and --force need --apply", file=sys.stderr)
-        return 2
-    home = pathlib.Path.home()
-    env = _opencode_config_env()
-    try:
-        tiers, from_file = import_preview.read_source(home)
-        proposal = import_preview.propose(tiers, profile_name=args.profile_name)
-        target = paths.profile_path(proposal.profile_name, env, home)
-        if not args.apply:
-            print("source: %s" % ("models.json (read only)" if from_file else "built-in defaults (no models.json)"))
-            print("target: %s" % target)
-            sys.stdout.write(proposal.text)
-            print(
-                "to apply, confirm every provider model id (the model_id values above, "
-                "not the or-* names): quoin opencode config import-preview --apply "
-                "--confirm-model-id ID ..."
-            )
-            print(
-                "each model must be qualified with quoin opencode probe --profile %s "
-                "--synthetic-only --model MODEL before it can be compiled" % proposal.profile_name
-            )
-            return 0
-        written = import_preview.apply(
-            proposal, confirmed=args.confirm_model_id, force=args.force, env=env, home=home
-        )
-    except ValueError as exc:
-        print("quoin: %s" % exc, file=sys.stderr)
-        return 2
-    except ConfigErrors as exc:
-        for item in exc.errors:
-            print(str(item), file=sys.stderr)
-        return 2
-    except import_preview.ImportRefused as exc:
-        print("quoin: %s" % exc, file=sys.stderr)
-        return 2
-    except UnsafeDirectoryError as exc:
-        print("quoin: the profiles directory is not private enough: %s" % exc, file=sys.stderr)
-        return 2
-    except paths.AdapterDataMissing:
-        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
-        return 2
-    except OSError:
-        print("quoin: the profile could not be read or written; check the profiles directory", file=sys.stderr)
-        return 2
-    print("written: %s" % written)
-    return 0
-
-
-def _cmd_opencode_probe(args: argparse.Namespace) -> int:
-    import types
-
-    from quoin.opencode_adapter import paths, probe_cli
-    from quoin.opencode_adapter.errors import ConfigErrors
-    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
-
-    env = _opencode_config_env()
-    # A copy behind a read-only view: the probe can read credential variables
-    # to resolve a reference but nothing can write through to the real
-    # environment.
-    environ = types.MappingProxyType(dict(os.environ))
-    try:
-        return probe_cli.run(
-            profile=args.profile,
-            model=args.model,
-            project_root=pathlib.Path(args.project_root) if args.project_root else None,
-            synthetic_only=args.synthetic_only,
-            env=env,
-            environ=environ,
-            home=pathlib.Path.home(),
-            now=datetime.now(timezone.utc),
-            platform=sys.platform,
-        )
-    except ConfigErrors as exc:
-        for item in exc.errors:
-            print(str(item), file=sys.stderr)
-        return 2
-    except paths.AdapterDataMissing:
-        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
-        return 2
-    except UnsafeDirectoryError as exc:
-        print("quoin: the qualification directory is not private enough: %s" % exc, file=sys.stderr)
-        return 2
-    except OSError:
-        print(
-            "quoin: the probe could not read or write its files; check the qualification directory",
-            file=sys.stderr,
-        )
-        return 2
 
 
 def _codex_script(source_dir: pathlib.Path, name: str) -> pathlib.Path:
@@ -1189,46 +730,6 @@ def _cmd_codex_init(args: argparse.Namespace) -> int:
         script_args.append("--check")
 
     return _run_codex_script(generator, script_args)
-
-
-def _cmd_dashboard(args: argparse.Namespace) -> int:
-    """Launch the quoin workflow dashboard server (D-06)."""
-    source_dir = _resolve_source_dir(args.source_dir)
-    script = source_dir / "scripts" / "dashboard_server.py"
-    if not script.is_file():
-        print(
-            f"quoin: dashboard_server.py not found at {script}; "
-            "re-run 'quoin install' or pass --source-dir <path-to-clone>/quoin",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    # Marshal argv for the server (--source-dir is NOT forwarded — server uses --project-root)
-    server_argv = [
-        "--port", str(args.port),
-        "--project-root", str(pathlib.Path(args.project_root).resolve()),
-    ]
-    if args.no_browser:
-        server_argv.append("--no-browser")
-
-    return _run_codex_script(script, server_argv)
-
-
-def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
-    source_dir = _resolve_source_dir(args.source_dir)
-    from quoin.opencode_adapter import doctor
-
-    profile = getattr(args, "profile", None)
-    return doctor.run_doctor(
-        args.project_root,
-        source_dir,
-        args.smoke,
-        args.json,
-        sys.stdout,
-        sys.stderr,
-        profile=profile,
-        config_env=_opencode_config_env() if profile is not None else None,
-    )
 
 
 def _doctor_auto_resume_cli(
@@ -1334,44 +835,7 @@ def _doctor_auto_resume_cli(
     print()
 
 
-def _safe_getcwd() -> Optional[str]:
-    # The shell's directory may have been removed; listing and killing do not need it.
-    try:
-        return os.getcwd()
-    except OSError:
-        return None
-
-
-def _cmd_sessions(args: argparse.Namespace) -> int:
-    from quoin import agentdesk_sessions
-    return agentdesk_sessions.run_sessions(
-        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
-
-
-def _cmd_attach(args: argparse.Namespace) -> int:
-    from quoin import agentdesk_sessions
-    return agentdesk_sessions.run_attach(
-        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
-
-
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    if getattr(args, "json", False) and args.runtime != "opencode":
-        _abort("quoin: --json is only valid with --runtime opencode")
-
-    scope: str = getattr(args, "scope", None) or "user"
-    if scope.startswith("project") and args.runtime == "opencode":
-        _abort("quoin: --scope project is only valid with --runtime claude")
-    if getattr(args, "profile", None) is not None:
-        if args.runtime != "opencode":
-            _abort("quoin: --profile is only valid with --runtime opencode")
-        if getattr(args, "smoke", False):
-            _abort(
-                "quoin: --profile cannot be combined with --smoke; "
-                "the smoke checks are offline and read no profile"
-            )
-
-    if args.runtime == "opencode":
-        return _cmd_opencode_doctor(args)
     if args.runtime == "codex":
         return _cmd_codex_doctor(args)
 
@@ -1451,19 +915,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  {status} {fname}")
         if not found:
             errors.append(f"Missing core workflow file: {fname}")
-
-    print()
-
-    # Assets block — runs in BOTH user and project modes (T-14, D-11 rationale)
-    assets_dir = dest_root / "core" / "scripts" / "dashboard_assets"
-    print(f"Assets ({dest_label}/core/scripts/dashboard_assets/):")
-    for fname in installer._DASHBOARD_ASSETS:
-        p = assets_dir / fname
-        found = p.exists()
-        status = "✓" if found else "✗"
-        print(f"  {status} {fname}")
-        if not found:
-            errors.append(f"Missing dashboard asset: {fname}")
 
     print()
 
@@ -1947,1142 +1398,7 @@ def _lock_runtime(data) -> str:
     return value if value in _supervisor.RUNTIMES else "unknown"
 
 
-
-def _opencode_lock_reader(project_root: pathlib.Path):
-    """Reader for the task lock that never follows a symlink: a lock that is
-    present but unreadable reports no pid and no runtime."""
-    from quoin.opencode_adapter import jsonio, runstore  # noqa: PLC0415
-
-    def read(task: str):
-        if not runstore.TASK_RE.match(task or ""):
-            return None
-        path = _supervisor_paths(project_root, task)["lock"]
-        if not os.path.lexists(str(path)):
-            return None
-        got = jsonio.read_regular_bytes(path, max_bytes=4096)
-        if got is None:
-            return {"pid": None, "runtime": None}
-        try:
-            data = json.loads(got[0].decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return {"pid": None, "runtime": "unknown"}
-        if not isinstance(data, dict):
-            return {"pid": None, "runtime": "unknown"}
-        pid = data.get("pid")
-        if not isinstance(pid, int) or isinstance(pid, bool):
-            pid = None
-        return {"pid": pid, "runtime": _lock_runtime(data)}
-
-    return read
-
-
-def _cmd_opencode_status(args: argparse.Namespace) -> int:
-    """`quoin opencode status`: read-only report on the latest phase run."""
-    from quoin.opencode_adapter import status  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    try:
-        report = status.collect(
-            project_root, task=args.task, run_id=args.run_id,
-            lock_reader=_opencode_lock_reader(project_root),
-        )
-    except status.StatusError as exc:
-        print("quoin: opencode status: %s" % exc, file=sys.stderr)
-        return 2
-    if args.json:
-        print(json.dumps(report, sort_keys=True))
-    else:
-        sys.stdout.write(status.render_text(report))
-    return 0
-
-
-_GATED_PHASE_CHOICES = ("discover", "architect", "plan", "implement", "review")
-_GATE_EXPLANATION_MAX_BYTES = 64 * 1024
-
-
-def _gated_phase(value: str) -> str:
-    """Gated ids and run phases share one rule: a hyphen reads as an underscore
-    (argparse applies `type` before the `choices` check)."""
-    return value.replace("-", "_")
-
-
-def _gate_json(payload: dict, code: int) -> int:
-    payload["exit_code"] = code
-    print(json.dumps(payload, sort_keys=True))
-    return code
-
-
-def _gate_refusal(code: str, message: str, exit_code: int = 2, outcome: str = "GATE_REFUSED") -> int:
-    return _gate_json(
-        {"outcome": outcome, "refusal": {"code": code, "message": message}}, exit_code
-    )
-
-
-def _read_explanation(path: str) -> "str | None":
-    """The explanation file, at most 64 KiB, never through a symlink. Opened
-    non-blocking and checked on the open descriptor so a pipe or device is an
-    error rather than a hang."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise OSError("not a regular file")
-        with os.fdopen(fd, "rb", closefd=False) as handle:
-            return handle.read(_GATE_EXPLANATION_MAX_BYTES).decode("utf-8", "replace")
-    finally:
-        os.close(fd)
-
-
-def _with_task_lock(project_root: pathlib.Path, task: str, body):
-    """Run `body()` holding the task lock; `None` plus the holder's pid when it
-    is held. A dead holder's lock is replaced the way the run path replaces it
-    (which may leave an `ORPHANED` result file); the lock is released on exit."""
-    paths = _supervisor_paths(project_root, task)
-    acquired, held_pid = _acquire_supervisor_lock(
-        paths["memory_dir"], paths["lock"], paths["result"], task, 0, None, runtime="opencode"
-    )
-    if not acquired:
-        return None, held_pid
-    try:
-        return body(), None
-    finally:
-        _release_supervisor_lock(paths["lock"], os.getpid())
-
-
-def _lock_refusal(project_root: pathlib.Path, task: str, held_pid, outcome: str = "GATE_REFUSED") -> int:
-    holder = _read_json(_supervisor_paths(project_root, task)["lock"])
-    runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
-    return _gate_refusal(
-        "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3, outcome=outcome
-    )
-
-
-_RECORD_ERROR_MESSAGES = {
-    "corrupt-record": "the workflow state file is malformed",
-    "corrupt-sidecar": "a run record is malformed",
-    "state-task-mismatch": "the workflow state belongs to a different task",
-    "unsafe-path": "the workflow state path is not a plain file under the task folder",
-    "unsupported-schema": "the workflow state uses an unsupported schema",
-    "OSError": "the workflow state could not be written",
-    "PermissionError": "the workflow state could not be written",
-}
-
-
-def _launcher_state_env() -> str:
-    from quoin.opencode_adapter import paths  # noqa: PLC0415
-
-    return paths.ENV_STATE_DIR
-
-
-def _launcher_redirect(args: argparse.Namespace) -> "tuple[str, str] | None":
-    """Under the launcher, a helper may not be pointed at another source tree or
-    project. The shell permission asks cannot be the only guard: quoting splits
-    an option name in the statement text yet reaches the parser whole."""
-    from quoin.opencode_adapter import scripts  # noqa: PLC0415
-
-    if _launcher_state_env() not in os.environ:
-        return None
-    if getattr(args, "source_dir", None) is not None:
-        return "source-dir-refused", "the quoin source directory cannot be chosen from an agent shell"
-    cwd = os.path.realpath(os.getcwd())
-    allowed = {cwd}
-    found = scripts.find_project_root(pathlib.Path(cwd))
-    if found is not None:
-        allowed.add(os.path.realpath(str(found)))
-    if os.path.realpath(str(args.project_root)) not in allowed:
-        return "project-root-refused", "the project root cannot be chosen from an agent shell"
-    return None
-
-
-def _cmd_opencode_gate(args: argparse.Namespace) -> int:
-    """`quoin opencode gate`: evaluate one gated phase and print one JSON line.
-
-    No option approves, adopts or chooses evidence. Without `--write` nothing
-    is written and no lock is taken."""
-    from quoin.opencode_adapter import gate, runstore  # noqa: PLC0415
-
-    redirect = _launcher_redirect(args)
-    if redirect is not None:
-        return _gate_refusal(*redirect)
-    project_root = pathlib.Path(args.project_root).resolve()
-    explanation = None
-    if args.explanation_file:
-        try:
-            explanation = _read_explanation(args.explanation_file)
-        except OSError:
-            return _gate_refusal("explanation-unreadable", "the explanation file cannot be read")
-        if explanation is not None and _launcher_state_env() in os.environ:
-            # Under the launcher the note must come from inside the artifact
-            # root, so the helper cannot be used to copy another file into an
-            # audit artifact.
-            root = os.path.realpath(str(project_root / ".workflow_artifacts"))
-            real = os.path.realpath(args.explanation_file)
-            if os.path.commonpath([root, real]) != root:
-                return _gate_refusal(
-                    "explanation-outside-artifacts",
-                    "the explanation file must be inside the workflow artifact folder",
-                )
-    try:
-        source_dir = _resolve_source_dir(args.source_dir)
-    except SystemExit:
-        return _gate_refusal("source-unavailable", "the quoin source directory cannot be resolved")
-    try:
-        stage, phase = gate.precheck(project_root, args.task, args.stage, args.phase)
-    except gate.GateRefused as exc:
-        return _gate_refusal(exc.code, "the request cannot be gated")
-
-    def work():
-        result = gate.evaluate(
-            project_root, args.task, stage, phase, source_dir=source_dir, explanation=explanation
-        )
-        payload = result.to_dict()
-        payload["outcome"] = "GATE_PASSED" if result.verdict == "PASS" else "GATE_REFUSED"
-        payload["artifact"] = None
-        code = 0 if result.verdict == "PASS" else 7
-        if args.write:
-            try:
-                sdir = gate.stage_dir(project_root, args.task, stage, source_dir)
-                path = gate.write_artifact(project_root, result, sdir, source_dir=source_dir)
-            except gate.PathUnresolved as exc:
-                payload["artifact_error"] = {"code": "path-unresolved", "message": exc.detail}
-                return payload, 8
-            except gate.GateArtifactError as exc:
-                payload["artifact_error"] = {"code": exc.code, "message": exc.message}
-                return payload, 8
-            except OSError as exc:
-                payload["artifact_error"] = {"code": "artifact-write-failed", "message": type(exc).__name__}
-                return payload, 8
-            payload["artifact"] = os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
-            try:
-                gate.record_gate(project_root, args.task, stage, phase, result, path)
-            except (runstore.RunStoreError, OSError) as exc:
-                record_code = getattr(exc, "code", type(exc).__name__)
-                payload["record_error"] = {
-                    "code": record_code,
-                    "message": _RECORD_ERROR_MESSAGES.get(record_code, "the gate result could not be recorded in the workflow state"),
-                }
-                return payload, 8
-        return payload, code
-
-    try:
-        if args.write:
-            outcome, held_pid = _with_task_lock(project_root, args.task, work)
-            if outcome is None:
-                return _lock_refusal(project_root, args.task, held_pid)
-        else:
-            outcome = work()
-    except gate.GateRefused as exc:
-        return _gate_refusal(exc.code, "the request cannot be gated")
-    except (runstore.RunStoreError, OSError) as exc:
-        return _gate_refusal("store-unreadable", "the run store cannot be read (%s)" % getattr(exc, "code", type(exc).__name__))
-    payload, code = outcome
-    return _gate_json(payload, code)
-
-
-def _cmd_opencode_test_run(args: argparse.Namespace) -> int:
-    """`quoin opencode test-run`: run the task's configured test command in a
-    throwaway workspace and print one JSON line. The command, include paths
-    and project root cannot be chosen here."""
-    from quoin.opencode_adapter import paths as _paths, runstore, scripts, testrun  # noqa: PLC0415
-
-    def refuse(code: str, message: str) -> int:
-        return _gate_json({"outcome": "REFUSED", "refusal": {"code": code, "message": message}}, 2)
-
-    project_root = scripts.find_project_root(pathlib.Path.cwd())
-    if project_root is None:
-        return refuse("project-root-unresolved", "no quoin project was found from the current directory")
-    try:
-        runstore.check_task_name(args.task)
-        stage = runstore.normalize_stage(args.stage)
-    except (runstore.RunStoreError, ValueError):
-        return refuse("request-invalid", "the task name or stage is not valid")
-    if _paths.ENV_STATE_DIR in os.environ:
-        state_root = _paths.launcher_state_dir(os.environ)
-        if state_root is None:
-            return refuse("state-dir-invalid", "the state directory variable must be an absolute path")
-    else:
-        from quoin.opencode_adapter import handoff as _handoff, profile_dirs as _profile_dirs  # noqa: PLC0415
-        from quoin.opencode_adapter.install import PROFILE_RE  # noqa: PLC0415
-
-        name, source = args.profile, "flag"
-        if name is None:
-            name, source = testrun.recorded_profile(project_root, args.task)
-        if source == "unreadable":
-            return refuse(
-                "profile-selection-unverified",
-                "the task's workflow state or run record cannot be read; pass --profile",
-            )
-        if name is None:
-            return refuse("profile-unknown", "no profile is recorded for the task; pass --profile")
-        if not PROFILE_RE.fullmatch(name):
-            return refuse("request-invalid", "the profile name is not valid")
-        home = pathlib.Path.home()
-        try:
-            state_root = _profile_dirs.profile_root(_profile_dirs.adapter_root(os.environ, home), name)
-        except ValueError:
-            return refuse("request-invalid", "the profile name is not valid")
-        if source != "flag":
-            unverified = (
-                "profile-selection-unverified",
-                "the recorded profile cannot be confirmed against its storage directory; pass --profile",
-            )
-            try:
-                scope = _handoff.scope_for_profile(project_root, name, env=_opencode_config_env(), home=home)
-            except _handoff.HandoffRefused:
-                return refuse(*unverified)
-            if _profile_dirs.stamped_classification(state_root) != scope["classification"]:
-                return refuse(*unverified)
-    run = testrun.run_tests(project_root, args.task, stage, state_root=state_root)
-    payload = run.to_dict()
-    if run.outcome == testrun.REFUSED:
-        return refuse(run.reason or "refused", "the test run could not start")
-    code = 0 if run.outcome == testrun.PASSED else 1
-    return _gate_json(payload, code)
-
-
-def _cmd_opencode_adopt(args: argparse.Namespace) -> int:
-    """`quoin opencode adopt`: a human step recording evidence for a phase that
-    finished outside a recorded run. The gate never treats it as run-verified."""
-    from quoin.opencode_adapter import evidence, gate, runstore  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    try:
-        stage, phase = gate.precheck(project_root, args.task, args.stage, args.phase)
-    except gate.GateRefused as exc:
-        return _gate_refusal(exc.code, "the request cannot be adopted")
-
-    def work():
-        snapshot = evidence.take_snapshot(project_root, args.task, phase)
-        return evidence.record_evidence(project_root, args.task, stage, phase, "adopted", snapshot)
-
-    try:
-        entry, held_pid = _with_task_lock(project_root, args.task, work)
-    except (runstore.RunStoreError, OSError) as exc:
-        return _gate_refusal("store-unreadable", "the run store cannot be read (%s)" % getattr(exc, "code", type(exc).__name__))
-    if entry is None:
-        return _lock_refusal(project_root, args.task, held_pid)
-    stage_part = "" if stage is None else f" --stage {stage}"
-    quoted_root = shlex.quote(str(project_root))
-    return _gate_json({
-        "outcome": "ADOPTED",
-        "entry": {
-            "task": args.task, "stage": stage, "phase": phase, "origin": entry["origin"],
-            "recorded_at": entry["recorded_at"], "coverage": entry["evidence"]["coverage"],
-        },
-        "next": f"quoin opencode gate --task {shlex.quote(args.task)}{stage_part} --phase {phase} --write --project-root {quoted_root}",
-    }, 0)
-
-
-_HANDOFF_TEXT_CAP = 2000
-_HANDOFF_TEXT_COUNT = 20
-
-
-def _handoff_refusal(code: str, message: str, reasons=(), exit_code: int = 2) -> int:
-    return _gate_json({
-        "outcome": "HANDOFF_REFUSED",
-        "refusal": {"code": code, "message": message, "reasons": [str(r) for r in list(reasons)[:256]]},
-    }, exit_code)
-
-
-def _handoff_refused(exc) -> int:
-    return _handoff_refusal(exc.code, exc.message, exc.reasons)
-
-
-def _handoff_source(args: argparse.Namespace):
-    from quoin.opencode_adapter import runstore  # noqa: PLC0415
-
-    try:
-        runstore.check_task_name(args.task)
-    except runstore.RunStoreError:
-        return None, _handoff_refusal("invalid-task-name", "the task name is not valid")
-    redirect = _launcher_redirect(args)
-    if redirect is not None:
-        return None, _handoff_refusal(*redirect)
-    try:
-        return _resolve_source_dir(args.source_dir), None
-    except SystemExit:
-        return None, _handoff_refusal("source-unavailable", "the quoin source directory cannot be resolved")
-
-
-def _handoff_texts(args: argparse.Namespace):
-    for label, values in (("--decision", args.decision), ("--note", args.note)):
-        if len(values) > _HANDOFF_TEXT_COUNT or any(len(v) > _HANDOFF_TEXT_CAP for v in values):
-            return None, _handoff_refusal(
-                "argument-invalid",
-                "%s takes at most %d values of at most %d characters" % (label, _HANDOFF_TEXT_COUNT, _HANDOFF_TEXT_CAP),
-            )
-    return (args.decision, args.note), None
-
-
-def _handoff_evaluator(project_root: pathlib.Path):
-    from quoin.opencode_adapter import handoff  # noqa: PLC0415
-
-    env = _opencode_config_env()
-    home = pathlib.Path.home()
-    return lambda profile: handoff.scope_for_profile(project_root, profile, env=env, home=home)
-
-
-def _handoff_policy_evaluator(project_root: pathlib.Path):
-    from quoin.opencode_adapter import handoff  # noqa: PLC0415
-
-    env = _opencode_config_env()
-    home = pathlib.Path.home()
-    return lambda profile: handoff.policy_for_profile(project_root, profile, env=env, home=home)
-
-
-def _handoff_rel(project_root: pathlib.Path, path) -> str:
-    return os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
-
-
-def _cmd_opencode_handoff_write(args: argparse.Namespace) -> int:
-    """`quoin opencode handoff write`: build the continuation record from the
-    workflow state, run records and tree. Agent text enters only through
-    `--decision` and `--note`."""
-    from quoin.opencode_adapter import handoff  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    source_dir, refused = _handoff_source(args)
-    if refused is not None:
-        return refused
-    texts, refused = _handoff_texts(args)
-    if refused is not None:
-        return refused
-    decisions, notes = texts
-
-    def work():
-        scope, source = handoff.resolve_profile(
-            project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
-        )
-        previous = None
-        try:
-            previous = handoff.core(source_dir).load_record(str(handoff.record_path(project_root, args.task)))
-        except Exception:  # noqa: BLE001 - an unusable previous record only loses its decisions
-            previous = None
-        record = handoff.build_record(
-            project_root, args.task, scope=scope, scope_source=source, source_dir=source_dir,
-            decisions=decisions, notes=notes, previous=previous,
-        )
-        directory, state, run = handoff.advice_inputs(project_root, args.task)
-        items = handoff.classify_pending(project_root, record, state, run, source_dir)
-        try:
-            path = handoff.write(project_root, args.task, record, source_dir=source_dir)
-        except handoff.HandoffRefused as exc:
-            return _handoff_refusal("record-write-failed", exc.message, (exc.code,) + tuple(exc.reasons), 8)
-        except OSError as exc:
-            return _handoff_refusal("record-write-failed", "the record could not be written", (type(exc).__name__,), 8)
-        return _gate_json({
-            "outcome": "HANDOFF_WRITTEN", "record": _handoff_rel(project_root, path),
-            "phase": record["phase"]["current"], "pending": len(record["pending"]),
-            "completed": len(record["completed"]),
-            "unrecorded": sum(1 for item in items if item["kind"] == "unrecorded"),
-            "scope_source": source,
-        }, 0)
-
-    try:
-        code, held_pid = _with_task_lock(project_root, args.task, work)
-    except handoff.HandoffRefused as exc:
-        return _handoff_refused(exc)
-    if code is None:
-        return _lock_refusal(project_root, args.task, held_pid, outcome="HANDOFF_REFUSED")
-    return code
-
-
-def _cmd_opencode_handoff_show(args: argparse.Namespace) -> int:
-    """`quoin opencode handoff show`: validate the record, then print the next
-    steps (or candidate commands). Takes no lock and writes nothing."""
-    from quoin.opencode_adapter import driver, handoff  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    source_dir, refused = _handoff_source(args)
-    if refused is not None:
-        return refused
-    try:
-        requested = _handoff_evaluator(project_root)(args.profile) if args.profile else None
-        requested_policy = (
-            (lambda: _handoff_policy_evaluator(project_root)(args.profile)) if args.profile else None
-        )
-        record = handoff.load_for_continuation(
-            project_root, args.task, source_dir=source_dir, requested_scope=requested,
-            requested_policy=requested_policy, policy_profile=args.profile,
-            resume_hint="quoin run --runtime opencode --profile %s --workflow --continue %s --project-root %s" % (
-                shlex.quote(args.profile or "PROFILE"), shlex.quote(args.task), shlex.quote(str(project_root))),
-        )
-        directory, state, run = handoff.advice_inputs(project_root, args.task)
-        advice = handoff.next_step(project_root, record, state, run, source_dir)
-    except handoff.HandoffRefused as exc:
-        return _handoff_refused(exc)
-    native = directory is not None and driver.Handoff.from_continuation(record, directory) is not None
-    return _gate_json({
-        "outcome": "CONTINUATION_READY",
-        "record": _handoff_rel(project_root, handoff.record_path(project_root, args.task)),
-        "origin_runtime": record["origin_runtime"], "phase": record["phase"],
-        "next": advice, "native_resume": native,
-    }, 0)
-
-
-def _cmd_opencode_handoff_validate(args: argparse.Namespace) -> int:
-    """`quoin opencode handoff validate`: check the record alone."""
-    from quoin.opencode_adapter import handoff  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    source_dir, refused = _handoff_source(args)
-    if refused is not None:
-        return refused
-    try:
-        record = handoff.validate_record(project_root, args.task, source_dir=source_dir)
-    except handoff.HandoffRefused as exc:
-        return _handoff_refused(exc)
-    return _gate_json({
-        "outcome": "RECORD_VALID",
-        "record": _handoff_rel(project_root, handoff.record_path(project_root, args.task)),
-        "task": record["task"], "created_at": record["created_at"], "origin_runtime": record["origin_runtime"],
-    }, 0)
-
-
-def _cmd_opencode_handoff(args: argparse.Namespace) -> int:
-    if args.handoff_command == "write":
-        return _cmd_opencode_handoff_write(args)
-    if args.handoff_command == "show":
-        return _cmd_opencode_handoff_show(args)
-    return _cmd_opencode_handoff_validate(args)
-
-
-def _is_posix() -> bool:
-    return os.name == "posix"
-
-
-def _exec_tui(argv, cwd, env) -> int:
-    """Default launcher for `quoin opencode start`.
-
-    On POSIX the TUI replaces this process, so it keeps the terminal and the
-    process group, receives Ctrl-C, SIGQUIT and SIGTSTP directly and restores
-    its own terminal state; its exit status is the command's. Nothing here
-    needs to run afterwards (no lock, no run state). Returns only when the
-    program could not be started."""
-    import signal  # noqa: PLC0415
-
-    sys.stdout.flush()
-    sys.stderr.flush()
-    if _is_posix():
-        previous_umask = os.umask(0o077)
-        try:
-            os.chdir(cwd)
-            # Python ignores these two at startup and an ignored signal stays
-            # ignored across exec; the TUI must see the default behaviour.
-            for name in ("SIGPIPE", "SIGXFSZ"):
-                number = getattr(signal, name, None)
-                if number is not None:
-                    signal.signal(number, signal.SIG_DFL)
-            os.execve(argv[0], list(argv), env)
-        except OSError as exc:
-            os.umask(previous_umask)
-            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
-            return 3
-        except BaseException:
-            os.umask(previous_umask)
-            raise
-    # No exec here: keep Python alive but let the TUI own Ctrl-C.
-    previous = None
-    try:
-        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
-    except ValueError:  # not the main thread
-        pass
-    try:
-        try:
-            child = subprocess.Popen(list(argv), cwd=cwd, env=env)
-        except OSError as exc:
-            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
-            return 3
-        return child.wait()
-    finally:
-        if previous is not None:
-            signal.signal(signal.SIGINT, previous)
-
-
-_opencode_tui_launcher = _exec_tui
-
-
-def _opencode_prepared_hook(hook):
-    """Wrap a prepared-run callback so a run on an unqualified OpenCode
-    release shows its warning before the phase starts."""
-    def announce(prepared):
-        warning = getattr(prepared, "runtime_warning", None)
-        if warning:
-            print("quoin: warning: %s" % warning, file=sys.stderr)
-        if hook is not None:
-            hook(prepared)
-    return announce
-
-
-def _cmd_opencode_start(args: argparse.Namespace) -> int:
-    """`quoin opencode start`: open the OpenCode TUI with the compiled profile.
-
-    Takes no task lock and writes no run state; the interface is interactive
-    and nothing is captured."""
-    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
-    from quoin.opencode_adapter import launch_env  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    redact = launch_env.Redactor()
-    try:
-        launch = _make_opencode_driver(project_root).prepare_interactive(args.profile)
-    except _driver.PrepareRefused as exc:
-        print(
-            "quoin: opencode start refused (%s/%s): %s" % (exc.category, exc.code, redact(exc.message)),
-            file=sys.stderr,
-        )
-        return 3
-    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
-        print("quoin: opencode start failed: %s" % type(exc).__name__, file=sys.stderr)
-        return 3
-    if launch.runtime_warning:
-        print("quoin: warning: %s" % redact(launch.runtime_warning), file=sys.stderr)
-    if args.dry_run:
-        print(json.dumps({
-            "argv": [redact(a) for a in launch.argv],
-            "cwd": redact(str(launch.cwd)),
-            "config_path": redact(str(launch.config_path)),
-            "env_names": list(launch.env_names),
-            "runtime_version": launch.runtime_version,
-            "unqualified_runtime": launch.unqualified_runtime,
-            "effective_config_digest": launch.effective_config_digest,
-            "lifecycle_plugin": launch.run_id is not None,
-        }, sort_keys=True))
-        return 0
-    try:
-        launch.write_record()
-    except Exception:  # noqa: BLE001 - the launch never proceeds without its record
-        print("quoin: opencode start refused: the effective-configuration record could not be written", file=sys.stderr)
-        return 3
-    _opencode_start_sweep(launch, project_root)
-    env = launch.launch_env.materialize()
-    return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
-
-
-def _opencode_setup_host(args: argparse.Namespace):
-    from quoin.opencode_adapter import setup  # noqa: PLC0415
-
-    return setup.default_host(
-        _resolve_source_dir(args.source_dir),
-        config_env=_opencode_config_env(),
-        now=datetime.now(timezone.utc),
-        platform=sys.platform,
-        interactive=sys.stdin.isatty(),
-        out=sys.stdout,
-        err=sys.stderr,
-    )
-
-
-def _cmd_opencode_setup(args: argparse.Namespace) -> int:
-    """`quoin opencode setup`: the individual OpenCode steps, composed and idempotent."""
-    from quoin.opencode_adapter import setup  # noqa: PLC0415
-
-    host = _opencode_setup_host(args)
-    profile = setup.resolve_code_profile(host, args.project_root, args.profile) or "personal"
-    return setup.run_setup(host, args.project_root, profile, yes=args.yes)
-
-
-def _cmd_code(args: argparse.Namespace) -> int:
-    """`quoin code`: fast checks, recompile when needed, then `quoin opencode start`."""
-    from quoin.opencode_adapter import setup  # noqa: PLC0415
-
-    host = _opencode_setup_host(args)
-    profile = setup.resolve_code_profile(host, args.project_root, args.profile)
-    if profile is not None and not setup.valid_profile(profile):
-        print("quoin: profile %r is not a valid profile label" % (profile,), file=sys.stderr)
-        return 2
-    if profile is None:
-        print(
-            "quoin: no profile given and none remembered for this project; "
-            "run quoin opencode setup or pass --profile",
-            file=sys.stderr,
-        )
-        return 2
-    code = setup.prepare_code(host, args.project_root, profile)
-    if code != 0:
-        return code
-    return _cmd_opencode_start(
-        argparse.Namespace(project_root=args.project_root, profile=profile, dry_run=False)
-    )
-
-
-def _purge_display(item_or_kept, plan_root: str) -> str:
-    shown = getattr(item_or_kept, "display")
-    if shown.startswith("oc-"):
-        root = getattr(item_or_kept, "root", "")
-        return (_home_relative(root) + "/" + shown) if root else shown
-    return "PROFILE/" + shown
-
-
-def _home_relative(path: str) -> str:
-    home = str(pathlib.Path.home())
-    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
-
-
-def _purge_report(plan, outcome: str, dry_run: bool, failed=(), extra=None) -> dict:
-    report = {
-        "profile": plan.profile, "dry_run": dry_run, "outcome": outcome,
-        "remove": [{"path": _purge_display(i, ""), "class": i.cls, "files": i.files, "bytes": i.bytes}
-                   for i in plan.remove],
-        "keep": [dict({"path": _purge_display(k, ""), "reason": k.reason},
-                      **({"hint": "chmod-u-rwx"} if k.reason == "unreadable" else {}))
-                 for k in plan.keep],
-        "referenced_runs": [dict(r, project=_home_relative(r["project"])) for r in plan.referenced_runs],
-        "stores_not_visited": [dict(r, project=_home_relative(r["project"])) for r in plan.stores_not_visited],
-        "failed": [{"path": "PROFILE/" + d if not d.startswith("oc-") else d, "reason": r} for d, r in failed],
-        "truncated": plan.truncated,
-    }
-    if extra:
-        report.update(extra)
-    return report
-
-
-def _printable(text: str) -> str:
-    """Entry names come from the filesystem; escape anything that could move the
-    cursor or rewrite earlier output in a terminal."""
-    return "".join(c if c.isprintable() else "\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)
-                   for c in text)
-
-
-def _print_purge_text(report: dict) -> None:
-    print("quoin: opencode purge %s: %s" % (report["profile"], report["outcome"]))
-    blocks = (
-        ("remove", [("%s  [%s, %d files, %d bytes]" % (r["path"], r["class"], r["files"], r["bytes"]))
-                    for r in report["remove"]]),
-        ("keep", [line for r in report["keep"] for line in (
-            ["%s  [%s]" % (r["path"], r["reason"])]
-            + (["run: chmod -R u+rwx %s" % shlex.quote(r["path"])] if r.get("hint") else []))]),
-        ("referenced runs (removed by purge)",
-         ["%s  task %s in %s (%s)" % (r["run_id"], r["task"], r["project"], r["referenced_by"])
-          for r in report["referenced_runs"]]),
-        ("not visited", ["%s  [%s]" % (r["project"], r["reason"]) for r in report["stores_not_visited"]]),
-        ("failed", ["%s  [%s]" % (r["path"], r["reason"]) for r in report["failed"]]),
-    )
-    for title, lines in blocks:
-        if lines:
-            print(title + ":")
-            for line in lines:
-                print("  " + _printable(line))
-    print("total: %d item(s), %d file(s), %d byte(s)%s" % (
-        len(report["remove"]), sum(r["files"] for r in report["remove"]),
-        sum(r["bytes"] for r in report["remove"]), "; walk truncated" if report["truncated"] else ""))
-
-
-def _cmd_opencode_purge(args: argparse.Namespace) -> int:
-    """`quoin opencode purge`: delete a profile's stored data, keeping credentials."""
-    import time as _time  # noqa: PLC0415
-
-    from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
-
-    as_json = bool(args.json)
-
-    def show_refusal(exc, plan=None) -> int:
-        blocking = [
-            {{"live-lock": "task", "store-unchecked": "store"}.get(b.reason, "run_id"):
-             (_home_relative(b.run_id_or_task) if b.reason == "store-unchecked" else b.run_id_or_task),
-             "project": _home_relative(b.project), "reason": b.reason,
-             **({"pid_file": b.pid_file} if b.pid_file else {})}
-            for b in exc.blocking
-        ]
-        if as_json:
-            body = _purge_report(plan, "refused", args.dry_run) if plan is not None else {"profile": args.profile}
-            body.update({"outcome": "refused", "code": exc.code, "message": exc.message, "blocking": blocking})
-            print(json.dumps(body, sort_keys=True))
-        else:
-            print("quoin: opencode purge: %s: %s" % (exc.code, exc.message), file=sys.stderr)
-            for item in blocking:
-                print("quoin: opencode purge: blocked by %s" % " ".join("%s=%s" % kv for kv in sorted(item.items())),
-                      file=sys.stderr)
-        return 2
-
-    try:
-        adapter = profile_dirs.adapter_root(os.environ, pathlib.Path.home())
-        extra = pathlib.Path(args.project_root).resolve() if args.project_root else None
-        plan = retention.plan_purge(
-            adapter_root=adapter, profile=args.profile, extra_project=extra, env=os.environ,
-            uid=os.getuid(), table=proctree.snapshot(), now=_time.time(),
-        )
-    except retention.PurgeRefused as exc:
-        return show_refusal(exc)
-    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
-        print("quoin: opencode purge failed: %s" % type(exc).__name__, file=sys.stderr)
-        return 3
-
-    def emit(report: dict) -> None:
-        if as_json:
-            print(json.dumps(report, sort_keys=True))
-        else:
-            _print_purge_text(report)
-
-    if args.dry_run:
-        emit(_purge_report(plan, "planned" if plan.remove else "nothing-to-do", True))
-        return 0
-    if not args.yes:
-        exc = retention.PurgeRefused("purge-confirm-required")
-        if not as_json:
-            _print_purge_text(_purge_report(plan, "planned", False))
-        return show_refusal(exc, plan)
-    incomplete = retention.purge_incomplete(plan)
-    if not plan.remove:
-        emit(_purge_report(plan, "partial" if incomplete else "nothing-to-do", False))
-        return 1 if incomplete else 0
-    result = retention.execute(plan, uid=os.getuid())
-    done = retention.Plan(plan.profile, "purge", result.removed, plan.keep + result.left,
-                          plan.referenced_runs, plan.stores_not_visited, plan.truncated)
-    partial = bool(result.failed) or bool(result.left) or incomplete
-    emit(_purge_report(done, "partial" if partial else "purged", False, failed=result.failed))
-    return 1 if partial else 0
-
-
-def _opencode_start_sweep(launch, project_root) -> None:
-    """Age out old profile storage just before the TUI starts; never blocks the start."""
-    try:
-        import time as _time  # noqa: PLC0415
-
-        from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
-
-        if launch.retention is None or launch.profile_root is None or launch.retention.empty:
-            return
-        retention.sweep(
-            dirs=profile_dirs.ProfileDirs.at(launch.profile_root), project_root=project_root,
-            policy=launch.retention, now=_time.time(), uid=os.getuid(), profile=launch.profile,
-            table=proctree.snapshot(),
-        )
-    except Exception:  # noqa: BLE001 - the sweep never refuses a start
-        return
-
-
-def _make_opencode_driver(project_root):
-    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
-
-    return _driver.OpenCodeDriver(project_root)
-
-
-def _opencode_backoff(n: int) -> float:
-    from quoin import supervisor as _supervisor  # noqa: PLC0415
-
-    return _supervisor.default_backoff(n)
-
-
-def _print_adopt_advice(args: argparse.Namespace, result: Any, project_root: pathlib.Path) -> None:
-    """After a run that stopped for approval, tell the human how to finish the
-    phase in the TUI and record it. Stderr only: stdout stays one JSON line."""
-    if getattr(result, "outcome", None) != "AWAITING_APPROVAL":
-        return
-    try:
-        from quoin.opencode_adapter import gate as _gate  # noqa: PLC0415
-        from quoin.opencode_adapter import runstore  # noqa: PLC0415
-
-        entry = runstore.entry_phase_for_run(args.phase)
-        if not entry:
-            return
-        stage = int(args.stage) if args.stage is not None else None
-        command = _gate.adopt_command(args.task, stage, entry, project_root)
-    except Exception:  # noqa: BLE001 - advice is best effort
-        return
-    print("quoin: or finish the phase in the TUI, then run: " + command, file=sys.stderr)
-
-
-_WORKFLOW_THROUGH = ("discover", "architect", "plan", "implement", "review")
-_WORKFLOW_RERUN = ("plan", "implement", "review")
 # (flag, argparse attribute, value that means "not given")
-_WORKFLOW_ONLY_FLAGS = (
-    ("--continue", "continue_", False), ("--no-pause", "no_pause", False), ("--through", "through", None),
-    ("--from-discover", "from_discover", False), ("--max-critic-rounds", "max_critic_rounds", None),
-    ("--test-command", "test_command", None), ("--test-include", "test_include", None),
-    ("--test-timeout", "test_timeout", None), ("--rerun-from", "rerun_from", None), ("--adopt", "adopt", None),
-    ("--accept-unverified-policy", "accept_unverified_policy", False),
-)
-
-
-def _cmd_run_opencode(args: argparse.Namespace) -> int:
-    """Run one workflow phase on the OpenCode runtime and print a JSON summary.
-
-    The task lock is held for every write of task state (driver calls, the
-    resume hint in the run record, the ``.result`` file); only the printed
-    summary follows the release.
-    """
-    import signal  # noqa: PLC0415
-
-    from quoin import supervisor as _supervisor  # noqa: PLC0415
-    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
-    from quoin.opencode_adapter import phase_loop, run_hooks, runstore  # noqa: PLC0415
-    from quoin.opencode_adapter import profile_dirs as _profile_dirs  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    ident = {
-        "task": args.task, "stage": args.stage, "phase": args.phase, "profile": args.profile,
-    }
-
-    def refusal(category, code, message):
-        return phase_loop.PhaseResult(
-            outcome="REFUSED", reason=code,
-            refusal={"category": category, "code": code, "message": message},
-        )
-
-    def emit(result, hint=None) -> int:
-        print(json.dumps(phase_loop.summary(result, ident, hint), sort_keys=True))
-        return phase_loop.exit_code(result)
-
-    if getattr(args, "workflow", False):
-        return _cmd_run_opencode_workflow(args)
-    if not args.phase:
-        return emit(refusal(
-            "workflow-validation", "whole-task-unavailable", _supervisor.WHOLE_TASK_UNAVAILABLE
-        ))
-    try:
-        runstore.check_task_name(args.task)
-    except runstore.RunStoreError:
-        return emit(refusal("workflow-validation", "invalid-task-name", "the task name is not valid"))
-
-    cancel = phase_loop.CancelToken()
-
-    def _on_signal(signum, _frame):
-        cancel.cancel(signum)
-
-    previous = {}
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            previous[sig] = signal.signal(sig, _on_signal)
-        except ValueError:  # not the main thread: no handlers, no cancel by signal
-            break
-
-    hint = None
-    try:
-        paths = _supervisor_paths(project_root, args.task)
-        acquired, held_pid = _acquire_supervisor_lock(
-            paths["memory_dir"], paths["lock"], paths["result"], args.task,
-            args.max_relaunch, None, runtime="opencode",
-        )
-        if not acquired:
-            holder = _read_json(paths["lock"])
-            runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
-            result = refusal(
-                None, "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})"
-            )
-        else:
-            try:
-                source_dir = mark = candidate = listing = state_root = None
-                try:
-                    drv = _make_opencode_driver(project_root)
-                    try:
-                        state_root = _profile_dirs.state_root_for(drv, args.profile)
-                    except ValueError:
-                        state_root = None
-                    request = _driver.RunRequest(
-                        project_root=project_root, task=args.task, stage=args.stage,
-                        phase=args.phase, profile=args.profile, budget=args.budget,
-                        non_interactive=bool(getattr(args, "non_interactive", False)),
-                    )
-                    on_prepared = None
-                    try:
-                        try:
-                            source_dir = _resolve_source_dir(None)
-                        except SystemExit:
-                            source_dir = None
-                        mark = run_hooks.before_run(project_root, args.task)
-                        candidate = run_hooks.open_run(project_root, args.task)
-                        listing = run_hooks.before_boundary(project_root, args.task)
-                        if runstore.normalize_phase(args.phase) == "end_of_task":
-                            on_prepared = run_hooks.prelaunch(project_root, mark, source_dir)
-                    except Exception:  # noqa: BLE001 - costing never blocks the run
-                        pass
-                    result = phase_loop.run_phase(
-                        drv, request, max_relaunch=args.max_relaunch, cancel=cancel,
-                        new_run=args.new_run, backoff_fn=_opencode_backoff,
-                        on_prepared=_opencode_prepared_hook(on_prepared),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    result = phase_loop.PhaseResult(
-                        outcome="ERROR", reason="driver-error: " + type(exc).__name__
-                    )
-                try:
-                    hook = run_hooks.after_phase_run(
-                        project_root, args.task, result, mark=mark, source_dir=source_dir,
-                        superseded_candidate=candidate, boundary_before=listing,
-                        state_root=state_root,
-                    )
-                    if hook.violation and result.outcome not in ("CANCELLED", "REFUSED"):
-                        result = dataclasses.replace(
-                            result, outcome="FAILED", reason="boundary-violation"
-                        )
-                except Exception:  # noqa: BLE001 - the outcome stays as the run left it
-                    pass
-                hint = phase_loop.resume_hint(result, ident, project_root)
-                if result.run_id and hint:
-                    try:
-                        phase_loop.annotate_record(
-                            project_root, result.run_id, hint, result.resume_blocked
-                        )
-                    except Exception:  # noqa: BLE001 - the hint still reaches the summary
-                        pass
-                _print_adopt_advice(args, result, project_root)
-                if args.halt_on_abort and not paths["result"].exists():
-                    _write_supervisor_result(paths["memory_dir"], paths["result"], result.outcome, 0)
-            finally:
-                _release_supervisor_lock(paths["lock"], os.getpid())
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
-    if hint and getattr(args, "non_interactive", False) and "--non-interactive" not in hint:
-        # The stored hint stays as written; the printed one keeps the run's mode
-        # so following it does not start a fresh interactive run.
-        hint = hint + " --non-interactive"
-    return emit(result, hint)
-
-
-def _workflow_summary_refusal(args: argparse.Namespace, code: str, message: str, exit_code: int) -> dict:
-    return {
-        "runtime": "opencode", "mode": "workflow", "task": args.task, "profile": args.profile,
-        "outcome": "REFUSED", "exit_code": exit_code, "phases": [], "reasons": [code],
-        "refusal": {"code": code, "message": message}, "resume_hint": None, "record": None,
-        "workflow_validated": False,
-    }
-
-
-def _workflow_options(args: argparse.Namespace):
-    from quoin.opencode_adapter import workflow  # noqa: PLC0415
-
-    return workflow.WorkflowOptions(
-        profile=args.profile, no_pause=bool(args.no_pause), through=args.through,
-        from_discover=bool(args.from_discover), max_critic_rounds=args.max_critic_rounds,
-        rerun_from=args.rerun_from, adopt=args.adopt, continue_=bool(args.continue_),
-        max_relaunch=args.max_relaunch, halt_on_abort=bool(args.halt_on_abort), budget=args.budget,
-        test_command=shlex.split(args.test_command) if args.test_command else None,
-        test_include=tuple(args.test_include or ()), test_timeout=args.test_timeout,
-        accept_unverified_policy=bool(args.accept_unverified_policy),
-    )
-
-
-def _print_workflow_adopt_advice(args: argparse.Namespace, summary: dict, project_root: pathlib.Path) -> None:
-    """Stderr only: how to finish a phase that stopped for approval."""
-    if summary.get("outcome") != "AWAITING_APPROVAL" or not summary.get("phases"):
-        return
-    try:
-        from quoin.opencode_adapter import gate as _gate  # noqa: PLC0415
-        from quoin.opencode_adapter import runstore  # noqa: PLC0415
-
-        last = summary["phases"][-1]
-        entry = runstore.entry_phase_for_run(last["phase"])
-        if not entry:
-            return
-        command = _gate.adopt_command(args.task, last.get("stage"), entry, project_root)
-    except Exception:  # noqa: BLE001 - advice is best effort
-        return
-    print("quoin: or finish the phase in the TUI, then run: " + command, file=sys.stderr)
-
-
-def _cmd_run_opencode_workflow(args: argparse.Namespace) -> int:
-    """`quoin run --runtime opencode --workflow`: walk the whole task and print
-    one JSON summary line. One task lock covers the whole invocation."""
-    import signal  # noqa: PLC0415
-
-    from quoin.opencode_adapter import handoff, phase_loop, runstore, workflow  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-
-    def emit(summary: dict) -> int:
-        print(json.dumps(summary, sort_keys=True))
-        return summary["exit_code"]
-
-    try:
-        runstore.check_task_name(args.task)
-    except runstore.RunStoreError:
-        return emit(_workflow_summary_refusal(args, "invalid-task-name", "the task name is not valid", 2))
-    if _launcher_state_env() in os.environ and (args.test_command or args.test_include or args.test_timeout is not None):
-        return emit(_workflow_summary_refusal(
-            args, "test-flags-refused", "the test settings cannot be chosen from an agent shell", 3))
-    if args.test_command:
-        try:
-            shlex.split(args.test_command)
-        except ValueError:
-            return emit(_workflow_summary_refusal(args, "tests-command-invalid", "the test command cannot be split", 2))
-    try:
-        source_dir = _resolve_source_dir(None)
-    except SystemExit:
-        return emit(_workflow_summary_refusal(
-            args, "source-unavailable", "the quoin source directory cannot be resolved", 2))
-
-    cancel = phase_loop.CancelToken()
-
-    def _on_signal(signum, _frame):
-        cancel.cancel(signum)
-
-    previous = {}
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            previous[sig] = signal.signal(sig, _on_signal)
-        except ValueError:  # not the main thread: no handlers, no cancel by signal
-            break
-
-    try:
-        paths = _supervisor_paths(project_root, args.task)
-        acquired, held_pid = _acquire_supervisor_lock(
-            paths["memory_dir"], paths["lock"], paths["result"], args.task,
-            args.max_relaunch, None, runtime="opencode",
-        )
-        if not acquired:
-            holder = _read_json(paths["lock"])
-            runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
-            summary = _workflow_summary_refusal(
-                args, "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3)
-        else:
-            try:
-                summary = None
-                try:
-                    options = _workflow_options(args)
-                    scope, scope_source = handoff.resolve_profile(
-                        project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
-                    )
-                    drv = _make_opencode_driver(project_root)
-                    requested_policy = (
-                        (lambda: _handoff_policy_evaluator(project_root)(options.profile))
-                        if options.continue_ else None
-                    )
-                    coord = workflow.Coordinator(
-                        drv, project_root, args.task, options, source_dir=source_dir, cancel=cancel,
-                        scope=scope, scope_source=scope_source, backoff_fn=_opencode_backoff,
-                        requested_policy=requested_policy,
-                    )
-                    coord.begin()
-                    summary = coord.run_items(coord.sequence(coord.load_state()))
-                    for message in coord.errors:
-                        print("quoin: " + message, file=sys.stderr)
-                except workflow.WorkflowRefused as exc:
-                    summary = _workflow_summary_refusal(args, exc.code, exc.message, exc.exit_code)
-                except handoff.HandoffRefused as exc:
-                    summary = _workflow_summary_refusal(args, exc.code, exc.message, 2)
-                except Exception as exc:  # noqa: BLE001
-                    summary = _workflow_summary_refusal(
-                        args, "driver-error", "workflow failed: " + type(exc).__name__, 1)
-                    summary["outcome"] = "ERROR"
-                if args.halt_on_abort and not paths["result"].exists():
-                    _write_supervisor_result(paths["memory_dir"], paths["result"], summary["outcome"], 0)
-            finally:
-                _release_supervisor_lock(paths["lock"], os.getpid())
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
-    _print_workflow_adopt_advice(args, summary, project_root)
-    return emit(summary)
-
-
-def _cmd_opencode_workflow_next(args: argparse.Namespace) -> int:
-    """`quoin opencode workflow next`: print the next step of a task's
-    workflow. Takes no lock and writes nothing."""
-    from quoin.opencode_adapter import handoff, workflow  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    source_dir, refused = _handoff_source(args)
-    if refused is not None:
-        return refused
-    try:
-        advice = workflow.next_action(project_root, args.task, source_dir)
-    except handoff.HandoffRefused as exc:
-        return _handoff_refused(exc)
-    return _gate_json({
-        "outcome": "NEXT_STEP", "next": advice["next"], "status": advice["status"],
-        "facts": advice["facts"], "hint": advice["hint"],
-    }, 0)
 
 
 def _strip_handoff_pythonpath() -> None:
@@ -3411,9 +1727,6 @@ def main(argv: list[str] | None = None) -> int:
               quoin install                  Install for Claude Code (prompts for scope)
               quoin install --scope project  Install into ./.claude for this project only
               quoin doctor                   Health-check an existing install (read-only)
-              quoin sessions                 List Agent Desk sessions for the current folder
-              quoin attach                   Attach to an Agent Desk session from any terminal
-              quoin dashboard                Open the workflow dashboard in a browser
               quoin router setup             Enable open-model routing (claude-code-router)
               quoin models set opus glm      Map the opus tier to an OpenRouter model
               quoin run --autonomous <task>  Run the external autonomous supervisor
@@ -3431,13 +1744,11 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Install Quoin for a runtime. Claude installs globally to ~/.claude. "
-            "Codex generates or checks repo-local AGENTS.md scaffold only. "
-            "OpenCode installs a repo-local .opencode/ scaffold under a project root."
+            "Codex generates or checks repo-local AGENTS.md scaffold only."
         ),
         help=(
             "Install Quoin for a runtime: Claude globally to ~/.claude "
-            "(default), Codex repo-local AGENTS.md scaffold, or OpenCode "
-            "repo-local .opencode/ scaffold"
+            "(default) or Codex repo-local AGENTS.md scaffold"
         ),
         epilog=textwrap.dedent("""\
             Scope (--scope):
@@ -3453,43 +1764,27 @@ def main(argv: list[str] | None = None) -> int:
               quoin install --dev
               quoin install --scope project
               quoin install --runtime codex --project-root .
-              quoin install --runtime opencode --project-root .
               quoin install --autocompact-pct 75
               quoin install --clear-autocompact-env
-              quoin install --with-context-tracker
-              quoin install --remove-context-tracker
               quoin install --with-workflow-tasks
-              quoin install --setup-agentdesk
               quoin install --remove-workflow-tasks
         """),
     )
     install_p.add_argument(
         "--runtime",
-        choices=("claude", "codex", "opencode"),
+        choices=("claude", "codex"),
         default="claude",
         help=(
             "Runtime target. 'claude' installs globally to ~/.claude; "
-            "'codex' generates repo-local AGENTS.md only; 'opencode' installs "
-            "a repo-local .opencode/ scaffold. Defaults to claude."
+            "'codex' generates repo-local AGENTS.md only. Defaults to claude."
         ),
     )
     install_p.add_argument(
         "--project-root",
         default=".",
         help=(
-            "Project root for --runtime codex AGENTS.md generation/checking, "
-            "or --runtime opencode scaffold install; defaults to the current "
-            "directory."
-        ),
-    )
-    install_p.add_argument(
-        "--profile",
-        default=None,
-        metavar="P",
-        help=(
-            "Only valid with --runtime opencode: an install profile label "
-            "recorded in the install metadata. Omitted, a reinstall keeps "
-            "the previously recorded label (null on a first install)."
+            "Project root for --runtime codex AGENTS.md generation/checking; "
+            "defaults to the current directory."
         ),
     )
     install_p.add_argument(
@@ -3497,8 +1792,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "For --runtime codex, check AGENTS.md without writing files "
-            "(same behavior as 'quoin codex init --check'). For --runtime "
-            "opencode, report what would change without writing files."
+            "(same behavior as 'quoin codex init --check')."
         ),
     )
     install_p.add_argument("--dev", action="store_true", help="Install dev dependencies")
@@ -3578,39 +1872,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     install_p.add_argument(
-        "--with-context-tracker",
-        action="store_true",
-        default=False,
-        help=(
-            "Not installed unless you pass this flag or answer yes when asked: deploy the context-tracker mod (/ctx pane) to "
-            "skills/context-tracker/. Once installed, later installs refresh it."
-        ),
-    )
-    install_p.add_argument(
-        "--remove-context-tracker",
-        action="store_true",
-        default=False,
-        help=(
-            "Remove the opt-in context-tracker mod folder. Mutually exclusive "
-            "with --with-context-tracker."
-        ),
-    )
-    install_p.add_argument(
         "--with-workflow-tasks",
         action="store_true",
         default=False,
         help=(
             "Not installed unless you pass this flag or answer yes when asked: deploy the workflow-tasks mod (/quoin-tasks pane) to "
             "skills/workflow-tasks/. Once installed, later installs refresh it."
-        ),
-    )
-    install_p.add_argument(
-        "--setup-agentdesk",
-        action="store_true",
-        default=False,
-        help=(
-            "Run the bundled agentdesk setup as the last install step (user scope "
-            "only; may ask for a password when Homebrew is missing)."
         ),
     )
     install_p.add_argument(
@@ -3633,7 +1900,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     doctor_p.add_argument(
         "--runtime",
-        choices=("claude", "codex", "opencode"),
+        choices=("claude", "codex"),
         default="claude",
         help="Runtime to check; defaults to claude.",
     )
@@ -3651,37 +1918,19 @@ def main(argv: list[str] | None = None) -> int:
         "--project-root",
         default=".",
         help=(
-            "Project root for Codex readiness checks or the OpenCode adapter's "
-            "install/census checks; defaults to the current directory."
+            "Project root for Codex readiness checks; defaults to the current directory."
         ),
     )
     doctor_p.add_argument(
         "--source-dir",
         metavar="PATH",
-        help="Override quoin data source directory for Codex/OpenCode adapter scripts.",
+        help="Override quoin data source directory for Codex adapter scripts.",
     )
     doctor_p.add_argument(
         "--smoke",
         action="store_true",
         help=(
-            "For --runtime codex, also run the deterministic repo-local smoke check. "
-            "For --runtime opencode, run only the offline render/smoke checks "
-            "(skip host checks that depend on this machine's install state)."
-        ),
-    )
-    doctor_p.add_argument(
-        "--json",
-        action="store_true",
-        help="Only valid with --runtime opencode: print a machine-readable report.",
-    )
-    doctor_p.add_argument(
-        "--profile",
-        default=None,
-        metavar="PROFILE",
-        help=(
-            "Only valid with --runtime opencode (not with --smoke): also evaluate this "
-            "profile's configuration the way a phase run does and report what would "
-            "refuse it. Credentials are never resolved."
+            "For --runtime codex, also run the deterministic repo-local smoke check."
         ),
     )
 
@@ -3713,533 +1962,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Override quoin data source directory for Codex adapter scripts.",
     )
 
-    opencode_p = sub.add_parser(
-        "opencode",
-        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script; explain or compile the runtime configuration; probe a gateway model).",
-        help="Repo-local OpenCode helpers",
-    )
-    opencode_sub = opencode_p.add_subparsers(dest="opencode_command")
-
-    opencode_uninstall_p = opencode_sub.add_parser(
-        "uninstall",
-        description="Remove everything Quoin owns under a project's .opencode/ scaffold.",
-        help="Remove the repo-local .opencode/ scaffold Quoin owns",
-    )
-    opencode_uninstall_p.add_argument(
-        "--project-root",
-        default=".",
-        help="Project root holding the .opencode/ scaffold; defaults to the current directory.",
-    )
-    opencode_uninstall_p.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Report what would be removed without writing or deleting anything.",
-    )
-
-    opencode_script_p = opencode_sub.add_parser(
-        "script",
-        description="Run an allowlisted Quoin script by name, under the same output-safety policy an OpenCode role uses.",
-        help="Run an allowlisted Quoin script by name",
-    )
-    opencode_script_p.add_argument(
-        "--source-dir",
-        metavar="PATH",
-        help="Override quoin data source directory.",
-    )
-    opencode_script_p.add_argument(
-        "name",
-        help="Script name from the allowlist (e.g. path_resolve, validate_artifact).",
-    )
-    opencode_script_p.add_argument(
-        "script_args",
-        nargs=argparse.REMAINDER,
-        help="Arguments forwarded to the script unchanged.",
-    )
-
-    opencode_config_p = opencode_sub.add_parser(
-        "config",
-        description="Explain, compile or import the layered OpenCode runtime configuration.",
-        help="Explain or compile the OpenCode runtime configuration",
-    )
-    opencode_config_sub = opencode_config_p.add_subparsers(dest="config_command")
-
-    config_explain_p = opencode_config_sub.add_parser(
-        "explain",
-        description="Show how the layered configuration resolves for a profile and project.",
-        help="Show how the configuration resolves",
-    )
-    config_explain_p.add_argument(
-        "--profile", help="Profile name; defaults to the profile named by the project file."
-    )
-    config_explain_p.add_argument(
-        "--project-root", default=".", help="Project root; defaults to the current directory."
-    )
-    config_explain_p.add_argument(
-        "--redact",
-        action="store_true",
-        help="Mask endpoint hosts, host lists, keychain accounts and the output location.",
-    )
-    config_explain_p.add_argument("--json", action="store_true", help="Print JSON instead of text.")
-    config_explain_p.add_argument(
-        "--run",
-        metavar="RUN_ID",
-        help="Show the effective-configuration record stored for a run instead of evaluating now.",
-    )
-    config_explain_p.add_argument(
-        "--export",
-        action="store_true",
-        help="Also write the live effective-configuration record under the profile's exports directory.",
-    )
-
-    config_compile_p = opencode_config_sub.add_parser(
-        "compile",
-        description="Compile the configuration into a native OpenCode config file outside the project.",
-        help="Compile the native OpenCode config",
-    )
-    config_compile_p.add_argument("--profile", required=True, help="Profile name to compile.")
-    config_compile_p.add_argument(
-        "--project-root", default=".", help="Project root; defaults to the current directory."
-    )
-    config_compile_p.add_argument(
-        "--output",
-        metavar="DIR",
-        help=(
-            "Directory the compiled files are written inside (a directory, not a file); "
-            "defaults to a per-project location under the state directory."
-        ),
-    )
-    config_compile_p.add_argument(
-        "--check",
-        action="store_true",
-        help="Compare the written files with a fresh build and report whether they are up to date; writes nothing.",
-    )
-    config_compile_p.add_argument(
-        "--allow-unqualified",
-        action="store_true",
-        help="Accept models without a valid qualification record (refused for work under a managed policy).",
-    )
-
-    config_import_p = opencode_config_sub.add_parser(
-        "import-preview",
-        description=(
-            "Propose a personal profile from the model mapping `quoin models` keeps. "
-            "The preview writes nothing; --apply writes the profile after every provider "
-            "model id is confirmed."
-        ),
-        help="Propose a personal profile from the quoin models mapping",
-    )
-    config_import_p.add_argument(
-        "--profile-name", default="personal", help="Name of the proposed profile; defaults to personal."
-    )
-    config_import_p.add_argument("--apply", action="store_true", help="Write the proposed profile.")
-    config_import_p.add_argument(
-        "--confirm-model-id",
-        action="append",
-        default=[],
-        metavar="ID",
-        help="Confirm one provider model id (repeat for every id in the proposal).",
-    )
-    config_import_p.add_argument("--force", action="store_true", help="Replace an existing profile.")
-
-    opencode_probe_p = opencode_sub.add_parser(
-        "probe",
-        description=(
-            "Qualify a profile model against its gateway with a short synthetic handshake. "
-            "The probe sends live requests that may be billed, and writes a qualification "
-            "record that compile checks."
-        ),
-        help="Qualify a profile model against its gateway with a short synthetic handshake",
-    )
-    opencode_probe_p.add_argument("--profile", required=True, help="Profile name.")
-    opencode_probe_p.add_argument(
-        "--synthetic-only",
-        action="store_true",
-        help="Confirm that only synthetic prompts are sent; the probe refuses to run without it.",
-    )
-    opencode_probe_p.add_argument(
-        "--model",
-        metavar="NAME",
-        help="Profile model name to probe; defaults to the profile's default model.",
-    )
-    opencode_probe_p.add_argument(
-        "--project-root",
-        default=None,
-        help="Also apply this project's classification and policy; it must be classified work or personal.",
-    )
-
-    opencode_status_p = opencode_sub.add_parser(
-        "status",
-        description=(
-            "Report the latest OpenCode phase run of a task, or one run id: state, "
-            "child process, last event and the task lock. Read-only: nothing is "
-            "repaired, reconciled or signalled."
-        ),
-        help="Report the latest OpenCode phase run of a task (read-only)",
-    )
-    opencode_status_p.add_argument(
-        "--project-root", default=".", help="Project root the run belongs to; defaults to the current directory."
-    )
-    status_target = opencode_status_p.add_mutually_exclusive_group(required=True)
-    status_target.add_argument("--task", help="Task name; reports its latest run.")
-    status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
-    opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
-
-    opencode_purge_p = opencode_sub.add_parser(
-        "purge",
-        description=(
-            "Delete a runtime profile's stored data: its OpenCode data and state (including the session "
-            "database), cache, temporary files, exports, start records, test and window files, snapshots, "
-            "crash files, compiled configuration and the run sidecars of this profile in every project it "
-            "was used in. Kept: the profile stamp, the project index, auth.json, mcp-auth.json and the npm "
-            "registry file. Task folders, workflow state, continuation records and gate files under "
-            ".workflow_artifacts are never touched. Refuses while a run of the profile is active. Deleting "
-            "needs --yes; --dry-run lists without deleting."
-        ),
-        help="Delete a runtime profile's stored data (credentials are kept)",
-    )
-    opencode_purge_p.add_argument("--profile", required=True, help="Runtime profile whose storage to purge.")
-    opencode_purge_p.add_argument(
-        "--project-root", default=None,
-        help="Also visit this project's run store when the profile's project index does not list it.",
-    )
-    opencode_purge_p.add_argument("--dry-run", action="store_true", help="List what would be removed and kept; delete nothing.")
-    opencode_purge_p.add_argument("--yes", action="store_true", help="Confirm the deletion.")
-    opencode_purge_p.add_argument("--json", action="store_true", help="Print the result as one JSON object.")
-
-    opencode_setup_p = opencode_sub.add_parser(
-        "setup",
-        description=(
-            "Set up a project for OpenCode in one step: find or install the pinned OpenCode "
-            "release, write the project scaffold, create or reuse a personal profile from "
-            "'quoin models', qualify its models, compile it and run the doctor. Safe to rerun: "
-            "only missing pieces are done. Never stores credentials."
-        ),
-        help="Set up OpenCode for a project in one step",
-    )
-    opencode_setup_p.add_argument(
-        "--project-root", default=".", help="Project to set up; defaults to the current directory."
-    )
-    opencode_setup_p.add_argument(
-        "--profile", default=None,
-        help="Runtime profile to create or reuse; defaults to the project's last profile, else 'personal'.",
-    )
-    opencode_setup_p.add_argument(
-        "--yes", action="store_true",
-        help=(
-            "Answer yes to the user-level OpenCode install offer and reuse model id confirmations "
-            "already given; never confirms a new model id."
-        ),
-    )
-    opencode_setup_p.add_argument("--source-dir", metavar="PATH", help="Override quoin data source directory.")
-
-    opencode_start_p = opencode_sub.add_parser(
-        "start",
-        description=(
-            "Open the OpenCode terminal interface in a project with the compiled profile "
-            "configuration, an isolated data directory and the same checks as a phase run. "
-            "The interface replaces this process; no events are captured and no task lock "
-            "or run record is written."
-        ),
-        help="Open the OpenCode terminal interface with a compiled profile",
-    )
-    opencode_start_p.add_argument(
-        "--project-root", default=".", help="Project to open; defaults to the current directory."
-    )
-    opencode_start_p.add_argument("--profile", required=True, help="Runtime profile to launch with.")
-    opencode_start_p.add_argument(
-        "--dry-run", action="store_true",
-        help="Validate and print the command, directory and environment variable names without starting.",
-    )
-
-    opencode_gate_p = opencode_sub.add_parser(
-        "gate",
-        allow_abbrev=False,
-        description=(
-            "Evaluate one gated phase of a task with the deterministic checks and print one "
-            "JSON line. Without --write nothing is written and no lock is taken. Exit 0 PASS, "
-            "7 FAIL, 2 refused or unreadable store, 3 task lock held, 8 audit file not written."
-        ),
-        help="Evaluate a gated phase with the deterministic checks",
-    )
-    opencode_gate_p.add_argument("--task", required=True, help="Task name.")
-    opencode_gate_p.add_argument(
-        "--phase", required=True, type=_gated_phase, choices=_GATED_PHASE_CHOICES,
-        help="Gated phase: " + ", ".join(_GATED_PHASE_CHOICES) + ".",
-    )
-    opencode_gate_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
-    opencode_gate_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
-    opencode_gate_p.add_argument(
-        "--write", action="store_true",
-        help="Write the audit file into the stage folder and record the verdict (takes the task lock).",
-    )
-    opencode_gate_p.add_argument(
-        "--explanation-file", default=None,
-        help="Text to carry in the audit file; read up to 64 KiB, never evaluated.",
-    )
-    opencode_gate_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
-
-    opencode_adopt_p = opencode_sub.add_parser(
-        "adopt",
-        description=(
-            "Human-only step: record evidence for a phase that finished outside a recorded run, "
-            "from the tree as it is now. Takes the task lock. Exit 0, 2 refused, 3 lock held."
-        ),
-        help="Record evidence for a phase finished outside a recorded run",
-    )
-    opencode_adopt_p.add_argument("--task", required=True, help="Task name.")
-    opencode_adopt_p.add_argument(
-        "--phase", required=True, type=_gated_phase, choices=_GATED_PHASE_CHOICES,
-        help="Gated phase: " + ", ".join(_GATED_PHASE_CHOICES) + ".",
-    )
-    opencode_adopt_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
-    opencode_adopt_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
-
-    opencode_test_run_p = opencode_sub.add_parser(
-        "test-run",
-        allow_abbrev=False,
-        description=(
-            "Run the task's configured test command against a throwaway copy of the working tree "
-            "and print one JSON line. The command is fixed in the task's workflow state. "
-            "Exit 0 PASSED, 1 FAILED, 2 refused."
-        ),
-        help="Run the task's configured tests in a throwaway workspace",
-    )
-    opencode_test_run_p.add_argument("--task", required=True, help="Task name.")
-    opencode_test_run_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
-    opencode_test_run_p.add_argument(
-        "--profile", default=None,
-        help="Runtime profile whose storage the run uses; defaults to the profile recorded for the task. "
-             "Ignored inside an agent shell, which already carries its profile.",
-    )
-
-    opencode_handoff_p = opencode_sub.add_parser(
-        "handoff",
-        allow_abbrev=False,
-        description=(
-            "Write, show or validate the portable continuation record of a task. Prints one JSON "
-            "line. Exit 0, 2 refused, 3 task lock held (write), 8 record not written."
-        ),
-        help="Write, show or validate a task's continuation record",
-    )
-    handoff_sub = opencode_handoff_p.add_subparsers(dest="handoff_command", required=True)
-
-    def _handoff_common(sub_p, *, profile: bool):
-        sub_p.add_argument("--task", required=True, help="Task name.")
-        sub_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
-        sub_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
-        if profile:
-            sub_p.add_argument("--profile", default=None, help="Runtime profile; must match the one recorded for the task.")
-
-    handoff_write_p = handoff_sub.add_parser(
-        "write", allow_abbrev=False, help="Build the record from the workflow state, run records and the tree",
-        description="Build and write the continuation record (takes the task lock).",
-    )
-    _handoff_common(handoff_write_p, profile=True)
-    handoff_write_p.add_argument(
-        "--decision", action="append", default=[],
-        help="A decision to record (repeatable, at most 20 per call, 2000 characters each).",
-    )
-    handoff_write_p.add_argument(
-        "--note", action="append", default=[],
-        help="A note to record (repeatable, at most 20 per call, 2000 characters each).",
-    )
-    handoff_show_p = handoff_sub.add_parser(
-        "show", allow_abbrev=False, help="Validate the record and print the next steps",
-        description="Validate the record against the tree and print what to do next. Writes nothing.",
-    )
-    _handoff_common(handoff_show_p, profile=True)
-    handoff_validate_p = handoff_sub.add_parser(
-        "validate", allow_abbrev=False, help="Check the record alone",
-        description="Check the record file against the schema. Reads nothing else.",
-    )
-    _handoff_common(handoff_validate_p, profile=False)
-
-    opencode_workflow_p = opencode_sub.add_parser(
-        "workflow",
-        allow_abbrev=False,
-        description="Read-only helpers for the whole-task workflow. Prints one JSON line.",
-        help="Show the next step of a task's workflow",
-    )
-    workflow_sub = opencode_workflow_p.add_subparsers(dest="workflow_command", required=True)
-    workflow_next_p = workflow_sub.add_parser(
-        "next", allow_abbrev=False, help="Print the next step",
-        description="Print the next step from the workflow state and the tree. Takes no lock, writes nothing.",
-    )
-    workflow_next_p.add_argument("--task", required=True, help="Task name.")
-    workflow_next_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
-    workflow_next_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
-
-    dashboard_p = sub.add_parser(
-        "dashboard",
-        description=(
-            "Launch the quoin workflow dashboard: a local read-only HTTP "
-            "server (127.0.0.1) that visualizes .workflow_artifacts/ state."
-        ),
-        help="Launch the quoin workflow dashboard (local HTTP server, 127.0.0.1)",
-    )
-    dashboard_p.add_argument(
-        "--port", type=int, default=8787,
-        help="Port to listen on (default 8787; auto-increments if taken; 0 = ephemeral)",
-    )
-    dashboard_p.add_argument(
-        "--no-browser", action="store_true",
-        help="Do not open a browser window after startup",
-    )
-    dashboard_p.add_argument(
-        "--project-root", default=".",
-        help="Project root to scan for .workflow_artifacts/ (default: cwd)",
-    )
-    dashboard_p.add_argument(
-        "--source-dir", metavar="PATH",
-        help="Override quoin data source directory (same as 'quoin install --source-dir')",
-    )
-
-    streamdeck_p = sub.add_parser(
-        "streamdeck",
-        description=(
-            "Optional Stream Deck integration (opt-in, macOS only). Plain `quoin install` never installs it; "
-            "these commands manage the component, its plugin and its Claude Code / Codex hooks."
-        ),
-        help="Optional Stream Deck integration (opt-in): install, upgrade, status, uninstall",
-    )
-    streamdeck_sub = streamdeck_p.add_subparsers(
-        dest="streamdeck_command", title="streamdeck commands", metavar="<subcommand>"
-    )
-
-    def _sd_paths(p):
-        p.add_argument("--runtime-dir", dest="runtime_dir", metavar="DIR", help="Component runtime directory.")
-        p.add_argument("--plugins-dir", dest="plugins_dir", metavar="DIR", help="Stream Deck plugins directory.")
-        p.add_argument("--state-root", dest="state_root", metavar="DIR", help="Agent Desk Stream Deck state root.")
-        p.add_argument("--claude-settings", dest="claude_settings", metavar="FILE", help="Claude Code settings.json.")
-        p.add_argument("--codex-home", dest="codex_home", metavar="DIR", help="Codex home directory.")
-        p.add_argument("--agentdesk", metavar="PATH", help="Path to agentdesk.zsh.")
-
-    def _sd_runtimes(value):
-        names = [n.strip() for n in value.split(",") if n.strip()]
-        bad = [n for n in names if n not in ("claude", "codex")]
-        if bad or not names:
-            raise argparse.ArgumentTypeError("expected a comma-separated list of claude, codex (got %r)" % value)
-        return list(dict.fromkeys(names))
-
-    for _verb, _help in (("install", "Install the component, its plugin and hooks (adopts a prototype install)."),
-                         ("upgrade", "Upgrade an installed component to this package's version.")):
-        _p = streamdeck_sub.add_parser(_verb, description=_help, help=_help)
-        _sd_paths(_p)
-        _p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
-                        help="Hooks to manage (default both; passing it explicitly without a runtime removes "
-                             "that runtime's hooks).")
-        _p.add_argument("--python", metavar="PATH", help="Python interpreter to use for the hooks.")
-        _p.add_argument("--node", metavar="auto|bundled|PATH", default=None,
-                        help="Node for the plugin: auto, bundled, or a path.")
-        _p.add_argument("--prereqs", choices=("ask", "all", "none"), default="ask",
-                        help="Install missing prerequisites: ask (default), all, or none.")
-        _p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
-        _open = _p.add_mutually_exclusive_group()
-        _open.add_argument("--open-profile", dest="open_profile", action="store_true", default=None,
-                           help="Open the profile in Stream Deck afterwards, even if it is already imported.")
-        _open.add_argument("--no-open-profile", dest="open_profile", action="store_false",
-                           help="Do not open the profile. By default install opens it once, when Stream Deck "
-                                "does not have it yet; upgrade never does.")
-        _p.add_argument("--allow-downgrade", action="store_true",
-                        help="Replace an installed component that is newer than this package.")
-
-    _sd_uninstall_p = streamdeck_sub.add_parser(
-        "uninstall",
-        description="Remove the component and its hooks, leaving inert hook stubs for running agents.",
-        help="Remove the component and its hooks.",
-    )
-    _sd_paths(_sd_uninstall_p)
-    _sd_uninstall_p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
-                                 help="Remove only these runtimes' hooks and keep the rest installed.")
-    _sd_uninstall_p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
-    _sd_uninstall_p.add_argument("--purge", action="store_true",
-                                 help="Also remove the inert stubs, the config and the state.")
-
-    _sd_codes = ""
-    if "streamdeck" in (sys.argv if argv is None else argv):
-        from quoin.streamdeck import status as _sd_status
-        _sd_codes = "problem codes: " + ", ".join(_sd_status.PROBLEM_CODES)
-    _sd_status_p = streamdeck_sub.add_parser(
-        "status",
-        description="Read-only report on the installed component.",
-        help="Show the state of the component (read-only).",
-        epilog="exit codes: 0 healthy, 10 not installed, 11 problems found, 12 an operation was interrupted\n"
-               + _sd_codes,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _sd_paths(_sd_status_p)
-    _sd_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
-
     sub.add_parser(
         "bench",
         help="Run the tiered paired SWE-bench benchmark from a source checkout "
              "(quoin bench tiered --help)",
     )
-
-    from quoin import agentdesk_sessions as _ads
-
-    sessions_p = sub.add_parser(
-        "sessions",
-        description=(
-            "List Agent Desk sessions for the current folder (or all of them with --all). "
-            "Works from any shell; no need to have sourced the launcher."
-        ),
-        help="List, kill or prune Agent Desk sessions",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_ads.KEY_HINTS,
-    )
-    sessions_p.add_argument("--all", dest="list_all", action="store_true",
-                            help="Show every Agent Desk session, not just those for this folder.")
-    sessions_p.add_argument("--json", dest="list_json", action="store_true",
-                            help="Print the listing as JSON.")
-    sessions_sub = sessions_p.add_subparsers(dest="sessions_command", required=False)
-    sessions_kill_p = sessions_sub.add_parser(
-        "kill",
-        description="Delete one Agent Desk session. A running session needs --force.",
-        help="Delete a session",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_ads.KEY_HINTS,
-    )
-    sessions_kill_p.add_argument("name", help="Session name as shown by `quoin sessions --all`.")
-    sessions_kill_p.add_argument("--force", action="store_true",
-                                 help="Stop the session if it is running, then delete it.")
-    sessions_prune_p = sessions_sub.add_parser(
-        "prune",
-        description=(
-            "Delete EXITED Agent Desk sessions that have a launch record, and the launch records "
-            "left behind. Never touches a running session."
-        ),
-        help="Delete EXITED sessions",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "EXITED sessions started before launch records existed are listed as skipped: Zellij\n"
-            "shares its resurrection cache across socket directories, so one may belong to plain\n"
-            "Zellij. Delete them with `quoin sessions kill NAME` or --include-unrecorded.\n\n"
-            "EXITED sessions that are not Agent Desk's (Zellij shares its resurrection cache across\n"
-            "socket directories) are left alone and can still force a _N suffix on a new session;\n"
-            "remove one with `zellij delete-session NAME` in a shell that has not sourced the launcher.\n\n"
-            + _ads.KEY_HINTS
-        ),
-    )
-    sessions_prune_p.add_argument("--dry-run", action="store_true",
-                                  help="Report what would be removed without removing it.")
-    sessions_prune_p.add_argument("--include-unrecorded", dest="prune_unrecorded", action="store_true",
-                                  help="Also delete EXITED sessions that have no launch record "
-                                       "but carry an Agent Desk name.")
-    sessions_prune_p.add_argument("--json", dest="prune_json", action="store_true",
-                                  help="Print the result as JSON.")
-
-    attach_p = sub.add_parser(
-        "attach",
-        description=(
-            "Attach to an Agent Desk session. Without a name, picks the session for the current "
-            "folder, or asks when several match."
-        ),
-        help="Attach to an Agent Desk session",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_ads.KEY_HINTS,
-    )
-    attach_p.add_argument("name", nargs="?", help="Session name; see `quoin sessions --all`.")
 
     router_p = sub.add_parser(
         "router",
@@ -4272,19 +1999,6 @@ def main(argv: list[str] | None = None) -> int:
         description="Show CCR install state, config, proxy liveness, and launch mode (read-only).",
         help="Show CCR install state, config, proxy liveness, and active launch mode (read-only).",
     )
-
-    code_p = sub.add_parser(
-        "code",
-        description=(
-            "Start an OpenCode session in a project set up with 'quoin opencode setup': run the "
-            "fast checks, recompile the profile if it or the project changed, then open "
-            "'quoin opencode start'. Remembers the last profile used per project."
-        ),
-        help="Start an OpenCode session (after 'quoin opencode setup')",
-    )
-    code_p.add_argument("--profile", default=None, help="Runtime profile; defaults to this project's last profile.")
-    code_p.add_argument("--project-root", default=".", help="Project to open; defaults to the current directory.")
-    code_p.add_argument("--source-dir", metavar="PATH", help="Override quoin data source directory.")
 
     models_p = sub.add_parser(
         "models",
@@ -4343,9 +2057,7 @@ def main(argv: list[str] | None = None) -> int:
             "Run the external autonomous supervisor: relaunches "
             '`claude -p "/run --resume --autonomous <task>"` in fresh '
             "headless sessions until the task's done- or halt-sentinel "
-            "appears, bounded by --max-relaunch and exponential backoff. "
-            "With --runtime opencode it instead runs one workflow phase "
-            "headlessly on OpenCode and prints a JSON summary."
+            "appears, bounded by --max-relaunch and exponential backoff."
         ),
         help="Run the external autonomous supervisor for a task (relaunch loop)",
     )
@@ -4403,46 +2115,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.add_argument(
-        "--runtime",
-        choices=("claude", "opencode"),
-        default="claude",
-        help="Runtime that drives the run (default: claude).",
-    )
-    run_p.add_argument(
-        "--profile",
-        default=None,
-        help="Only with --runtime opencode: runtime profile to launch with.",
-    )
-    run_p.add_argument(
-        "--phase",
-        default=None,
-        help=(
-            "Only with --runtime opencode: the single workflow phase to run, "
-            "for example plan or review."
-        ),
-    )
-    run_p.add_argument(
-        "--stage",
-        default=None,
-        help="Only with --runtime opencode: stage number for a multi-stage task.",
-    )
-    run_p.add_argument(
-        "--new-run",
-        action="store_true",
-        help=(
-            "Only with --runtime opencode: start the phase over instead of "
-            "resuming an interrupted run."
-        ),
-    )
-    run_p.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help=(
-            "Only with --runtime opencode: mark the command argument as a "
-            "non-interactive run."
-        ),
-    )
-    run_p.add_argument(
         "--budget",
         default=None,
         help=(
@@ -4451,58 +2123,6 @@ def main(argv: list[str] | None = None) -> int:
             "only; see autonomous-mode.md."
         ),
     )
-    run_p.add_argument(
-        "--workflow", action="store_true",
-        help="Only with --runtime opencode: run the whole task (every phase) headlessly instead of one phase.",
-    )
-    run_p.add_argument(
-        "--continue", dest="continue_", action="store_true",
-        help="Only with --workflow: continue a started workflow from its state or continuation record.",
-    )
-    run_p.add_argument(
-        "--accept-unverified-policy", action="store_true",
-        help=(
-            "Only with --workflow --continue: accept the policy of a recorded run that has no "
-            "effective-config record as unknown. A recorded policy narrower than the requested one is still refused."
-        ),
-    )
-    run_p.add_argument(
-        "--no-pause", action="store_true",
-        help="Only with --workflow: do not stop for review after the plan and review gates.",
-    )
-    run_p.add_argument(
-        "--through", choices=_WORKFLOW_THROUGH, default=None,
-        help="Only with --workflow: stop after this phase passes its gate.",
-    )
-    run_p.add_argument(
-        "--from-discover", action="store_true",
-        help="Only with --workflow: start with discover even when its files exist.",
-    )
-    run_p.add_argument(
-        "--max-critic-rounds", type=int, default=None,
-        help="Only with --workflow: critic rounds per plan (default 2, at most 5).",
-    )
-    run_p.add_argument(
-        "--test-command", default=None,
-        help="Only with --workflow: command run after implement in a throwaway copy of the tree.",
-    )
-    run_p.add_argument(
-        "--test-include", action="append", default=None,
-        help="Only with --workflow: extra path copied into the test workspace (repeatable).",
-    )
-    run_p.add_argument(
-        "--test-timeout", type=float, default=None,
-        help="Only with --workflow: test command timeout in seconds.",
-    )
-    run_p.add_argument(
-        "--rerun-from", choices=_WORKFLOW_RERUN, default=None,
-        help="Only with --workflow --continue: restart the current stage from this phase.",
-    )
-    run_p.add_argument(
-        "--adopt", choices=_WORKFLOW_THROUGH, default=None,
-        help="Only with --workflow --continue: record the current output of this phase as its evidence.",
-    )
-
     args = parser.parse_args(argv)
 
     if args.command == "install" or args.command is None:
@@ -4515,71 +2135,17 @@ def main(argv: list[str] | None = None) -> int:
         # _cmd_claude_install, ran after every deploy_* except deploy_hooks).
         try:
             _validate_autocompact_args(args)
-            _validate_context_tracker_args(args)
             _validate_workflow_tasks_args(args)
         except ValueError as exc:
             install_p.error(str(exc))
         return _cmd_install(args)
-    elif args.command == "dashboard":
-        return _cmd_dashboard(args)
     elif args.command == "doctor":
         return _cmd_doctor(args)
-    elif args.command == "sessions":
-        if args.sessions_command and (args.list_all or args.list_json):
-            sessions_p.error("--all and --json belong to the listing and cannot be combined with kill or prune")
-        return _cmd_sessions(args)
-    elif args.command == "attach":
-        return _cmd_attach(args)
     elif args.command == "codex":
         if args.codex_command == "init":
             return _cmd_codex_init(args)
         codex_p.print_help()
         return 1
-    elif args.command == "opencode":
-        if args.opencode_command == "uninstall":
-            from quoin.opencode_adapter.install import run_uninstall
-
-            return run_uninstall(args.project_root, args.dry_run, sys.stdout, sys.stderr)
-        if args.opencode_command == "script":
-            return _cmd_opencode_script(args)
-        if args.opencode_command == "probe":
-            return _cmd_opencode_probe(args)
-        if args.opencode_command == "status":
-            return _cmd_opencode_status(args)
-        if args.opencode_command == "purge":
-            return _cmd_opencode_purge(args)
-        if args.opencode_command == "start":
-            return _cmd_opencode_start(args)
-        if args.opencode_command == "setup":
-            return _cmd_opencode_setup(args)
-        if args.opencode_command == "gate":
-            return _cmd_opencode_gate(args)
-        if args.opencode_command == "adopt":
-            return _cmd_opencode_adopt(args)
-        if args.opencode_command == "test-run":
-            return _cmd_opencode_test_run(args)
-        if args.opencode_command == "handoff":
-            return _cmd_opencode_handoff(args)
-        if args.opencode_command == "workflow":
-            return _cmd_opencode_workflow_next(args)
-        if args.opencode_command == "config":
-            if args.config_command == "explain":
-                return _cmd_opencode_config_explain(args)
-            if args.config_command == "compile":
-                return _cmd_opencode_config_compile(args)
-            if args.config_command == "import-preview":
-                return _cmd_opencode_config_import_preview(args)
-            opencode_config_p.print_help()
-            return 1
-        opencode_p.print_help()
-        return 1
-    elif args.command == "streamdeck":
-        # Lazy import: the optional component stays out of the install path.
-        if args.streamdeck_command is None:
-            streamdeck_p.print_help()
-            return 1
-        from quoin.streamdeck import cli as _sd
-        return _sd.run(args)
     elif args.command == "router":
         # Lazy import keeps quoin install path import-clean (R-11 / D-01).
         from quoin import router as _router
@@ -4589,8 +2155,6 @@ def main(argv: list[str] | None = None) -> int:
             return _router._cmd_router_status(args)
         router_p.print_help()
         return 1
-    elif args.command == "code":
-        return _cmd_code(args)
     elif args.command == "models":
         # Lazy import keeps quoin install path import-clean (R-05 / D-01).
         from quoin import models as _models
@@ -4604,48 +2168,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run":
         if args.takeover and args.autonomous:
             run_p.error("--takeover cannot be combined with --autonomous")
-        if args.runtime != "opencode":
-            for flag, value in (
-                ("--profile", args.profile), ("--phase", args.phase),
-                ("--stage", args.stage), ("--new-run", args.new_run),
-                ("--non-interactive", args.non_interactive),
-                ("--workflow", args.workflow),
-                *((flag, getattr(args, attr)) for flag, attr, _ in _WORKFLOW_ONLY_FLAGS),
-            ):
-                if value is not None and value is not False and value != []:
-                    _abort(f"quoin: {flag} is only valid with --runtime opencode")
-            return _cmd_run(args)
-        if args.takeover:
-            _abort(
-                "quoin: --takeover is only valid with --runtime claude; "
-                "stop an opencode run with SIGTERM"
-            )
-        if not args.profile:
-            _abort(
-                "quoin: --runtime opencode needs --profile NAME "
-                "(a profile from your OpenCode runtime configuration)"
-            )
-        if args.permission_mode == "bypassPermissions":
-            _abort(
-                "quoin: --permission-mode bypassPermissions is not available with "
-                "--runtime opencode; approval prompts are never skipped"
-            )
-        if args.max_relaunch < 0:
-            _abort("quoin: --max-relaunch must be 0 or more")
-        if args.workflow:
-            if args.phase:
-                _abort("quoin: --workflow and --phase cannot be combined")
-            for flag, value in (("--stage", args.stage), ("--new-run", args.new_run)):
-                if value:
-                    _abort(
-                        f"quoin: {flag} is not valid with --workflow; the coordinator picks the stage "
-                        "and decides between a fresh and a resumed run (recover with --rerun-from)"
-                    )
-        else:
-            for flag, attr, empty in _WORKFLOW_ONLY_FLAGS:
-                if getattr(args, attr) != empty:
-                    _abort(f"quoin: {flag} is only valid with --workflow")
-        return _cmd_run_opencode(args)
+        return _cmd_run(args)
 
     parser.print_help()
     return 1

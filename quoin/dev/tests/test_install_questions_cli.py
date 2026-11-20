@@ -1,4 +1,4 @@
-"""Install questions in `quoin install`: mods, agentdesk, flags, aborts, help."""
+"""Install questions in `quoin install`: the mod question, flags, aborts, help."""
 from __future__ import annotations
 
 import argparse
@@ -33,11 +33,8 @@ class Session:
         self.project = tmp_path / "proj"
         self.project.mkdir(exist_ok=True)
         self.prompts_asked = 0
-        self.runner_calls = []
-        self.refresh_calls = []
-        self.refresh_rc = 0
 
-    def run(self, *, scope="project", answers=None, interactive=True, darwin=True, **flags):
+    def run(self, *, scope="project", answers=None, interactive=True, **flags):
         mp = self.mp
         if interactive:
             mp.delenv("QUOIN_INSTALL_NO_PROMPT", raising=False)
@@ -53,14 +50,10 @@ class Session:
                 raise v
             return v
         mp.setattr("builtins.input", fake_input)
-        mp.setattr("sys.platform", "darwin" if darwin else "linux")
-        mp.setattr(ip, "run_agentdesk_setup", lambda script: self.runner_calls.append(script) or 0)
-        mp.setattr(ip, "refresh_agentdesk", lambda script: self.refresh_calls.append(script) or self.refresh_rc)
         ns = dict(
             scope="project" if scope == "project" else "user",
             allow_hook_merge=True, runtime="claude", check=False,
             source_dir=str(QUOIN_SRC), force_merge=False, dev=False, use_pip=False,
-            with_context_tracker=False, remove_context_tracker=False,
             with_workflow_tasks=False, remove_workflow_tasks=False,
         )
         if scope == "project":
@@ -99,57 +92,47 @@ def sess(tmp_path, monkeypatch, capsys):
     return Session(tmp_path, monkeypatch, capsys)
 
 
-def _mods(project):
-    skills = project / ".claude" / "skills"
-    return (
-        (skills / "context-tracker").exists(),
-        (skills / "workflow-tasks").exists(),
-    )
+def _installed(project):
+    return (project / ".claude" / "skills" / "workflow-tasks").exists()
 
 
-class TestModQuestions:
-    def test_enter_enter_installs_both(self, sess):
-        assert sess.run(answers=["", ""]) == 0
-        out = sess.prompts()
-        assert _mods(sess.project) == (True, True)
-        assert sess.prompts_asked == 2
-        assert out.index("/ctx") < out.index("/quoin-tasks")
+class TestModQuestion:
+    def test_enter_installs(self, sess):
+        assert sess.run(answers=[""]) == 0
+        assert _installed(sess.project)
+        assert sess.prompts_asked == 1
+        assert "/quoin-tasks" in sess.prompts()
 
-    @pytest.mark.parametrize(
-        "answers,expected",
-        [(["n", "n"], (False, False)), (["y", "n"], (True, False)), (["n", "y"], (False, True))],
-    )
-    def test_answers(self, sess, answers, expected):
-        assert sess.run(answers=answers) == 0
-        assert _mods(sess.project) == expected
+    @pytest.mark.parametrize("answer,expected", [("n", False), ("y", True)])
+    def test_answers(self, sess, answer, expected):
+        assert sess.run(answers=[answer]) == 0
+        assert _installed(sess.project) == expected
 
-    @pytest.mark.parametrize("answers", [[EOFError()], ["y", KeyboardInterrupt()]])
-    def test_abort_writes_nothing(self, sess, answers, capsys):
+    def test_abort_writes_nothing(self, sess, capsys):
         with pytest.raises(SystemExit) as info:
-            sess.run(answers=answers)
+            sess.run(answers=[EOFError()])
         assert info.value.code == 1
         assert "Aborted." in capsys.readouterr().err
         assert not (sess.project / ".claude").exists()
         assert not (sess.project / "CLAUDE.md").exists()
 
-    def test_with_flag_suppresses_its_question(self, sess):
-        assert sess.run(answers=["n"], with_workflow_tasks=True) == 0
-        assert sess.prompts_asked == 1
-        assert _mods(sess.project) == (False, True)
-        assert "context-tracker" in sess.prompts()
+    def test_with_flag_suppresses_the_question(self, sess):
+        assert sess.run(answers=[], with_workflow_tasks=True) == 0
+        assert sess.prompts_asked == 0
+        assert _installed(sess.project)
 
-    def test_remove_flag_suppresses_its_question(self, sess):
-        assert sess.run(answers=["y"], remove_context_tracker=True) == 0
-        assert sess.prompts_asked == 1
-        assert _mods(sess.project) == (False, True)
+    def test_remove_flag_suppresses_the_question(self, sess):
+        assert sess.run(answers=[], remove_workflow_tasks=True) == 0
+        assert sess.prompts_asked == 0
+        assert not _installed(sess.project)
 
     def test_installed_mod_refreshed_without_question(self, sess):
         assert sess.run(interactive=False, with_workflow_tasks=True) == 0
         edited = sess.project / ".claude/skills/workflow-tasks/hooks/tasks.ts"
         good = edited.read_text()
         edited.write_text("// edited\n")
-        assert sess.run(answers=["n"]) == 0
-        assert sess.prompts_asked == 1  # only the context-tracker question
+        assert sess.run(answers=[]) == 0
+        assert sess.prompts_asked == 0
         assert edited.read_text() == good
 
     def test_foreign_folder_not_offered(self, sess, capsys):
@@ -157,16 +140,16 @@ class TestModQuestions:
         folder.mkdir(parents=True)
         (folder / "plugin.json").write_text(json.dumps({"name": "other"}))
         before = folder.joinpath("plugin.json").read_text()
-        assert sess.run(answers=["n"]) == 0
-        assert sess.prompts_asked == 1
+        assert sess.run(answers=[]) == 0
+        assert sess.prompts_asked == 0
         out = capsys.readouterr().out
         assert "not offering the workflow-tasks mod" in out
         assert folder.joinpath("plugin.json").read_text() == before
 
     def test_user_copy_blocks_project_offer(self, sess, capsys):
         inst.deploy_workflow_tasks(QUOIN_SRC, sess.home / ".claude", strict=True)
-        assert sess.run(answers=["n"]) == 0
-        assert sess.prompts_asked == 1
+        assert sess.run(answers=[]) == 0
+        assert sess.prompts_asked == 0
         out = capsys.readouterr().out
         assert "not offering the workflow-tasks mod" in out
         assert "double load" in out
@@ -174,73 +157,19 @@ class TestModQuestions:
     def test_non_interactive_asks_nothing(self, sess):
         assert sess.run(interactive=False, answers=[]) == 0
         assert sess.prompts_asked == 0
-        assert _mods(sess.project) == (False, False)
+        assert not _installed(sess.project)
 
     def test_preflight_warning_precedes_question(self, sess, capsys):
         # A project copy of the mod alongside a user-scope install: the warning
         # must be on screen before the question that would add the second copy.
-        inst.deploy_context_tracker(QUOIN_SRC, sess.project / ".claude", strict=True)
-        assert sess.run(scope="user", answers=["n", "n", "n"]) == 0
+        inst.deploy_workflow_tasks(QUOIN_SRC, sess.project / ".claude", strict=True)
+        assert sess.run(scope="user", answers=["n"]) == 0
         cap = capsys.readouterr()
         assert cap.err.count("will load alongside this user copy") == 1
 
-
-class TestAgentdeskQuestion:
-    def test_asked_last_default_no(self, sess):
-        assert sess.run(scope="user", answers=["n", "n", ""]) == 0
-        assert sess.prompts_asked == 3
-        assert sess.runner_calls == []
-        assert "Ghostty" in sess.prompts()
-
-    def test_yes_runs_deployed_script_once(self, sess):
-        assert sess.run(scope="user", answers=["n", "n", "y"]) == 0
-        assert sess.runner_calls == [sess.home / ".config/agentdesk/setup-agentdesk.sh"]
-
-    def test_skipped_when_zshrc_has_source_line(self, sess, capsys):
-        (sess.home / ".zshrc").write_text(ip.AGENTDESK_SOURCE_LINE + "\n")
-        assert sess.run(scope="user", answers=["n", "n", "n"]) == 0
-        assert sess.prompts_asked == 3
-        assert sess.runner_calls == []
-        out = capsys.readouterr().out
-        assert "Homebrew if missing" not in out
-        assert "--setup-agentdesk" not in out
-
-    def test_not_asked_off_darwin_but_hint_and_flag_remain(self, sess, capsys):
-        assert sess.run(scope="user", darwin=False, answers=["n", "n"]) == 0
-        assert sess.prompts_asked == 2
-        assert "--setup-agentdesk" in capsys.readouterr().out
-        assert sess.run(scope="user", darwin=False, answers=["n", "n"], setup_agentdesk=True) == 0
-        assert len(sess.runner_calls) == 1
-
-    def test_never_asked_at_project_scope(self, sess):
-        sess.run(answers=["n", "n"])
-        assert sess.prompts_asked == 2
-
-    def test_abort_at_agentdesk_question_writes_nothing(self, sess, capsys):
-        with pytest.raises(SystemExit) as info:
-            sess.run(scope="user", answers=["n", "n", EOFError()])
-        assert info.value.code == 1
-        assert "Aborted." in capsys.readouterr().err
-        assert not (sess.home / ".claude").exists()
-        assert not (sess.home / ".config" / "agentdesk").exists()
-
-    def test_flags_answer_everything(self, sess):
-        assert sess.run(
-            scope="user", answers=[], with_context_tracker=True,
-            with_workflow_tasks=True, setup_agentdesk=True,
-        ) == 0
-        assert sess.prompts_asked == 0
-        assert len(sess.runner_calls) == 1
-
-    def test_project_scope_flag_rejected_before_any_write(self, sess, capsys):
-        with pytest.raises(SystemExit) as info:
-            sess.run(setup_agentdesk=True, interactive=False)
-        assert info.value.code == 2
-        assert not (sess.project / ".claude").exists()
-
     def test_codex_runtime_rejected(self):
         with pytest.raises(SystemExit) as info:
-            cli.main(["install", "--runtime", "codex", "--setup-agentdesk"])
+            cli.main(["install", "--runtime", "codex", "--with-workflow-tasks"])
         assert info.value.code == 2
 
 
@@ -249,9 +178,11 @@ class TestHelp:
         with pytest.raises(SystemExit):
             cli.main(["install", "--help"])
         out = " ".join(capsys.readouterr().out.split())
-        for flag in ("--with-workflow-tasks", "--remove-workflow-tasks", "--setup-agentdesk"):
+        for flag in ("--with-workflow-tasks", "--remove-workflow-tasks"):
             assert flag in out
-        assert out.count("answer yes when asked") == 2
+        for gone in ("--with-context-tracker", "--setup-agentdesk"):
+            assert gone not in out
+        assert out.count("answer yes when asked") == 1
         assert "Opt-in, off by default" not in out
 
     def test_install_sh_help_and_forwarding(self):
@@ -259,19 +190,12 @@ class TestHelp:
             ["bash", str(INSTALL_SH), "--help"], stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=60,
         ).stdout
-        for flag in (
-            "--with-context-tracker", "--with-workflow-tasks",
-            "--remove-workflow-tasks", "--setup-agentdesk",
-        ):
+        for flag in ("--with-workflow-tasks", "--remove-workflow-tasks"):
             assert flag in out
+        for gone in ("--with-context-tracker", "--setup-agentdesk"):
+            assert gone not in out
         assert "answer yes when asked" in out
-        assert "Off by default" not in out.split("--with-context-tracker\n", 1)[1]
-        src = INSTALL_SH.read_text()
-        assert '--setup-agentdesk) SETUP_AGENTDESK_FLAG="--setup-agentdesk"' in src
-        assert 'INSTALL_ARGS+=("$SETUP_AGENTDESK_FLAG")' in src
-        assert not any(
-            "bash" in ln and "setup-agentdesk.sh" in ln for ln in src.splitlines()
-        )
+        assert "Off by default" not in out.split("--with-workflow-tasks\n", 1)[1]
 
     def test_install_sh_syntax(self):
         assert subprocess.run(["bash", "-n", str(INSTALL_SH)]).returncode == 0

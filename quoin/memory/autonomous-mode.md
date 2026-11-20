@@ -81,11 +81,9 @@ hard stop, never a silent proceed.
 
 ## Runtime flag
 
-`quoin run --runtime opencode --phase PHASE TASK` runs a single phase on the
-OpenCode runtime and is not part of the autonomous span: it never writes the
-whole-task halt sentinel, and the task lock it takes carries `runtime:
-opencode`. Auto-resume and takeover treat a lock with that runtime as owned by
-another runtime, so a task driven this way is never continued on Claude.
+A task lock may carry `runtime: opencode` when it was taken by an OpenCode
+phase run from a `legacy` install. Auto-resume and takeover treat such a lock
+as owned by another runtime, so that task is never continued on Claude.
 
 ## Halt-sentinel contract
 

@@ -105,44 +105,9 @@ Status: repo-local setup/readiness only; no verified global install target.
 
 ## OpenCode
 
-Status: generated project assets, offline-verified; no live runtime evidence.
-
-- `quoin install --runtime opencode` (`--check` for a dry-run diff) generates
-  project-local commands, skills and role agents for the manifest-supported
-  subset of the migrated skill catalog, and `quoin opencode uninstall`
-  reverses it, removing only what it owns.
-- `quoin doctor --runtime opencode` checks the install against the real host
-  filesystem and environment by default; `--smoke` is the offline mode —
-  it re-renders and validates the catalog without touching host state — and
-  `--json` prints a machine-readable report. Host-mode checks also warn about
-  a legacy skills folder OpenCode's own discovery may pick up under the home
-  directory.
-- Every skill in the catalog is classified in
-  `quoin/adapters/opencode/feature-manifest.json` as supported,
-  documentation-only, or unsupported for OpenCode.
-- Gateway qualification tooling lives in `quoin/adapters/opencode/` (probe and
-  offline fake provider). `quoin opencode config explain|compile|import-preview`
-  and `quoin opencode probe` are offline-verified configuration tooling; the
-  work profile is not yet supported, and there is still no live runtime evidence.
-- `quoin run --runtime opencode --phase PHASE` runs one workflow phase
-  headlessly with event capture, process-tree cancellation and resume rules;
-  `quoin opencode status` reports the latest run read-only and
-  `quoin opencode start` opens the terminal interface with the compiled
-  profile. Doctor findings carry a problem category, and `--profile` adds
-  configuration checks. These are verified against a fake executable only;
-  there is still no live runtime evidence.
-- The benchmark framework has paired `simple-opencode` and `quoin-opencode`
-  cells on one model and endpoint, with frozen pilot thresholds; no
-  qualification results are recorded yet.
-- Release shapes, the acceptance matrix with its verification pointers, the
-  live qualification and requalification procedures, upgrade qualification and
-  rollback are in `quoin/adapters/opencode/release-acceptance.md`. The claimed
-  shape is a personal pilot pending live qualification; the work profile is not
-  supported until its live qualification passes.
-- Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
-- Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
-- There is no global OpenCode installer or global OpenCode path assumed; all
-  generated assets are project-local.
+The OpenCode adapter, its configuration tooling, the gateway probe and the
+paired benchmark cells moved to their own repository, `quoin-opencode`. The
+last in-tree version is on the `legacy` tag.
 
 ## Portable Core
 

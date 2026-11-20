@@ -178,40 +178,13 @@ def test_spend_monitor_py_no_new_adapter_import_beyond_documented_sibling():
     )
 
 
-def test_dashboard_model_py_has_no_adapter_imports():
-    """dashboard_model.py (stage-4 T-10 touched it) must remain fully
-    core-pure: zero ACTUAL import statements naming an adapter-owned module.
-    T-10's edit is a string-literal + dict-key change only (partial default +
-    merge whitelist) — it adds no import.
-
-    Anchored to real `import`/`from` statement lines only (MINOR-1) — a bare
-    substring check would spuriously flag the module's own docstring, which
-    explicitly documents what it does NOT import (e.g. "NO cost_from_jsonl,
-    NO analyze_cost_ledger...").
-    """
-    path = REPO_ROOT / "quoin" / "core" / "scripts" / "dashboard_model.py"
-    source = path.read_text(encoding="utf-8")
-    import_lines = [
-        line for line in source.splitlines()
-        if re.match(r"^\s*(from|import)\s+", line)
-    ]
-    for term in IMPORT_BLACKLIST:
-        offending = [ln for ln in import_lines if term in ln]
-        assert offending == [], (
-            f"Adapter-owned import term '{term}' found in an actual import "
-            f"statement in {path}: {offending}. "
-            "dashboard_model.py must stay core-pure (no adapter imports)."
-        )
-
-
 # ---------------------------------------------------------------------------
 # T-07 (stage 6): directory-wide core-purity guard for the IVG-111
 # cost-attribution surface. Walks EVERY file in quoin/core/scripts/ (not just
 # the three files targeted above) and asserts no actual import statement
 # names the adapter-only resolver/pricer (`agent_transcript_cost`) — the invariant
 # stated in architecture D-04/R-05 and documented in runtime-portability.md.
-# Anchored to real import/from lines only, mirroring
-# test_dashboard_model_py_has_no_adapter_imports's anchoring discipline (a
+# Anchored to real import/from lines only (a
 # bare substring scan would spuriously flag this test file's own docstrings
 # elsewhere in the suite, and any future doc comment inside a core script).
 # ---------------------------------------------------------------------------

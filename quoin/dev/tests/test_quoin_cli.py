@@ -83,10 +83,6 @@ def test_cli_help():
     assert result5.returncode == 0, result5.stderr
     assert "AGENTS.md" in result5.stdout
 
-    result6 = _py("-m", "quoin", "dashboard", "--help")
-    assert result6.returncode == 0, result6.stderr
-    assert "127.0.0.1" in result6.stdout
-
     result7 = _py("-m", "quoin", "router", "--help")
     assert result7.returncode == 0, result7.stderr
     assert "claude-code-router" in result7.stdout

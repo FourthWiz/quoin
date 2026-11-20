@@ -7,7 +7,6 @@ Skipped when `claude` is absent (CI-friendly) and when `build` is not installed.
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -153,15 +152,18 @@ def test_distributions_do_not_include_benchmark_folders(built_wheel, built_sdist
 
 
 @_requires_build
-def test_distributions_ship_the_plugin_artifact_without_node_modules(built_wheel, built_sdist):
-    """The built lifecycle plugin ships in both; its npm build tree never does."""
+def test_distributions_hold_no_split_out_components(built_wheel, built_sdist):
+    """The OpenCode adapter, workctl and the cockpit tools live in their own
+    repositories; neither distribution may carry them or any npm build tree."""
     with zipfile.ZipFile(built_wheel) as whl:
         wheel_names = whl.namelist()
     with tarfile.open(built_sdist, "r:gz") as sdist:
         sdist_names = sdist.getnames()
     for names in (wheel_names, sdist_names):
-        assert not any("/node_modules/" in name for name in names)
-    assert any(n.endswith("quoin/adapters/opencode/plugin/quoin-opencode-plugin.js") for n in sdist_names)
+        for name in names:
+            low = name.lower()
+            for part in ("opencode", "streamdeck", "agentdesk", "workctl", "/node_modules/"):
+                assert part not in low, name
 
 
 @_requires_build
@@ -179,264 +181,6 @@ def test_wheel_contents_include_codex_cli_assets(built_wheel):
     ]
     for path in required:
         assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
-
-
-@_requires_build
-def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
-    """Wheel installs must include the opencode qualification assets and every
-    runtime data file the generator, installer and doctor read at import or
-    render time — not just the qualification-harness files."""
-    with zipfile.ZipFile(built_wheel) as whl:
-        names = whl.namelist()
-
-    manifest = json.loads(
-        (QUOIN_SRC / "adapters" / "opencode" / "feature-manifest.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    supported_ids = sorted(
-        entry["id"] for entry in manifest["catalog_entries"] if entry["status"] == "supported"
-    )
-    assert supported_ids, "feature-manifest.json has no supported catalog entries"
-
-    required = [
-        # qualification-harness files (pre-existing coverage)
-        "quoin/data/adapters/opencode/probe_gateway.py",
-        "quoin/data/adapters/opencode/fake_openai_server.py",
-        "quoin/data/adapters/opencode/fixtures/scenarios.json",
-        "quoin/data/adapters/opencode/README.md",
-        "quoin/data/adapters/opencode/compatibility.md",
-        "quoin/data/adapters/opencode/decisions.md",
-        # lifecycle plugin: the built artifact (its build project stays in dev)
-        "quoin/data/adapters/opencode/plugin/quoin-opencode-plugin.js",
-        # generator/installer/doctor runtime data
-        "quoin/data/adapters/opencode/feature-manifest.json",
-        "quoin/data/adapters/opencode/overlays.json",
-        "quoin/data/adapters/opencode/fixtures/install-cases.json",
-        "quoin/data/adapters/opencode/templates/agent.md",
-        "quoin/data/adapters/opencode/templates/command.md",
-        "quoin/data/adapters/opencode/templates/instructions.md",
-        "quoin/data/adapters/opencode/templates/skill.md",
-        "quoin/data/core/workflow/skills.json",
-        "quoin/data/core/workflow/rules.md",
-        "quoin/data/memory/format-kit.sections.json",
-        # the six allowlisted core scripts the opencode script runner exposes
-        "quoin/data/core/scripts/checkpoint_picker.py",
-        "quoin/data/core/scripts/classify_critic_issues.py",
-        "quoin/data/core/scripts/generate_discovery_map.py",
-        "quoin/data/core/scripts/handoff_validate.py",
-        "quoin/data/core/scripts/path_resolve.py",
-        "quoin/data/core/scripts/validate_artifact.py",
-        # the opencode_adapter package itself (installed package, not force-include)
-        "quoin/opencode_adapter/__init__.py",
-        "quoin/opencode_adapter/__main__.py",
-        "quoin/opencode_adapter/names.py",
-        "quoin/opencode_adapter/manifest.py",
-        "quoin/opencode_adapter/frontmatter.py",
-        "quoin/opencode_adapter/generate.py",
-        "quoin/opencode_adapter/install.py",
-        "quoin/opencode_adapter/scripts.py",
-        "quoin/opencode_adapter/doctor.py",
-        # runtime configuration schema, fixtures and loader modules
-        "quoin/data/adapters/opencode/schemas/runtime-config.schema.json",
-        "quoin/data/adapters/opencode/fixtures/runtime-config/cases.json",
-        "quoin/opencode_adapter/errors.py",
-        "quoin/opencode_adapter/paths.py",
-        "quoin/opencode_adapter/jsonio.py",
-        "quoin/opencode_adapter/schema_check.py",
-        "quoin/opencode_adapter/secrets.py",
-        "quoin/opencode_adapter/config.py",
-        "quoin/opencode_adapter/merge.py",
-        "quoin/opencode_adapter/qualification.py",
-        "quoin/opencode_adapter/roles.py",
-        # native configuration compiler, its explain renderer, the vendored
-        # subset schema and the three compiled reference documents
-        "quoin/opencode_adapter/compiler.py",
-        "quoin/opencode_adapter/explain.py",
-        # probe wiring, import preview and retry policy
-        "quoin/opencode_adapter/probe_cli.py",
-        "quoin/opencode_adapter/import_preview.py",
-        "quoin/opencode_adapter/retry.py",
-        "quoin/data/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
-        # the qualified OpenCode release list and the policy that reads it
-        "quoin/data/adapters/opencode/qualified-versions.json",
-        "quoin/opencode_adapter/versions.py",
-        "quoin/data/adapters/opencode/fixtures/compiled/work.opencode.json",
-        "quoin/data/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
-        "quoin/data/adapters/opencode/fixtures/compiled/personal.opencode.json",
-    ]
-    required += [
-        f"quoin/data/core/skills/{skill_id}.md" for skill_id in supported_ids
-    ]
-
-    for path in required:
-        assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
-
-    assert not any(
-        "adapters/opencode/" in name and (name.endswith("__pycache__") or "__pycache__/" in name or name.endswith(".pyc"))
-        for name in names
-    )
-
-
-@_requires_build
-@pytest.mark.slow_fs
-def test_wheel_opencode_install_and_doctor_in_clean_venv(built_wheel, tmp_path):
-    """Install the wheel into a throwaway venv and drive the opencode CLI
-    end to end from it, outside the checkout and outside the project .venv.
-
-    This is the only test that proves the opencode adapter's runtime data
-    (templates, fixtures, manifest, core scripts, skill docs) actually
-    resolves through importlib.resources on a real pip install — the
-    contents test above only checks the zip listing.
-    """
-    checkout_status_before = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(REPO),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).stdout
-
-    venv_dir = tmp_path / "venv"
-    result = subprocess.run(
-        [sys.executable, "-m", "venv", str(venv_dir)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        pytest.skip(f"venv creation failed:\n{result.stderr[:500]}")
-
-    venv_python = venv_dir / "bin" / "python"
-    venv_quoin = venv_dir / "bin" / "quoin"
-    if not venv_python.exists():
-        pytest.skip(f"venv creation did not produce {venv_python} (ensurepip likely missing)")
-
-    result = subprocess.run(
-        [
-            str(venv_python), "-m", "pip", "install",
-            "--no-index", "--no-deps", "--disable-pip-version-check",
-            str(built_wheel),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        pytest.skip(f"wheel install into clean venv failed:\n{result.stderr[:500]}")
-
-    home_dir = tmp_path / "home"
-    home_dir.mkdir()
-    proj_dir = tmp_path / "proj"
-    proj_dir.mkdir()
-    (proj_dir / ".git").mkdir()
-
-    env = {
-        "PATH": f"{venv_dir / 'bin'}{os.pathsep}/usr/bin{os.pathsep}/bin",
-        "HOME": str(home_dir),
-        "PYTHONNOUSERSITE": "1",
-        "PIP_NO_INDEX": "1",
-    }
-
-    # The installed package resolves under the venv, not the checkout or
-    # the project .venv — proves _resolve_source_dir's Tier 1 (wheel)
-    # path is exercised, not an accidental editable-install fallback.
-    result = subprocess.run(
-        [
-            str(venv_python), "-c",
-            "import quoin, quoin.cli as c; "
-            "print(quoin.__file__); print(c._resolve_source_dir(None))",
-        ],
-        env=env,
-        cwd=str(proj_dir),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, f"import probe failed:\n{result.stdout}\n{result.stderr}"
-    probe_lines = [line for line in result.stdout.splitlines() if line.strip()]
-    assert len(probe_lines) == 2, f"expected two printed paths, got: {result.stdout!r}"
-    for line in probe_lines:
-        assert str(venv_dir) in line, f"path not under the clean venv: {line}"
-
-    # Both packaged schemas resolve from the installed wheel.
-    result = subprocess.run(
-        [
-            str(venv_python), "-c",
-            "from quoin.opencode_adapter import paths; "
-            "a = paths.runtime_config_schema_path(); b = paths.native_schema_path(); "
-            "assert a.is_file() and b.is_file(); print(a); print(b)",
-        ],
-        env=env,
-        cwd=str(proj_dir),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, f"schema locators failed:\n{result.stdout}\n{result.stderr}"
-    for line in [line for line in result.stdout.splitlines() if line.strip()]:
-        assert str(venv_dir) in line, f"schema not resolved from the clean venv: {line}"
-
-    # The probe script loads from the installed data directory without adding
-    # bytecode there (the installer may already have compiled it).
-    result = subprocess.run(
-        [
-            str(venv_python), "-c",
-            "import os, sys; assert not sys.dont_write_bytecode; "
-            "from quoin.opencode_adapter import paths, probe_cli; "
-            "snap = lambda: sorted(os.path.join(r, n) for r, d, f in os.walk(str(paths.adapter_data_dir())) for n in d + f); "
-            "before = snap(); mod = probe_cli.load_probe_module(); assert callable(mod.execute); "
-            "assert snap() == before; print('ok')",
-        ],
-        env=env,
-        cwd=str(proj_dir),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0 and result.stdout.strip() == "ok", (
-        f"probe load failed:\n{result.stdout}\n{result.stderr}"
-    )
-
-    def run_quoin(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [str(venv_quoin), *args],
-            env=env,
-            cwd=str(proj_dir),
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-    result = run_quoin("install", "--runtime", "opencode", "--project-root", ".")
-    assert result.returncode == 0, f"install failed:\n{result.stdout}\n{result.stderr}"
-    assert (proj_dir / ".opencode" / "commands" / "quoin-plan.md").exists()
-
-    result = run_quoin("install", "--runtime", "opencode", "--project-root", ".", "--check")
-    assert result.returncode == 0, f"install --check failed:\n{result.stdout}\n{result.stderr}"
-
-    result = run_quoin("doctor", "--runtime", "opencode", "--smoke", "--project-root", ".")
-    assert result.returncode == 0, f"doctor --smoke failed:\n{result.stdout}\n{result.stderr}"
-
-    result = run_quoin("doctor", "--runtime", "opencode", "--smoke", "--project-root", ".", "--json")
-    assert result.returncode == 0, f"doctor --smoke --json failed:\n{result.stdout}\n{result.stderr}"
-    report = json.loads(result.stdout)
-    assert report["status"] == "healthy", report
-
-    result = run_quoin("opencode", "uninstall", "--project-root", ".")
-    assert result.returncode == 0, f"uninstall failed:\n{result.stdout}\n{result.stderr}"
-    assert not (proj_dir / ".opencode").exists(), "uninstall left owned files behind"
-
-    checkout_status_after = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(REPO),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).stdout
-    assert checkout_status_after == checkout_status_before, (
-        "clean-venv install/doctor/uninstall wrote something outside the temp dirs"
-    )
 
 
 def test_pyproject_force_include_line_for_claude_core_md():
@@ -489,30 +233,13 @@ def test_wheel_contents_include_claude_md_slim_variant(built_wheel):
 def test_pyproject_force_include_line_for_plugins():
     """pyproject.toml must wire quoin/plugins into the wheel data dir.
 
-    Cheap non-build guard: without this line the opt-in context-tracker mod
+    Cheap non-build guard: without this line the opt-in workflow-tasks mod
     is absent from wheel installs and the install flag has nothing to copy.
     """
     expected = '"quoin/plugins" = "src/quoin/data/plugins"'
     assert expected in _force_include_block(), (
         f"pyproject.toml force-include must contain:\n  {expected}"
     )
-
-
-@_requires_build
-def test_wheel_contents_include_context_tracker_plugin(built_wheel):
-    """The wheel ships the context-tracker mod, minus generated type stubs."""
-    with zipfile.ZipFile(built_wheel) as whl:
-        names = whl.namelist()
-    for suffix in (
-        "quoin/data/plugins/context-tracker/hooks/register.tsx",
-        "quoin/data/plugins/context-tracker/.claude-plugin/plugin.json",
-    ):
-        assert any(name.endswith(suffix) for name in names), (
-            f"Missing wheel asset: {suffix}"
-        )
-    assert not any(
-        "plugins/context-tracker/.claude-plugin/types/" in name for name in names
-    ), "generated .claude-plugin/types/ must not ship in the wheel"
 
 
 @_requires_build

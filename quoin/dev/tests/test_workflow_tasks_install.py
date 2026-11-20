@@ -3,8 +3,7 @@ forwarding, drift coverage, source-tree invariants and docs.
 
 The mod is copied to <dest>/skills/workflow-tasks/ only when explicitly
 requested; a plain install never creates it, and an installed copy is
-refreshed on later installs. It shares the opt-in registry with the
-context-tracker mod, so both can be installed side by side.
+refreshed on later installs.
 """
 from __future__ import annotations
 
@@ -111,11 +110,6 @@ class TestState:
         (dest / "skills" / "workflow-tasks").symlink_to(real, target_is_directory=True)
         assert inst.workflow_tasks_state(dest) == "foreign"
 
-    def test_a_context_tracker_folder_is_not_ours(self, tmp_path):
-        # Ownership is by plugin name: the other mod's folder never reads as installed here.
-        inst.deploy_context_tracker(QUOIN_SRC, tmp_path, strict=True)
-        assert inst.workflow_tasks_state(tmp_path) == "absent"
-        assert inst.context_tracker_state(tmp_path) == "installed"
 
 
 # ── apply ───────────────────────────────────────────────────────────────────
@@ -166,7 +160,9 @@ class TestApply:
 
     def test_remove_installed_deletes_only_the_mod(self, tmp_path, capsys):
         folder = _installed(tmp_path)
-        inst.deploy_context_tracker(QUOIN_SRC, tmp_path, strict=True)
+        other = tmp_path / "skills" / "other-mod" / ".claude-plugin"
+        other.mkdir(parents=True)
+        (other / "plugin.json").write_text('{"name": "other-mod"}')
         (folder / ".claude-plugin" / "types").mkdir()
         (folder / ".claude-plugin" / "types" / "tsconfig.json").write_text("{}")
         (tmp_path / "skills" / "plan").mkdir()
@@ -175,7 +171,7 @@ class TestApply:
         assert inst.apply_workflow_tasks(QUOIN_SRC, tmp_path, mode="remove") == "removed"
         assert not folder.exists()
         assert _snapshot(tmp_path) == before
-        assert (tmp_path / "skills" / "context-tracker").is_dir()
+        assert (tmp_path / "skills" / "other-mod").is_dir()
         assert "Removed workflow-tasks mod from" in capsys.readouterr().out
 
     def test_remove_absent_prints_nothing_to_remove(self, tmp_path, capsys):
@@ -259,12 +255,6 @@ class TestCli:
         with unittest.mock.patch.object(cli, "_cmd_codex_init", side_effect=AssertionError("reached")):
             with pytest.raises(SystemExit) as exc:
                 cli.main(["install", "--runtime", "codex", "--with-workflow-tasks"])
-        assert exc.value.code == 2
-
-    def test_opencode_runtime_refused(self):
-        with unittest.mock.patch.object(cli, "_cmd_opencode_install", side_effect=AssertionError("reached")):
-            with pytest.raises(SystemExit) as exc:
-                cli.main(["install", "--runtime", "opencode", "--remove-workflow-tasks"])
         assert exc.value.code == 2
 
     def test_runtime_guard_message_names_the_new_flags(self, capsys):
@@ -364,7 +354,7 @@ class TestInstallSh:
 
 # ── end to end (real project-scope install into tmp dirs) ───────────────────
 
-def _install(base: Path, name: str, *, with_ct=False, with_wt=False, remove_wt=False,
+def _install(base: Path, name: str, *, with_wt=False, remove_wt=False,
              seed: Path | None = None, fake_home: Path | None = None) -> tuple[int, Path]:
     """Run a real project-scope install; returns (exit code, <project>/.claude)."""
     project = base / name
@@ -377,7 +367,6 @@ def _install(base: Path, name: str, *, with_ct=False, with_wt=False, remove_wt=F
     args = argparse.Namespace(
         scope="project", allow_hook_merge=True, runtime="claude", check=False,
         source_dir=str(QUOIN_SRC), force_merge=False, dev=False, use_pip=False,
-        with_context_tracker=with_ct, remove_context_tracker=False,
         with_workflow_tasks=with_wt, remove_workflow_tasks=remove_wt,
     )
     cwd = os.getcwd()
@@ -413,12 +402,10 @@ class TestEndToEnd:
     def test_default_install_has_no_mod_folder(self, shared):
         _, plain, _ = shared
         assert not (plain / "skills" / "workflow-tasks").exists()
-        assert not (plain / "skills" / "context-tracker").exists()
 
     def test_opt_in_deploys_exactly_the_allowlist(self, shared):
         _, _, opted = shared
         assert _files(opted / "skills" / "workflow-tasks") == set(ALLOWLIST)
-        assert not (opted / "skills" / "context-tracker").exists()
 
     def test_opt_in_does_not_touch_settings(self, shared):
         _, plain, opted = shared
@@ -469,25 +456,6 @@ class TestEndToEnd:
         assert rc == 1
         assert _snapshot(dest) == before
 
-    def test_both_refusals_are_reported_in_one_run(self, shared, tmp_path, capsys):
-        _, plain, _ = shared
-        seed = _fresh_copy(plain, tmp_path)
-        for mod in ("context-tracker", "workflow-tasks"):
-            (seed / "skills" / mod).mkdir()
-            (seed / "skills" / mod / "mine.txt").write_text("keep")
-        before = _snapshot(seed)
-        capsys.readouterr()
-        rc, dest = _install(tmp_path, "both-refused", with_ct=True, with_wt=True, seed=seed)
-        err = capsys.readouterr().err
-        assert rc == 1
-        assert "context-tracker" in err and "workflow-tasks" in err
-        assert _snapshot(dest) == before
-
-    def test_both_mods_deploy_both_folders(self, tmp_path):
-        rc, dest = _install(tmp_path, "both", with_ct=True, with_wt=True)
-        assert rc == 0
-        assert (dest / "skills" / "context-tracker" / ".claude-plugin" / "plugin.json").is_file()
-        assert _files(dest / "skills" / "workflow-tasks") == set(ALLOWLIST)
 
 
 # ── source tree invariants ──────────────────────────────────────────────────
@@ -560,16 +528,6 @@ class TestDrift:
         drift = inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",))
         assert [(d.category, d.reason) for d in drift] == [("plugins", "stale")]
 
-    def test_both_mods_installed_and_one_edited_reports_only_that_mod(self, tmp_path):
-        folder = _installed(tmp_path)
-        inst.deploy_context_tracker(QUOIN_SRC, tmp_path, strict=True)
-        assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
-        (folder / "hooks" / "register.tsx").write_text("// edited")
-        drift = inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",))
-        assert len(drift) == 1
-        assert "workflow-tasks" in drift[0].deployed_path
-        assert "context-tracker" not in drift[0].deployed_path
-
     def test_foreign_folder_is_not_compared(self, tmp_path):
         _foreign(tmp_path)
         assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
@@ -627,10 +585,6 @@ class TestDocs:
                        "claude plugin disable workflow-tasks@skills-dir", "2.1.288"):
             assert needle in section, needle
 
-    def test_section_follows_the_context_tracker_section(self):
-        text = (QUOIN_SRC / "docs" / "hooks-guide.md").read_text(encoding="utf-8")
-        assert text.index("## Opt-in context-tracker mod") < text.index("## Opt-in workflow-tasks mod")
-
-    def test_claude_md_mentions_both_mods(self):
+    def test_claude_md_mentions_the_mod(self):
         text = (QUOIN_SRC / "CLAUDE.md").read_text(encoding="utf-8")
-        assert "--with-context-tracker" in text and "--with-workflow-tasks" in text
+        assert "--with-workflow-tasks" in text

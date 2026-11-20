@@ -1,7 +1,6 @@
 """Unit tests for the install-time question helpers and test isolation."""
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -9,10 +8,8 @@ import pytest
 import quoin.installer as installer
 import quoin.install_prompts as ip
 
-import conftest
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "quoin" / "tools" / "agentdesk" / "setup-agentdesk.sh"
 
 
 def _script_input(monkeypatch, answers):
@@ -103,63 +100,11 @@ class TestIsInteractive:
 
 class TestTexts:
     def test_mod_question(self, tmp_path):
-        q = ip.mod_question("context-tracker", tmp_path)
-        assert "/ctx" in q and str(tmp_path) in q and "--with-context-tracker" in q
-        assert "/quoin-tasks" in ip.mod_question("workflow-tasks", tmp_path)
+        q = ip.mod_question("workflow-tasks", tmp_path)
+        assert "/quoin-tasks" in q and str(tmp_path) in q and "--with-workflow-tasks" in q
 
     def test_mod_commands_cover_registry(self):
         assert set(ip.MOD_COMMANDS) == {m.name for m in installer.OPT_IN_MODS}
-
-    def test_source_line_matches_script(self):
-        m = re.search(r"^SOURCE_LINE='(.*)'$", SCRIPT.read_text(), re.M)
-        assert m and m.group(1) == ip.AGENTDESK_SOURCE_LINE
-
-    def test_consent_text_names_everything_installed(self):
-        names = re.findall(
-            r"^brew(?:_cask)?_install_if_missing\s+\"([^\"]+)\"", SCRIPT.read_text(), re.M
-        )
-        assert len(names) >= 4
-        low = ip.AGENTDESK_QUESTION.lower()
-        for name in names:
-            assert name.lower() in low
-
-
-class TestAlreadySetUp:
-    def test_present_absent_missing_binary(self, tmp_path):
-        z = tmp_path / ".zshrc"
-        assert ip.agentdesk_already_set_up(z) is False
-        z.write_text("export A=1\n")
-        assert ip.agentdesk_already_set_up(z) is False
-        z.write_text("x\n" + ip.AGENTDESK_SOURCE_LINE + "\n")
-        assert ip.agentdesk_already_set_up(z) is True
-        z.write_bytes(b"\xff\xfe\x00\x80garbage")
-        assert ip.agentdesk_already_set_up(z) is False
-
-
-class TestRunSetup:
-    @pytest.fixture(autouse=True)
-    def _real_runner(self, monkeypatch):
-        monkeypatch.setattr(ip, "run_agentdesk_setup", conftest.REAL_RUN_AGENTDESK_SETUP)
-
-    @pytest.mark.parametrize("code", [0, 3])
-    def test_exit_codes(self, tmp_path, code):
-        s = tmp_path / "s.sh"
-        s.write_text(f"exit {code}\n")
-        assert ip.run_agentdesk_setup(s) == code
-
-    def test_missing_script_does_not_raise(self, tmp_path):
-        assert ip.run_agentdesk_setup(tmp_path / "nope.sh") != 0
-
-    def test_interrupt_and_oserror(self, tmp_path, monkeypatch):
-        def boom(exc):
-            def run(*_a, **_k):
-                raise exc
-            return run
-
-        monkeypatch.setattr(ip.subprocess, "run", boom(KeyboardInterrupt()))
-        assert ip.run_agentdesk_setup(tmp_path / "s.sh") == 130
-        monkeypatch.setattr(ip.subprocess, "run", boom(OSError("x")))
-        assert ip.run_agentdesk_setup(tmp_path / "s.sh") == 127
 
 
 class TestIsolation:
@@ -169,10 +114,3 @@ class TestIsolation:
         monkeypatch.setattr("sys.stdin", _Stream(True))
         monkeypatch.setattr("sys.stdout", _Stream(True))
         assert ip.is_interactive() is False
-
-    def test_runner_is_stubbed_by_default(self):
-        with pytest.raises(pytest.fail.Exception):
-            ip.run_agentdesk_setup(Path("/nonexistent"))
-
-    def test_real_runner_kept(self):
-        assert conftest.REAL_RUN_AGENTDESK_SETUP is not None

@@ -1,7 +1,5 @@
 # Quoin — Quickstart
 
-**OpenCode in two commands:** `quoin opencode setup` (finds or installs the pinned OpenCode release, writes the project scaffold, creates or reuses a personal profile from `quoin models`, qualifies and compiles it, then runs the doctor; safe to rerun) and `quoin code` (checks, recompiles if needed, opens the session with the last profile used in this project). Set `OPENROUTER_API_KEY` first; setup never stores credentials.
-
 ## Your commands
 
 | Command | What it does |
@@ -107,13 +105,6 @@ Notes:
 - **Skill precedence:** User scope (`~/.claude/skills/`) overrides project scope (`.claude/skills/`) for same-named skills. A prior home install will shadow project skills — run `quoin doctor --scope project` to detect conflicts.
 - **Manual uninstall:** `rm -rf .claude/` removes the project-scope install. The CLAUDE.md quoin section can be removed with the quoin markers at the project root.
 
-## Optional: Stream Deck
-
-A Stream Deck panel for your running agents is available on macOS. Plain `quoin install` never installs it. To
-manage it, use `quoin streamdeck install`, `quoin streamdeck upgrade`, `quoin streamdeck status` and
-`quoin streamdeck uninstall`. After `pip install --upgrade quoin`, run `quoin streamdeck upgrade` to update the
-installed component. See `quoin/docs/streamdeck/README.md` in the Quoin repository.
-
 ## Files
 
 - `~/.claude/CLAUDE.md` — short core rules all skills follow (user-level); the full rules are in `~/.claude/memory/workflow-catalog.md`
@@ -124,8 +115,6 @@ installed component. See `quoin/docs/streamdeck/README.md` in the Quoin reposito
 ## Running benchmarks
 
 The quantitative benchmark harness (`quoin/benchmarks/`) measures pass-rate-per-dollar for quoin-assisted vs. plain agent workflows on HumanEval+ tasks. Full design: `quoin/benchmarks/methodology.md`.
-
-OpenCode has its own paired cells (`--cells simple-opencode,quoin-opencode`) and frozen pilot thresholds; see `quoin/benchmarks/README.md` and `quoin/adapters/opencode/release-acceptance.md`.
 
 **Prerequisites:** Claude Code CLI authenticated, `evalplus` installed, Docker available for judge.
 
