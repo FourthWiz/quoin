@@ -237,10 +237,6 @@ def test_cmd_doctor_project_scope_missing_record_exits_nonzero(tmp_path, monkeyp
     (dest_root / "core" / "workflow").mkdir(exist_ok=True)
     for fname in inst.CORE_WORKFLOW_FILES:
         (dest_root / "core" / "workflow" / fname).write_text("x", encoding="utf-8")
-    assets_dir = dest_root / "core" / "scripts" / "dashboard_assets"
-    assets_dir.mkdir(exist_ok=True)
-    for fname in inst._DASHBOARD_ASSETS:
-        (assets_dir / fname).write_text("x", encoding="utf-8")
     (dest_root / "skills").mkdir(exist_ok=True)
     for skill in inst.CANONICAL_SKILLS:
         (dest_root / "skills" / skill).mkdir(exist_ok=True)

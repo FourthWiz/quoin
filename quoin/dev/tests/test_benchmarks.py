@@ -37,8 +37,6 @@ def test_benchmark_manifest_modes_metrics_and_scenarios():
         "quoin-claude",
         "simple-codex",
         "quoin-codex",
-        "simple-opencode",
-        "quoin-opencode",
     }
     assert {
         (mode["runtime"], mode["quoin_enabled"])
@@ -48,8 +46,6 @@ def test_benchmark_manifest_modes_metrics_and_scenarios():
         ("claude", True),
         ("codex", False),
         ("codex", True),
-        ("opencode", False),
-        ("opencode", True),
     }
 
     assert {metric["id"] for metric in manifest["metrics"]} == {

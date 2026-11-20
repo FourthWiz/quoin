@@ -150,19 +150,6 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 - `--autocompact-window TOKENS`
 - `--clear-autocompact-env` — removes exactly the two keys above, leaving every other `env` key untouched.
 
-## Opt-in context-tracker mod
-
-`/ctx` opens a live context pane with three views (switch with `1`, `2`, `3`; `r` refreshes). It ships as a small Claude Code mod and is never installed unless you ask for it.
-
-- **Install:** `bash quoin/install.sh --with-context-tracker` (or `quoin install --with-context-tracker`, or answer yes when the installer asks) copies four files into `skills/context-tracker/` under the install scope. Claude Code auto-loads that folder as `context-tracker@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
-- **Sticky refresh:** once installed, a plain reinstall refreshes the copy and never creates one where none exists.
-- **Remove:** `--remove-context-tracker` deletes the folder.
-- **Ownership is by name only:** a hand-copied `context-tracker` folder is overwritten or removed, but any other folder in that spot, or a symlink, is left alone and the opt-in refuses.
-- **Scope:** the default is user scope. Project scope works once the workspace is trusted, and refuses while a user-scope copy is installed (both would load).
-- **Disable without reinstalling:** `claude plugin disable context-tracker@skills-dir`. That entry survives removal and must be re-enabled by hand if you install again.
-- **Requirements:** verified on Claude Code 2.1.288; older builds ignore the folder. Remove any older hand-copied dev-mods version first to avoid loading it twice.
-- **Drift check:** the deploy drift check compares the mod's files only when the mod is installed, and only for the scope it checks (user by default).
-
 ## Opt-in workflow-tasks mod
 
 `/quoin-tasks` opens a pane listing the active quoin tasks of the current project as a parent/child tree. Each row shows the task's stage (spec, architecture, plan, implement, review, and whether the last gate passed or failed) and how long ago it changed, and the detail block names the next workflow command. Arrow keys and Enter select a row, `f` fills the suggested command into the prompt box, and `r` refreshes. It ships as a small Claude Code mod and is never installed unless you ask for it.
@@ -180,10 +167,9 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 
 ## Install questions
 
-In a terminal, `quoin install` (and `install.sh`, which delegates to it) asks about optional components before it writes anything.
+In a terminal, `quoin install` (and `install.sh`, which delegates to it) asks about the optional workflow-tasks mod before it writes anything.
 
-- **When it asks:** only when both stdin and stdout are terminals. Piped, redirected or CI installs never ask. `QUOIN_INSTALL_NO_PROMPT=1` also suppresses the component questions (the two mods and agentdesk). The install-scope prompt is separate, so pass `--scope` as well for a fully silent install.
-- **Mods:** the context-tracker and workflow-tasks mods default to Yes. A mod is asked about only when it is not installed and its flag was not given; an installed mod is refreshed silently. A mod that cannot be installed (foreign folder, missing sources, user-scope copy during a project install) is reported in one line and not offered.
-- **Agentdesk:** default No, user scope only, and not asked when `~/.zshrc` already sources the helper. Asked on macOS only; elsewhere pass `--setup-agentdesk`. When confirmed it runs last, after everything else is installed, and a failing setup is a warning (the install still exits 0).
-- **Flags win:** `--with-*`, `--remove-*` and `--setup-agentdesk` answer their question up front.
-- **Abort:** Ctrl-C or end of input at any question exits with status 1 before anything is written.
+- **When it asks:** only when both stdin and stdout are terminals. Piped, redirected or CI installs never ask. `QUOIN_INSTALL_NO_PROMPT=1` also suppresses the mod question. The install-scope prompt is separate, so pass `--scope` as well for a fully silent install.
+- **Mod:** the workflow-tasks mod defaults to Yes. It is asked about only when it is not installed and its flag was not given; an installed copy is refreshed silently. If it cannot be installed (foreign folder, missing sources, user-scope copy during a project install), the reason is reported in one line and it is not offered.
+- **Flags win:** `--with-workflow-tasks` and `--remove-workflow-tasks` answer the question up front.
+- **Abort:** Ctrl-C or end of input at the question exits with status 1 before anything is written.

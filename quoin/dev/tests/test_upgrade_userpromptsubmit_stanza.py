@@ -3,7 +3,7 @@
 The hook script keeps its name, so the upgrade replaces quoin's own stanza in
 place and touches nothing else: other tools' stanzas (including the Stream
 Deck forwarder and a non-quoin stdin logger), unrelated settings keys and the
-context-tracker mod folder are all left exactly as they were.
+workflow-tasks mod folder are all left exactly as they were.
 """
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 QUOIN_SRC = REPO_ROOT / "quoin"
 
-from quoin.installer import deploy_context_tracker, deploy_hooks  # noqa: E402
+from quoin.installer import deploy_hooks, deploy_workflow_tasks  # noqa: E402
 
 
 def _stanza(command, matcher="*", timeout=5):
@@ -30,7 +30,7 @@ def test_upgrade_replaces_only_the_quoin_prompt_stanza(tmp_path):
     smoke = _stanza("/opt/tools/echo_stdin_smoke.sh")
     settings = {
         "model": "opus",
-        "enabledPlugins": {"context-tracker@local": True, "other@market": False},
+        "enabledPlugins": {"workflow-tasks@local": True, "other@market": False},
         "statusLine": {"type": "command", "command": "echo hi"},
         "hooks": {
             "UserPromptSubmit": [smoke, _stanza(str(hooks_dir / "userpromptsubmit.sh")), deck],
@@ -40,8 +40,8 @@ def test_upgrade_replaces_only_the_quoin_prompt_stanza(tmp_path):
     }
     (dest / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
-    deploy_context_tracker(QUOIN_SRC, dest, strict=False)
-    mod_dir = dest / "skills" / "context-tracker"
+    deploy_workflow_tasks(QUOIN_SRC, dest, strict=False)
+    mod_dir = dest / "skills" / "workflow-tasks"
     assert (mod_dir / "hooks" / "hooks.json").is_file()
     mod_before = _tree(mod_dir)
 

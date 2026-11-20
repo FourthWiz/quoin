@@ -199,7 +199,6 @@ def _stub_install_operations(monkeypatch):
     monkeypatch.setattr(inst, "deploy_scripts", lambda *a, **kw: None)
     monkeypatch.setattr(inst, "deploy_core_scripts", lambda *a, **kw: None)
     monkeypatch.setattr(inst, "deploy_core_workflow", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_dashboard_assets", lambda *a, **kw: None)
     monkeypatch.setattr(inst, "cleanup_obsolete_scripts", lambda *a, **kw: None)
     monkeypatch.setattr(inst, "deploy_hooks", lambda *a, **kw: None)
     monkeypatch.setattr(inst, "regenerate_pollution_dispatch", lambda *a, **kw: None)
@@ -252,7 +251,6 @@ def test_install_writes_record_user_scope(tmp_path, monkeypatch):
     _stub_install_operations(monkeypatch)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(inst, "deploy_agentdesk", lambda *a, **kw: None)
     args = _install_args(scope="user")
     with unittest.mock.patch.object(_pathlib.Path, "home", return_value=fake_home):
         result = cli._cmd_claude_install(args)

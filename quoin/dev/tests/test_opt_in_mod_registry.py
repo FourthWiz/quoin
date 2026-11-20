@@ -1,7 +1,7 @@
-"""Opt-in mod registry: the context-tracker messages are pinned as literals.
+"""Opt-in mod registry: the workflow-tasks messages are pinned as literals.
 
 The installer's opt-in mod helpers are generic over a mod name. These tests
-spell every context-tracker message out in full (not built from the generic
+spell every workflow-tasks message out in full (not built from the generic
 template), so a template that only agrees with itself cannot pass.
 """
 from __future__ import annotations
@@ -15,19 +15,19 @@ import quoin.installer as inst
 
 REPO = Path(__file__).resolve().parents[3]
 QUOIN_SRC = REPO / "quoin"
-PLUGIN_SRC = QUOIN_SRC / "plugins" / "context-tracker"
+PLUGIN_SRC = QUOIN_SRC / "plugins" / "workflow-tasks"
 
 
 def _src_copy(tmp_path: Path, *, drop: str | None = None) -> Path:
     src = tmp_path / "srctree"
-    shutil.copytree(PLUGIN_SRC, src / "plugins" / "context-tracker")
+    shutil.copytree(PLUGIN_SRC, src / "plugins" / "workflow-tasks")
     if drop:
-        (src / "plugins" / "context-tracker" / drop).unlink()
+        (src / "plugins" / "workflow-tasks" / drop).unlink()
     return src
 
 
 def _preflight(source, dest, *, mode, project=False, home=None, cwd=None):
-    return inst.context_tracker_preflight(
+    return inst.workflow_tasks_preflight(
         source,
         dest,
         mode=mode,
@@ -38,17 +38,17 @@ def _preflight(source, dest, *, mode, project=False, home=None, cwd=None):
 
 
 def _foreign(dest: Path) -> Path:
-    folder = dest / "skills" / "context-tracker"
+    folder = dest / "skills" / "workflow-tasks"
     folder.mkdir(parents=True)
     (folder / "note.txt").write_text("mine")
     return folder
 
 
-class TestContextTrackerMessages:
+class TestWorkflowTasksMessages:
     def test_missing_sources_error(self, tmp_path):
         src = _src_copy(tmp_path, drop="hooks/register.tsx")
         errors, warnings = _preflight(src, tmp_path / "dest", mode="with")
-        assert errors == ["quoin: context-tracker source files missing: hooks/register.tsx"]
+        assert errors == ["quoin: workflow-tasks source files missing: hooks/register.tsx"]
         assert warnings == []
 
     def test_foreign_folder_error(self, tmp_path):
@@ -56,26 +56,26 @@ class TestContextTrackerMessages:
         folder = _foreign(dest)
         errors, _ = _preflight(QUOIN_SRC, dest, mode="with")
         assert errors == [
-            f"quoin: {folder} exists and is not the quoin context-tracker mod "
+            f"quoin: {folder} exists and is not the quoin workflow-tasks mod "
             "(or is a symlink); move it aside and re-run"
         ]
 
     def test_project_double_load_error(self, tmp_path):
         home, project = tmp_path / "home", tmp_path / "project"
-        inst.deploy_context_tracker(QUOIN_SRC, home, strict=True)
+        inst.deploy_workflow_tasks(QUOIN_SRC, home, strict=True)
         errors, _ = _preflight(QUOIN_SRC, project, mode="with", project=True, home=home)
         assert errors == [
-            f"quoin: user-scope copy installed at {home / 'skills' / 'context-tracker'}; "
-            "remove it first (--remove-context-tracker --scope user) to avoid a double load"
+            f"quoin: user-scope copy installed at {home / 'skills' / 'workflow-tasks'}; "
+            "remove it first (--remove-workflow-tasks --scope user) to avoid a double load"
         ]
 
     def test_user_scope_reverse_warning(self, tmp_path):
         home, project = tmp_path / "home", tmp_path / "project"
-        inst.deploy_context_tracker(QUOIN_SRC, project, strict=True)
+        inst.deploy_workflow_tasks(QUOIN_SRC, project, strict=True)
         errors, warnings = _preflight(QUOIN_SRC, home, mode="with", home=home, cwd=project)
         assert errors == []
         assert warnings == [
-            f"quoin: project copy at {project / 'skills' / 'context-tracker'} "
+            f"quoin: project copy at {project / 'skills' / 'workflow-tasks'} "
             "will load alongside this user copy"
         ]
 
@@ -84,60 +84,60 @@ class TestContextTrackerMessages:
         folder = _foreign(dest)
         errors, warnings = _preflight(QUOIN_SRC, dest, mode="remove")
         assert errors == []
-        assert warnings == [f"quoin: {folder} is not the quoin context-tracker mod; leaving it untouched"]
+        assert warnings == [f"quoin: {folder} is not the quoin workflow-tasks mod; leaving it untouched"]
 
     def test_strict_deploy_with_a_missing_file_exits(self, tmp_path, capsys):
         src = _src_copy(tmp_path, drop="types/index.d.ts")
         with pytest.raises(SystemExit) as exc:
-            inst.deploy_context_tracker(src, tmp_path / "dest", strict=True)
+            inst.deploy_workflow_tasks(src, tmp_path / "dest", strict=True)
         assert exc.value.code == 1
-        missing = src / "plugins" / "context-tracker" / "types/index.d.ts"
+        missing = src / "plugins" / "workflow-tasks" / "types/index.d.ts"
         assert capsys.readouterr().err == (
-            f"quoin: Expected context-tracker file types/index.d.ts at {missing} but not found\n"
+            f"quoin: Expected workflow-tasks file types/index.d.ts at {missing} but not found\n"
         )
 
     def test_non_strict_deploy_skips_with_a_warning(self, tmp_path, capsys):
         src = _src_copy(tmp_path, drop="types/index.d.ts")
-        copied = inst.deploy_context_tracker(src, tmp_path / "dest", strict=False)
-        assert copied == 3
-        missing = src / "plugins" / "context-tracker" / "types/index.d.ts"
+        copied = inst.deploy_workflow_tasks(src, tmp_path / "dest", strict=False)
+        assert copied == 4
+        missing = src / "plugins" / "workflow-tasks" / "types/index.d.ts"
         assert capsys.readouterr().err == (
-            f"quoin: Expected context-tracker file types/index.d.ts at {missing} but not found; skipping\n"
+            f"quoin: Expected workflow-tasks file types/index.d.ts at {missing} but not found; skipping\n"
         )
 
     def test_apply_deployed_then_refreshed_then_removed(self, tmp_path, capsys):
         dest = tmp_path / "dest"
-        folder = dest / "skills" / "context-tracker"
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode="with") == "deployed"
-        assert capsys.readouterr().out == f"Deployed context-tracker mod to {folder}\n"
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode="with") == "refreshed"
-        assert capsys.readouterr().out == f"Refreshed context-tracker mod at {folder}\n"
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode=None) == "refreshed"
-        assert capsys.readouterr().out == f"Refreshed context-tracker mod at {folder}\n"
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode="remove") == "removed"
-        assert capsys.readouterr().out == f"Removed context-tracker mod from {folder}\n"
+        folder = dest / "skills" / "workflow-tasks"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="with") == "deployed"
+        assert capsys.readouterr().out == f"Deployed workflow-tasks mod to {folder}\n"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="with") == "refreshed"
+        assert capsys.readouterr().out == f"Refreshed workflow-tasks mod at {folder}\n"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode=None) == "refreshed"
+        assert capsys.readouterr().out == f"Refreshed workflow-tasks mod at {folder}\n"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="remove") == "removed"
+        assert capsys.readouterr().out == f"Removed workflow-tasks mod from {folder}\n"
 
     def test_apply_nothing_to_remove(self, tmp_path, capsys):
         dest = tmp_path / "dest"
-        folder = dest / "skills" / "context-tracker"
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode="remove") == "absent"
-        assert capsys.readouterr().out == f"context-tracker mod not installed at {folder}; nothing to remove\n"
+        folder = dest / "skills" / "workflow-tasks"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="remove") == "absent"
+        assert capsys.readouterr().out == f"workflow-tasks mod not installed at {folder}; nothing to remove\n"
 
     def test_apply_remove_foreign_is_silent(self, tmp_path, capsys):
         dest = tmp_path / "dest"
         _foreign(dest)
-        assert inst.apply_context_tracker(QUOIN_SRC, dest, mode="remove") == "foreign"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="remove") == "foreign"
         assert capsys.readouterr().out == ""
 
     def test_no_mode_and_absent_is_silent(self, tmp_path, capsys):
-        assert inst.apply_context_tracker(QUOIN_SRC, tmp_path / "dest", mode=None) == "noop"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, tmp_path / "dest", mode=None) == "noop"
         assert capsys.readouterr().out == ""
 
 
 class TestRegistry:
     def test_names_are_unique_and_match_folders(self):
         names = [mod.name for mod in inst.OPT_IN_MODS]
-        assert names == ["context-tracker", "workflow-tasks"]
+        assert names == ["workflow-tasks"]
         assert len(set(names)) == len(names)
 
     def test_every_allowlisted_file_exists_in_source(self):
@@ -162,9 +162,7 @@ class TestRegistry:
         )
 
     def test_wrappers_are_bound_to_their_mods(self):
-        assert inst.CONTEXT_TRACKER_FILES is inst.CONTEXT_TRACKER.files
         assert inst.WORKFLOW_TASKS_FILES is inst.WORKFLOW_TASKS.files
-        assert inst.CONTEXT_TRACKER_NAME == "context-tracker"
         assert inst.WORKFLOW_TASKS_NAME == "workflow-tasks"
 
     def test_generic_messages_carry_the_mod_name(self, tmp_path, capsys):

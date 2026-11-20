@@ -805,7 +805,7 @@ def _install_harness(tmp_path, monkeypatch, *, source_dir=None, scope="user", pl
     monkeypatch.setattr(cli_mod, "_resolve_dest_root", lambda args: dest_root)
     for name in ("deploy_memory", "deploy_quickstart", "deploy_scripts", "deploy_core_scripts",
                  "cleanup_obsolete_scripts", "deploy_hooks", "regenerate_preambles",
-                 "deploy_core_workflow", "deploy_dashboard_assets", "cleanup_obsolete_memory",
+                 "deploy_core_workflow", "cleanup_obsolete_memory",
                  "cleanup_obsolete_skills"):
         monkeypatch.setattr(inst, name, lambda *a, **kw: None)
     monkeypatch.setattr(inst, "check_prerequisites", lambda: [])

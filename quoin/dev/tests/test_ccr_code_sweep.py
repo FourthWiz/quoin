@@ -66,7 +66,6 @@ _BUCKET_1_COUNTS = {
     "quoin/dev/tests/test_models.py": 11,
     "quoin/dev/tests/test_router_setup.py": 4,
     "quoin/dev/tests/test_launch_guidance.py": 3,
-    "quoin/dev/tests/test_agentdesk_zsh_args.py": 4,
 }
 
 # Bucket 2 — Part-B-governed; excluded from the proximity check below.
@@ -77,7 +76,6 @@ _BUCKET_3_COUNTS = {
     "README.md": 5,
     "quoin/CLAUDE.md": 1,
     "quoin/memory/workflow-catalog.md": 1,
-    "quoin/tools/agentdesk/agentdesk.zsh": 1,
 }
 _PROXIMITY_WINDOW = 250
 

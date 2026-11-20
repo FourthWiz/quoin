@@ -111,8 +111,6 @@ DEPLOYED_SCRIPTS = (
     "git_root_for_dispatch.py",
     "dispatch_sidecar.py",
     "status_graph.py",
-    "dashboard_cost.py",    # T-11: dashboard adapter cost provider (D-11)
-    "dashboard_server.py",  # T-11: dashboard HTTP server (D-11)
     "branch_hygiene.py",   # IVG-70: branch hygiene check wrapper
     "affected_tests.py",   # IVG-71: affected-area test selector + runner wrapper
     "inject_pollution_dispatch.py",  # IVG-69 Stage A: §0' Pollution dispatch generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
@@ -640,8 +638,7 @@ CORE_SCRIPTS = (
     "path_resolve.py",
     "classify_critic_issues.py",
     "status_graph.py",
-    "cost_event.py",              # required by dashboard_model.py (sibling core load)
-    "dashboard_model.py",
+    "cost_event.py",
     "dispatch_sidecar.py",        # wrapped impl; required by ~/.claude/scripts/dispatch_sidecar.py parents[1] loader
     "git_root_for_dispatch.py",   # wrapped impl; required by ~/.claude/scripts/git_root_for_dispatch.py parents[1] loader
     "branch_hygiene.py",          # wrapped impl; required by ~/.claude/scripts/branch_hygiene.py parents[1] loader
@@ -774,17 +771,6 @@ class OptInMod(NamedTuple):
 
     name: str
     files: tuple[str, ...]
-
-
-CONTEXT_TRACKER = OptInMod(
-    "context-tracker",
-    (
-        ".claude-plugin/plugin.json",
-        "hooks/hooks.json",
-        "hooks/register.tsx",
-        "types/index.d.ts",
-    ),
-)
 
 
 def mod_source(mod: OptInMod, source_dir: pathlib.Path) -> pathlib.Path:
@@ -927,67 +913,6 @@ def apply_mod(
     return "noop"
 
 
-# Names the context-tracker tests and the CLI already use: thin wrappers bound
-# to CONTEXT_TRACKER so their signatures and behaviour stay unchanged.
-CONTEXT_TRACKER_NAME = CONTEXT_TRACKER.name
-CONTEXT_TRACKER_FILES: tuple[str, ...] = CONTEXT_TRACKER.files
-
-
-def context_tracker_source(source_dir: pathlib.Path) -> pathlib.Path:
-    return mod_source(CONTEXT_TRACKER, source_dir)
-
-
-def context_tracker_dest(dest_root: pathlib.Path) -> pathlib.Path:
-    return mod_dest(CONTEXT_TRACKER, dest_root)
-
-
-def context_tracker_state(dest_root: pathlib.Path) -> str:
-    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
-    return mod_state(CONTEXT_TRACKER, dest_root)
-
-
-def missing_context_tracker_sources(source_dir: pathlib.Path) -> list[str]:
-    return missing_mod_sources(CONTEXT_TRACKER, source_dir)
-
-
-def context_tracker_preflight(
-    source_dir: pathlib.Path,
-    dest_root: pathlib.Path,
-    *,
-    mode: Optional[str],
-    is_project_mode: bool,
-    home_dest_root: pathlib.Path,
-    cwd_dest_root: pathlib.Path,
-) -> tuple[list[str], list[str]]:
-    """Pure check run before anything is written; returns (errors, warnings)."""
-    return mod_preflight(
-        CONTEXT_TRACKER,
-        source_dir,
-        dest_root,
-        mode=mode,
-        is_project_mode=is_project_mode,
-        home_dest_root=home_dest_root,
-        cwd_dest_root=cwd_dest_root,
-    )
-
-
-def deploy_context_tracker(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
-    """Copy the allowlisted mod files; returns the number of files handled."""
-    return deploy_mod(CONTEXT_TRACKER, source_dir, dest_root, strict=strict)
-
-
-def remove_context_tracker(dest_root: pathlib.Path) -> bool:
-    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
-    return remove_mod(CONTEXT_TRACKER, dest_root)
-
-
-def apply_context_tracker(
-    source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
-) -> str:
-    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
-    return apply_mod(CONTEXT_TRACKER, source_dir, dest_root, mode=mode)
-
-
 WORKFLOW_TASKS = OptInMod(
     "workflow-tasks",
     (
@@ -1000,7 +925,7 @@ WORKFLOW_TASKS = OptInMod(
 )
 
 # Every opt-in mod, in the order the install applies them.
-OPT_IN_MODS: tuple[OptInMod, ...] = (CONTEXT_TRACKER, WORKFLOW_TASKS)
+OPT_IN_MODS: tuple[OptInMod, ...] = (WORKFLOW_TASKS,)
 
 WORKFLOW_TASKS_NAME = WORKFLOW_TASKS.name
 WORKFLOW_TASKS_FILES: tuple[str, ...] = WORKFLOW_TASKS.files
@@ -1092,8 +1017,8 @@ def compute_drift(
 
     Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
     CANONICAL_SKILLS (adapter SKILL.md, + each SKILL_COMPANION_FILES entry the adapter
-    skill folder carries), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
-    context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
+    skill folder carries), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and the files of each installed
+    opt-in mod — and compares each deployed file
     under dest_root against expected_deployed_content(src, dest_root). Per file:
       * deployed copy absent            -> DriftEntry(..., reason="missing")
       * deployed bytes != expected      -> DriftEntry(..., reason="stale")
@@ -1180,38 +1105,6 @@ def compute_drift(
 
 
 # T-12: Dashboard asset directory — fixed set of SPA files
-_DASHBOARD_ASSETS = ("index.html", "dashboard.css", "app.js", "memory.js")
-
-
-def deploy_dashboard_assets(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
-    """Copy the dashboard SPA assets from source_dir/core/scripts/dashboard_assets/
-    to dest_root/core/scripts/dashboard_assets/.
-
-    (a) Creates the destination directory with parents=True before copying
-        (fresh-install safety — _copy_with_substitution does not mkdir).
-    (b) Copies index.html, dashboard.css, app.js, memory.js via _copy_with_substitution
-        (no __QUOIN_HOME__ placeholders in these files; byte-copy harmless).
-    (c) Fails with clear stderr + sys.exit(1) if a source asset is missing.
-
-    Per D-11 (arch R-06): caller is _cmd_claude_install, after deploy_core_scripts.
-    """
-    src_assets = source_dir / "core" / "scripts" / "dashboard_assets"
-    dst_assets = dest_root / "core" / "scripts" / "dashboard_assets"
-    # (a) mkdir before any copy
-    dst_assets.mkdir(parents=True, exist_ok=True)
-    # (b) copy each asset
-    for fname in _DASHBOARD_ASSETS:
-        src = src_assets / fname
-        if not src.exists():
-            print(
-                f"quoin: Expected dashboard asset {fname} at {src} but not found; "
-                "ensure quoin/core/scripts/dashboard_assets/ is present in the source tree",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        dst = dst_assets / fname
-        _copy_with_substitution(src, dst, dest_root)
-        print(f"Copied dashboard asset {fname} to {dst_assets}/")
 
 
 def _merge_skill_overrides(settings: dict) -> int:
@@ -1768,38 +1661,6 @@ def check_prerequisites() -> list[str]:
             file=sys.stderr,
         )
     return missing
-
-
-def deploy_agentdesk(source_dir: pathlib.Path, dest_agentdesk_dir: pathlib.Path) -> None:
-    """Copy agentdesk tool files to dest_agentdesk_dir (~/.config/agentdesk/).
-
-    If source files are missing, logs a warning and returns without error.
-    agentdesk is an optional user-level tool; its absence must not abort install.
-    """
-    src_agentdesk = source_dir / "tools" / "agentdesk"
-    if not src_agentdesk.exists():
-        print(f"[warn] agentdesk source not found: {src_agentdesk}", file=sys.stderr)
-        return
-
-    dest_agentdesk_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy agentdesk.zsh — _copy_with_substitution only sets +x for .py/.sh,
-    # so we call os.chmod explicitly for the .zsh file.
-    _copy_with_substitution(
-        src_agentdesk / "agentdesk.zsh",
-        dest_agentdesk_dir / "agentdesk.zsh",
-        dest_agentdesk_dir,
-    )
-    os.chmod(dest_agentdesk_dir / "agentdesk.zsh", 0o755)
-
-    # Copy setup-agentdesk.sh — .sh extension, _copy_with_substitution sets +x.
-    _copy_with_substitution(
-        src_agentdesk / "setup-agentdesk.sh",
-        dest_agentdesk_dir / "setup-agentdesk.sh",
-        dest_agentdesk_dir,
-    )
-
-    print(f"Deployed agentdesk to {dest_agentdesk_dir}")
 
 
 def _has_pyyaml() -> bool:

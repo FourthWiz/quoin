@@ -84,8 +84,6 @@ class HarnessConfig:
             "quoin-claude",
             "simple-codex",
             "quoin-codex",
-            "simple-opencode",
-            "quoin-opencode",
         ]
     )
     """Cell IDs to run. Must match REQUIRED_MODE_IDS in validate_benchmarks.py."""

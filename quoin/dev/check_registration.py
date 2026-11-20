@@ -380,8 +380,7 @@ def rg_stale_core(core_scripts_set: set, core_scripts_dir: Path, findings: list)
 NON_DEPLOYED_WRAPPERS: frozenset = frozenset({
     "validate_adapter_drift.py",   # dev/CI-only
     "validate_discovery_map.py",   # dev/CI-only
-    "cost_event.py",               # core-only-deploy (required by dashboard_model.py)
-    "dashboard_model.py",          # core-only-deploy
+    "cost_event.py",               # core-only-deploy
 })
 
 

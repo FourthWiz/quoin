@@ -126,7 +126,7 @@ def test_foreign_hook_stanzas_are_untouched_by_upgrade(tmp_path):
 
 def test_cli_runs_the_obsolete_cleanups_after_the_deploys():
     cli_text = (REPO_ROOT / "src" / "quoin" / "cli.py").read_text(encoding="utf-8")
-    deploys = cli_text.index("installer.deploy_dashboard_assets(")
+    deploys = cli_text.index("installer.deploy_core_workflow(")
     for call in ("cleanup_obsolete_scripts", "cleanup_obsolete_skills", "cleanup_obsolete_memory"):
         assert cli_text.index(f"installer.{call}(dest_root)") > deploys
 

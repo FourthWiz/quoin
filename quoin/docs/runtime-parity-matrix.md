@@ -13,8 +13,8 @@ Status vocabulary:
   adapter docs, readiness checks, or deterministic smoke tests.
 - `Unsupported` - intentionally not provided for that runtime.
 - `Planned` - future work; not implemented yet.
-- `OpenCode-generated` - produced by `quoin install --runtime opencode`,
-  statically checked and offline smoke-tested; no live runtime evidence.
+- `OpenCode-generated` - produced by the OpenCode adapter as of the `legacy`
+  tag; the adapter now lives in its own repository, `quoin-opencode`.
 
 No global Codex installer is supported. No Codex command files, global Codex
 paths, approval layer, sandbox layer, model-dispatch mechanism, or live runtime
@@ -27,12 +27,9 @@ comparing simple Claude, Quoin + Claude, simple Codex, and Quoin + Codex
 workflows. The framework captures scenarios, metrics, run sheets, and result
 templates; it does not include measured results or cross-runtime claims.
 
-`quoin install --runtime opencode` generates project-local OpenCode commands,
-skills and role agents for a subset of the 33 migrated skills, checked by
-`quoin doctor --runtime opencode` and offline smoke tests. The headless
-coordinator (`quoin run --runtime opencode --workflow`) is exercised end to end
-against a fake OpenCode executable; no live OpenCode run is verified by this
-repository.
+The OpenCode column records the adapter as it stood at the `legacy` tag. The
+adapter, its install and doctor commands and its headless coordinator moved to
+the `quoin-opencode` repository and are no longer part of this package.
 
 ## Workflow Semantics
 
