@@ -35,7 +35,7 @@
       "effort": "low",
       "user_facing": true,
       "claude_model": "sonnet",
-      "section_0": true,
+      "section_0": false,
       "spawn_target": false
     },
     {
@@ -152,7 +152,7 @@
       "effort": "medium",
       "user_facing": true,
       "claude_model": "sonnet",
-      "section_0": true,
+      "section_0": false,
       "spawn_target": false
     },
     {
@@ -242,7 +242,7 @@
       "effort": "low",
       "user_facing": true,
       "claude_model": "haiku",
-      "section_0": true,
+      "section_0": false,
       "spawn_target": false
     },
     {
@@ -296,7 +296,7 @@
       "effort": "medium",
       "user_facing": true,
       "claude_model": "sonnet",
-      "section_0": true,
+      "section_0": false,
       "spawn_target": false
     },
     {

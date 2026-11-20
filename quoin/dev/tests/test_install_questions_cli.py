@@ -63,6 +63,8 @@ class Session:
         cwd = os.getcwd()
         with contextlib.ExitStack() as st:
             st.enter_context(unittest_patch(inst, "check_prerequisites", lambda: []))
+            st.enter_context(unittest_patch(inst, "stage_plugin", lambda *a, **kw: "0+test"))
+            st.enter_context(unittest_patch(inst, "install_plugin", lambda *a, **kw: "install"))
             st.enter_context(unittest_patch_call("time.sleep"))
             st.enter_context(unittest_patch(Path, "home", classmethod(lambda cls: self.home)))
             st.enter_context(unittest_patch_call("shutil.which", _no_which))

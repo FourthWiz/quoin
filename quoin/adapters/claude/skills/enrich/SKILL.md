@@ -18,7 +18,7 @@ prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax
 Detection:
   - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
   - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+  - Otherwise run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pollution_guard.py` once.
     It scores the current session transcript; threshold POLLUTION_THRESHOLD
     (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
   - Output starting `OVER|`: session is polluted.
@@ -130,15 +130,15 @@ description wording for every branch below: memory/dispatch-guide.md §0″ verb
 ## Session bootstrap
 
 This skill may run in a fresh chat session with no prior context. On start:
-1. Read `__QUOIN_HOME__/skills/enrich/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read.
+1. Read `${CLAUDE_PLUGIN_ROOT}/skills/enrich/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read.
 2. Read `.workflow_artifacts/memory/lessons-learned.md` for insights relevant to prompt framing and past enrichment mistakes.
 3. Read `.workflow_artifacts/memory/repos-inventory.md`, `architecture-overview.md`, and `dependencies-map.md` (if they exist) — this is your grounding context for judging whether the raw prompt has genuine gaps against the real codebase, not guessed ones.
 4. Read `.workflow_artifacts/memory/sessions/` for any active session state for this task.
-5. Resolve the task dir via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name>` (no `--stage` flag — `enriched-prompt.md` is ALWAYS at the task root, mirroring `spec.md`). If exit code 2: display stderr verbatim, fall back to the task root, and ask the user to disambiguate. Read `<task-root>/spec.md` if it already exists — a prior spec is useful grounding context (do not duplicate it; enrichment is upstream of specify, not a replacement for it).
-6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `enrich` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+5. Resolve the task dir via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name>` (no `--stage` flag — `enriched-prompt.md` is ALWAYS at the task root, mirroring `spec.md`). If exit code 2: display stderr verbatim, fall back to the task root, and ask the user to disambiguate. Read `<task-root>/spec.md` if it already exists — a prior spec is useful grounding context (do not duplicate it; enrichment is upstream of specify, not a replacement for it).
+6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `enrich` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-7. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`.
+7. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`.
 8. Then proceed with the work below.
 
 ## Process
@@ -164,7 +164,7 @@ Analyze the raw prompt against the grounding context gathered above (real repo s
 
 Write a single artifact, `<task-root>/enriched-prompt.md`, as a **Class A** artifact (always-English; no terse body).
 
-**Write mechanism:** compose the full file content and write to `<task-root>/enriched-prompt.md.tmp` via the Write tool, then atomically rename: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-root>/enriched-prompt.md.tmp" "<task-root>/enriched-prompt.md"`. No validator schema exists for this filename (confirmed inert on `detect_type()` — falls through to `default`); this is a Class A always-English doc, not a Class B validated artifact.
+**Write mechanism:** compose the full file content and write to `<task-root>/enriched-prompt.md.tmp` via the Write tool, then atomically rename: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<task-root>/enriched-prompt.md.tmp" "<task-root>/enriched-prompt.md"`. No validator schema exists for this filename (confirmed inert on `detect_type()` — falls through to `default`); this is a Class A always-English doc, not a Class B validated artifact.
 
 Sections, in this order:
 - `## Enriched prompt` — the sharpened task description, ready to feed into `/specify` or `/architect`.
@@ -197,7 +197,7 @@ STOP after writing and echoing `enriched-prompt.md` — never invokes a downstre
 ## Save session state
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `completed` (single pass, nothing to resume)
 - Current stage: `enrich`

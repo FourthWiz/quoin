@@ -29,7 +29,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -48,7 +48,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -88,7 +88,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -183,7 +183,7 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost ledger: if a task context is determinable from the path or active session, append a row with phase `expand` to `.workflow_artifacts/<task-name>/cost-ledger.md` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If no task context is active, skip cost recording.
+Cost ledger: if a task context is determinable from the path or active session, append a row with phase `expand` to `.workflow_artifacts/<task-name>/cost-ledger.md` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If no task context is active, skip cost recording.
 
 <!-- quoin:ledger-self-write -->
 

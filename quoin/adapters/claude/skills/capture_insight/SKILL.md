@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -127,7 +127,7 @@ Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sent
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/capture_insight` is a lightweight note-taking skill. Append to the cost ledger only if a task context is clearly active. If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `capture-insight` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/capture_insight` is a lightweight note-taking skill. Append to the cost ledger only if a task context is clearly active. If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `capture-insight` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -157,12 +157,12 @@ For **workflow-friction** type, always set `Promote?: yes` — these are surface
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write `daily/insights-{date}.md` appends in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives + section set), `__QUOIN_HOME__/memory/glossary.md` (status glyphs + abbreviation whitelist), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline inside the Insight body). Entry structure: each insight is a `## {HH:MM} — {task-context or "ad-hoc"}` heading followed by a YAML-style key/value block (Type / Insight / Applies to / Promote?) per the template below. The terse-rubric applies inside the multi-sentence Insight value only (caveman prose for "why" content). After appending, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {insights-path}` (auto-detection — file does not match a named-type prefix, falls through to `default`). On V-failure (rare for append-only structured entries): log a `format-kit-skipped` warning and continue (capture_insight is Haiku, must not block). No retry — append-only file already has the new entry.
+Write `daily/insights-{date}.md` appends in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` (primitives + section set), `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` (status glyphs + abbreviation whitelist), `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` (prose discipline inside the Insight body). Entry structure: each insight is a `## {HH:MM} — {task-context or "ad-hoc"}` heading followed by a YAML-style key/value block (Type / Insight / Applies to / Promote?) per the template below. The terse-rubric applies inside the multi-sentence Insight value only (caveman prose for "why" content). After appending, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py {insights-path}` (auto-detection — file does not match a named-type prefix, falls through to `default`). On V-failure (rare for append-only structured entries): log a `format-kit-skipped` warning and continue (capture_insight is Haiku, must not block). No retry — append-only file already has the new entry.
 
 Append to `.workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md` (today's date) with the append helper, never with the Write/Edit tools: the helper needs no prior Read, creates the file (and its header) when missing, and is safe when parallel sessions append at once. Pass `--header` on every call; it is only written when the file is new or empty:
 
 ```bash
-python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line \
   ".workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md" \
   --header "$(printf '# Daily Insights — %s\n\nScratchpad for patterns, gotchas, and decisions captured during task work.\nReviewed and promoted by /end_of_day.\n\n---' "<YYYY-MM-DD>")" <<'ENTRY'
 ## <HH:MM> — <task-context or "ad-hoc">

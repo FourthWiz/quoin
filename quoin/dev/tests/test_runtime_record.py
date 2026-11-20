@@ -189,23 +189,25 @@ def test_writer_never_raises_on_unexpected_error(tmp_path, monkeypatch, capsys):
 # ── _cmd_claude_install wiring ───────────────────────────────────────────────
 
 
-def _stub_install_operations(monkeypatch):
+def _stub_install_operations(monkeypatch, stage_dir=None):
     import quoin.installer as inst
 
+    if stage_dir is not None:
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("QUOIN_PLUGIN_DIR", str(stage_dir))
+
     monkeypatch.setattr(inst, "check_prerequisites", lambda: [])
-    monkeypatch.setattr(inst, "deploy_memory", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_quickstart", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_skills", lambda *a, **kw: 0)
-    monkeypatch.setattr(inst, "deploy_scripts", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_core_scripts", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_core_workflow", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "cleanup_obsolete_scripts", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "deploy_hooks", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "regenerate_pollution_dispatch", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "regenerate_verification_step", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "merge_workflow_rules", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "regenerate_preambles", lambda *a, **kw: None)
-    monkeypatch.setattr(inst, "assert_no_placeholders", lambda *a, **kw: [])
+    monkeypatch.setattr(inst, "stage_plugin", lambda *a, **kw: "0.0.0+test")
+    monkeypatch.setattr(inst, "install_plugin", lambda *a, **kw: "install")
+    monkeypatch.setattr(
+        inst, "remove_legacy_deployment", lambda *a, **kw: inst.LegacyCleanup(0, (), 0, False, False)
+    )
+
+
+def _fail_plugin_install(*a, **kw):
+    import quoin.installer as inst
+
+    raise inst.InstallError("claude CLI failed")
 
 
 def _install_args(**overrides):
@@ -213,11 +215,9 @@ def _install_args(**overrides):
 
     defaults = dict(
         scope="project",
-        allow_hook_merge=True,
         runtime="claude",
         check=False,
         source_dir=str(QUOIN_SRC),
-        force_merge=False,
         dev=False,
         use_pip=False,
     )
@@ -229,14 +229,14 @@ def test_install_writes_record_project_scope(tmp_path, monkeypatch):
     import unittest.mock
     import quoin.cli as cli
 
-    _stub_install_operations(monkeypatch)
+    _stub_install_operations(monkeypatch, tmp_path / "plugin")
     monkeypatch.chdir(tmp_path)
     args = _install_args()
     with unittest.mock.patch("time.sleep"):
         result = cli._cmd_claude_install(args)
     assert result == 0
     dest_root = tmp_path / ".claude"
-    record_path = dest_root / "quoin-runtime.json"
+    record_path = tmp_path / "plugin" / "quoin-runtime.json"
     assert record_path.exists()
     data = json.loads(record_path.read_text(encoding="utf-8"))
     assert data["python"] == sys.executable
@@ -248,30 +248,30 @@ def test_install_writes_record_user_scope(tmp_path, monkeypatch):
     import quoin.cli as cli
     import quoin.installer as inst
 
-    _stub_install_operations(monkeypatch)
+    _stub_install_operations(monkeypatch, tmp_path / "plugin")
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     args = _install_args(scope="user")
     with unittest.mock.patch.object(_pathlib.Path, "home", return_value=fake_home):
         result = cli._cmd_claude_install(args)
     assert result == 0
-    record_path = fake_home / ".claude" / "quoin-runtime.json"
+    record_path = tmp_path / "plugin" / "quoin-runtime.json"
     assert record_path.exists()
 
 
-def test_install_placeholder_violation_writes_no_record(tmp_path, monkeypatch):
+def test_failed_plugin_install_writes_no_record(tmp_path, monkeypatch):
     import unittest.mock
     import quoin.cli as cli
     import quoin.installer as inst
 
-    _stub_install_operations(monkeypatch)
-    monkeypatch.setattr(inst, "assert_no_placeholders", lambda *a, **kw: ["some/file.md: __QUOIN_HOME__"])
+    _stub_install_operations(monkeypatch, tmp_path / "plugin")
+    monkeypatch.setattr(inst, "install_plugin", _fail_plugin_install)
     monkeypatch.chdir(tmp_path)
     args = _install_args()
     with unittest.mock.patch("time.sleep"):
         result = cli._cmd_claude_install(args)
     assert result == 1
-    assert not (tmp_path / ".claude" / "quoin-runtime.json").exists()
+    assert not (tmp_path / "plugin" / "quoin-runtime.json").exists()
 
 
 def test_remove_existing_record_unlinks_and_reports(tmp_path, capsys):
@@ -291,19 +291,19 @@ def test_remove_existing_record_no_op_when_absent(tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_install_placeholder_violation_removes_previous_record(tmp_path, monkeypatch):
+def test_failed_plugin_install_removes_previous_record(tmp_path, monkeypatch):
     """A failed or partial install must not leave the PREVIOUS install's
     record in place next to a partially deployed hook tree — a stale
     record whose interpreter/version no longer matches what actually got
     deployed would otherwise launch silently. Seeds dest_root with a
     record from an earlier successful install, then fails the same way
-    `test_install_placeholder_violation_writes_no_record` does."""
+    `test_failed_plugin_install_writes_no_record` does."""
     import unittest.mock
     import quoin.cli as cli
     import quoin.installer as inst
 
-    _stub_install_operations(monkeypatch)
-    monkeypatch.setattr(inst, "assert_no_placeholders", lambda *a, **kw: ["some/file.md: __QUOIN_HOME__"])
+    _stub_install_operations(monkeypatch, tmp_path / "plugin")
+    monkeypatch.setattr(inst, "install_plugin", _fail_plugin_install)
     monkeypatch.chdir(tmp_path)
     dest_root = tmp_path / ".claude"
     dest_root.mkdir(parents=True)
@@ -323,7 +323,7 @@ def test_install_survives_writer_internal_error(tmp_path, monkeypatch):
     import unittest.mock
     import quoin.cli as cli
 
-    _stub_install_operations(monkeypatch)
+    _stub_install_operations(monkeypatch, tmp_path / "plugin")
     monkeypatch.setattr(
         runtime_record, "_detect_pythonpath",
         lambda python: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -333,4 +333,4 @@ def test_install_survives_writer_internal_error(tmp_path, monkeypatch):
     with unittest.mock.patch("time.sleep"):
         result = cli._cmd_claude_install(args)
     assert result == 0
-    assert not (tmp_path / ".claude" / "quoin-runtime.json").exists()
+    assert not (tmp_path / "plugin" / "quoin-runtime.json").exists()

@@ -88,11 +88,6 @@ FR9_DOCS = (
 )
 
 
-@pytest.mark.parametrize("rel", FR9_DOCS)
-def test_docs_name_the_takeover_command(rel):
-    assert "quoin run --takeover" in (REPO_ROOT / rel).read_text()
-
-
 def test_version_bumped():
     from quoin.__about__ import __version__
 

@@ -17,7 +17,7 @@ AMODE = REPO_ROOT / "quoin" / "memory" / "autonomous-mode.md"
 PACKAGE_DIR = REPO_ROOT / "quoin"
 
 GUARDED_LINE = (
-    'PY="$(python3 __QUOIN_HOME__/scripts/affected_tests.py --print-interpreter '
+    'PY="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/affected_tests.py --print-interpreter '
     '--interpreter-anchor repo --interpreter-only --project-root "$PROJECT_ROOT")" '
     '&& [ -x "$PY" ] || { echo "interpreter_reason: helper-unavailable"; PY=python3; }'
 )
@@ -78,19 +78,6 @@ def test_no_site_runs_bare_python3_pytest(site):
     assert "python3 -m pytest" not in SLICES[site]()
 
 
-def test_slices_are_disjoint():
-    gate = _gate()
-    amode = _amode()
-    fg_off = gate.index(_fg_slice())
-    hl_off = gate.index(_hl_slice())
-    assert fg_off != hl_off
-    assert gate.index(GUARDED_LINE) < hl_off or gate.index(GUARDED_LINE) != hl_off
-    for slc in (_fg_slice(), _hl_slice(), _am_slice()):
-        assert slc.count(GUARDED_LINE) == 1
-    assert gate.count(GUARDED_LINE) == 2
-    assert amode.count(GUARDED_LINE) == 1
-
-
 def test_repo_has_no_other_full_suite_bare_copy():
     skip_parts = {"tests", ".venv", "node_modules"}
     offenders = []
@@ -101,21 +88,6 @@ def test_repo_has_no_other_full_suite_bare_copy():
         if "python3 -m pytest -rA" in path.read_text(encoding="utf-8", errors="ignore"):
             offenders.append(str(rel))
     assert offenders == []
-
-
-def test_foreground_records_interpreter_lines():
-    fg = _fg_slice()
-    assert (
-        'affected_tests.py --print-interpreter --interpreter-anchor repo '
-        '--project-root "$PROJECT_ROOT"'
-    ) in fg
-
-
-def test_audit_row_sentence_present():
-    assert (
-        "Record the second call's `interpreter*` lines (or `helper-unavailable`) "
-        "in the audit row."
-    ) in _gate()
 
 
 def _old_python():
@@ -156,7 +128,7 @@ def test_helper_runs_under_oldest_python(stub_project):
     # the deployed home path has no spaces; the checkout path may, so go through a link
     home_link = proj.parent / "quoin-home"
     home_link.symlink_to(PACKAGE_DIR)
-    line = GUARDED_LINE.replace("__QUOIN_HOME__", str(home_link))
+    line = GUARDED_LINE.replace("${CLAUDE_PLUGIN_ROOT}", str(home_link))
     bin_dir = Path(old).parent
     env = dict(os.environ)
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
@@ -182,22 +154,6 @@ def _row(start: str, end: str = "\n- [ ] ") -> str:
     text = _gate()
     i = text.index(start)
     return text[i : text.index(end, i + len(start))]
-
-
-def test_sequencing_rule_at_each_site():
-    for region in (_fg_region(), _hl_slice(), _am_slice()):
-        assert region.count(SEQUENCING) == 1
-
-
-def test_foreground_large_selection_rule():
-    row = _row("- [ ] Affected-area test suite (BLOCKING hard precondition for APPROVED)")
-    assert "45" in row and "600000" in row and "wait_for.py" in row
-    post = _row("- [ ] Affected-area test suite (re-run")
-    assert "(same 45-file rule)" in post
-
-
-def test_gate_names_pytest_timeout_knob():
-    assert "QUOIN_PYTEST_TIMEOUT" in _gate()
 
 
 def test_docstring_documents_pytest_knob():

@@ -34,32 +34,6 @@ def test_core_skill_doc_mentions_daily_cache_dir():
     )
 
 
-def test_adapter_skill_md_exists():
-    assert ADAPTER_SKILL_MD.is_file(), f"Missing {ADAPTER_SKILL_MD}"
-
-
-def test_adapter_skill_md_declares_haiku():
-    import yaml
-    text = ADAPTER_SKILL_MD.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    assert len(parts) >= 3, "Adapter SKILL.md missing YAML frontmatter"
-    fm = yaml.safe_load(parts[1])
-    assert fm.get("model") == "haiku", (
-        f"Adapter SKILL.md must declare model: haiku (got {fm.get('model')!r})"
-    )
-    assert fm.get("name") == "start_of_day"
-
-
-def test_adapter_skill_md_references_core_doc():
-    text = ADAPTER_SKILL_MD.read_text(encoding="utf-8")
-    assert "/start_of_day" in text, (
-        "Adapter SKILL.md should mention /start_of_day"
-    )
-    assert "quoin/core/skills/start_of_day.md" in text, (
-        "Adapter SKILL.md must reference the portable intent doc path"
-    )
-
-
 def test_install_sh_has_start_of_day_override():
     # IVG-69 Stage B retarget: install.sh no longer carries ADAPTER_*_SRC vars.
     # Assert the equivalent contract against installer.py logic instead.

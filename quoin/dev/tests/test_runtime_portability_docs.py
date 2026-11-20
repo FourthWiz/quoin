@@ -1,4 +1,3 @@
-import json
 import re
 from pathlib import Path
 
@@ -70,42 +69,6 @@ def test_runtime_portability_docs_link_to_parity_matrix():
     ]:
         text = read_rel(path)
         assert "runtime-parity-matrix.md" in text
-
-
-def test_runtime_parity_matrix_covers_major_semantics_and_all_migrated_skills():
-    matrix = read_rel("quoin/docs/runtime-parity-matrix.md")
-    manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
-    skill_names = [skill["name"] for skill in manifest["skills"]]
-
-    assert len(skill_names) == 34
-    for name in skill_names:
-        assert f"`{name}`" in matrix
-        assert f"quoin/core/skills/{name}.md" in matrix
-        entry = next(s for s in manifest["skills"] if s["name"] == name)
-        row = next(line for line in matrix.splitlines() if line.startswith(f"| `{name}` |"))
-        if entry.get("claude_adapter", True):
-            assert f"quoin/adapters/claude/skills/{name}/SKILL.md" in matrix
-        else:
-            assert "not shipped on Claude Code" in row
-        assert f"quoin/adapters/codex/skills/{name}/README.md" in matrix
-
-    for semantic in [
-        "Artifact layout",
-        "Planning and review artifacts",
-        "Memory and session handoff",
-        "Codex handoff validation",
-        "Cost ledger row shape",
-        "Codex cost events",
-        "Skill invocation",
-        "Codex workflow procedures",
-        "Install and setup",
-        "Runtime permissions and approvals",
-        "Subagents / agents",
-        "Preambles and model dispatch",
-        "Generated adapter coverage",
-        "Smoke-test coverage",
-    ]:
-        assert semantic in matrix
 
 
 def test_runtime_parity_matrix_does_not_overclaim_codex_support():
@@ -202,12 +165,12 @@ def test_handoff_format_core_and_reference_cross_reference():
     """The handoff-format core file and its checkable-rules reference file
     name each other, so a reader following either one finds the other.
 
-    Both pointers use the `__QUOIN_HOME__`-substituted spelling (D-10), not
+    Both pointers use the `${CLAUDE_PLUGIN_ROOT}`-substituted spelling (D-10), not
     a repo-root-relative one: a deployed child resolves the pointer from
     the deploy root, and the repo-root spelling the codex/core citation
     test above uses would not resolve there. The repo source's own
     core/workflow/ directory has the same layout as the deploy root's, so
-    substituting `__QUOIN_HOME__` with `str(REPO_ROOT / "quoin")` mirrors
+    substituting `${CLAUDE_PLUGIN_ROOT}` with `str(REPO_ROOT / "quoin")` mirrors
     `installer.substitute_quoin_home`'s semantics without a real install.
     """
     core_spec = read_rel("quoin/core/workflow/handoff-format.md")
@@ -215,57 +178,22 @@ def test_handoff_format_core_and_reference_cross_reference():
     quoin_home = str(REPO_ROOT / "quoin")
 
     core_match = re.search(
-        r"`__QUOIN_HOME__(/core/workflow/handoff-format-reference\.md)`", core_spec
+        r"`\$\{CLAUDE_PLUGIN_ROOT\}(/core/workflow/handoff-format-reference\.md)`", core_spec
     )
     assert core_match, (
         "handoff-format.md must cite handoff-format-reference.md by a "
-        "backticked __QUOIN_HOME__-substituted path"
+        "backticked ${CLAUDE_PLUGIN_ROOT}-substituted path"
     )
     assert Path(quoin_home + core_match.group(1)).is_file()
 
     reference_match = re.search(
-        r"`__QUOIN_HOME__(/core/workflow/handoff-format\.md)`", reference_spec
+        r"`\$\{CLAUDE_PLUGIN_ROOT\}(/core/workflow/handoff-format\.md)`", reference_spec
     )
     assert reference_match, (
         "handoff-format-reference.md must cite handoff-format.md by a "
-        "backticked __QUOIN_HOME__-substituted path"
+        "backticked ${CLAUDE_PLUGIN_ROOT}-substituted path"
     )
     assert Path(quoin_home + reference_match.group(1)).is_file()
-
-
-def test_skill_manifest_matches_current_claude_frontmatter():
-    manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
-    entries = manifest["skills"]
-    by_name = {
-        entry["name"]: entry for entry in entries if entry.get("claude_adapter", True)
-    }
-
-    skill_paths = sorted(
-        (REPO_ROOT / "quoin" / "adapters" / "claude" / "skills").glob("*/SKILL.md")
-    )
-    skill_paths_by_name = {path.parent.name: path for path in skill_paths}
-    missing_skills = set(by_name) - set(skill_paths_by_name)
-    assert not missing_skills
-
-    allowed_effort = {"low", "medium", "high", "max"}
-    for name, entry in by_name.items():
-        path = skill_paths_by_name[name]
-        text = path.read_text(encoding="utf-8")
-        frontmatter = text.split("---", 2)[1]
-        model = re.search(r"^model:\s*(\S+)", frontmatter, re.MULTILINE)
-        assert model is not None, f"Missing model frontmatter in {path}"
-
-        assert entry["claude_model"] == model.group(1)
-        assert entry["effort"] in allowed_effort
-        assert isinstance(entry["phase"], str) and entry["phase"]
-        assert isinstance(entry["user_facing"], bool)
-
-    assert by_name["revise-fast"]["user_facing"] is False
-    assert all(
-        entry["user_facing"] is True
-        for name, entry in by_name.items()
-        if name != "revise-fast"
-    )
 
 
 def test_skill_manifest_does_not_include_codex_model_names():

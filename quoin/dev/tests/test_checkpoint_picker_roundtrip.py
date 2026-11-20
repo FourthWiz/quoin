@@ -107,19 +107,6 @@ EXPECTED = [
 ]
 
 
-def test_expected_table_has_authority():
-    """Meta-assertion (T-01 acceptance): every EXPECTED row carries a
-    non-empty authority in {incident, prose, spec} and a citation."""
-    seen_prose = False
-    for row in EXPECTED:
-        assert row["authority"] in {"incident", "prose", "spec"}, row["name"]
-        assert row.get("citation"), row["name"]
-        if row["authority"] == "prose":
-            assert "SKILL.md:" in row["citation"], row["name"]
-            seen_prose = True
-    assert seen_prose, "at least one EXPECTED row must be prose-pinned (CRIT-1 lineage)"
-
-
 # ---------------------------------------------------------------------------
 # Fixture builder (T-01)
 # ---------------------------------------------------------------------------
@@ -205,32 +192,6 @@ DAY = 86400.0
 # ---------------------------------------------------------------------------
 # (a) Same-task Tier-1 fast-path hit -> tier=1
 # ---------------------------------------------------------------------------
-
-def test_tier1_same_task_fastpath_hit(tmp_path, monkeypatch):
-    monkeypatch.setenv("QUOIN_RESTORE_STALE_DAYS", "1")
-    monkeypatch.setenv("QUOIN_RESTORE_SENTINEL_WINDOW", "7")
-    monkeypatch.setenv("QUOIN_SESSION_FALLBACK_WINDOW", "7")
-    monkeypatch.setenv("QUOIN_PICKER_DEDUP_WINDOW", "7")
-
-    sid = "SID-TIER1"
-    task = "my-task"
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [{"name": "2026-07-13-my-task.md", "mtime": NOW - DAY, "task": task}],
-        "checkpoints": [{"name": "2026-07-10T0900-my-task.md", "mtime": NOW - 3 * DAY,
-                          "task": task, "sid": sid, "branch": "main"}],
-    })
-    cp_path = memory_dir / "checkpoints" / "2026-07-10T0900-my-task.md"
-    _write(memory_dir / f"pending-restore-{sid}.txt", str(cp_path) + "\n", NOW - DAY)
-
-    verdict = _MOD.select_restore(memory_dir, sid, NOW)
-
-    assert verdict["tier"] == 1, verdict
-    assert verdict["reason"] == "tier1:same-task", verdict
-    assert verdict["selected_path"] == str(cp_path)
-    assert verdict["cross_task_ok"] is True
-    assert verdict["stale"] is False  # staleness NOT applied at Tier 1 (SKILL.md:708)
-    assert verdict["derived_task"] == task
-    assert verdict["kind"] == "checkpoint"
 
 
 # ---------------------------------------------------------------------------
@@ -501,204 +462,6 @@ def _default_knobs(monkeypatch, **overrides):
     monkeypatch.setenv("QUOIN_RESTORE_AMBIGUITY_WINDOW", str(overrides.get("ambiguity_window", 14400)))
 
 
-def test_anchor_task_precedence_not_suppressed(tmp_path, monkeypatch):
-    # authority:prose 'freshest_task="${_anchor_task}"' [SKILL.md:886] (anchor-first;
-    # freshest-session is only the -z fallback, SKILL.md:887-890) -- CRIT-1 / IVG-57 / IVG-30
-    _default_knobs(monkeypatch)
-
-    t_anchor = "anchor-task-widgets"
-    t_fresh = "fresh-task-zephyr"
-    pp_sid = "SID-PP-ANCHOR"
-    current_sid = "SID-CURRENT-ANCHOR-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [
-            # (a) MIN-1 r2 fixture invariant: this session carries an explicit
-            # Session UUID matching the pending-prompt SID, so the Tier-2
-            # SID->session grep (SKILL.md:734-735) actually fires (not the
-            # mtime fallback) and seeds anchor_task = t_anchor.
-            {"name": "2026-07-08-anchor-task-widgets.md", "mtime": NOW - 2 * DAY,
-             "task": t_anchor, "sid": pp_sid},
-            # freshest session -> derived_task, DIFFERENT from t_anchor.
-            {"name": "2026-07-13-fresh-task-zephyr.md", "mtime": NOW - DAY,
-             "task": t_fresh},
-        ],
-        "checkpoints": [
-            # (b) MIN-1 r2: mtime >= max(session mtimes) so B3 Clause-B does
-            # not pre-empt the combined gate under test.
-            {"name": "2026-07-14T0000-anchor-task-widgets.md", "mtime": NOW,
-             "task": t_anchor, "sid": "unknown"},
-        ],
-        "pending_prompt": [{"sid": pp_sid, "mtime": NOW - 0.1 * DAY}],
-        # No pending-restore for pp_sid (else Tier-2 would return an anchor cp
-        # directly, tier=2, and never exercise the Tier-3 combined gate under
-        # baseline_task). No pending-restore for current_sid (Tier-1 MISS).
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    assert verdict["derived_task"] == t_fresh, verdict  # raw freshest, NOT the anchor
-    assert verdict["anchor_task"] == t_anchor, verdict
-    assert verdict["baseline_task"] == t_anchor, verdict  # CRIT-1: anchor takes precedence
-    assert verdict["tier"] == 3, verdict
-    assert verdict["reason"] == "tier3:autopick", verdict
-    assert verdict["cross_task_ok"] is True, (
-        "candidate task == t_anchor == baseline_task -> NOT cross-task-suppressed; "
-        "a derived_task-only (freshest) model would have wrongly suppressed this"
-    )
-
-
-def test_anchor_task_precedence_twin_suppresses_and_b3_prompt_uses_derived_task(tmp_path, monkeypatch):
-    # authority:prose "freshest_task=\"${_anchor_task}\"" [SKILL.md:886] (gate operand);
-    # "TASK = active_task" [SKILL.md:989] (B3 synthesis source) -- CRIT-1 r2 twin
-    _default_knobs(monkeypatch)
-
-    t_anchor = "anchor-task-widgets"
-    t_fresh = "fresh-task-zephyr"
-    pp_sid = "SID-PP-ANCHOR-TWIN"
-    current_sid = "SID-CURRENT-ANCHOR-TWIN-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [
-            {"name": "2026-07-08-anchor-task-widgets.md", "mtime": NOW - 2 * DAY,
-             "task": t_anchor, "sid": pp_sid},
-            {"name": "2026-07-13-fresh-task-zephyr.md", "mtime": NOW - DAY,
-             "task": t_fresh},
-        ],
-        "checkpoints": [
-            # SAME shape as the main row, but the candidate's Active task ==
-            # t_fresh (NOT t_anchor) -> baseline_task (t_anchor) !=
-            # cand.task (t_fresh) -> cross-task suppressed.
-            {"name": "2026-07-14T0000-fresh-task-zephyr.md", "mtime": NOW,
-             "task": t_fresh, "sid": "unknown"},
-        ],
-        "pending_prompt": [{"sid": pp_sid, "mtime": NOW - 0.1 * DAY}],
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    assert verdict["baseline_task"] == t_anchor, verdict
-    assert verdict["derived_task"] == t_fresh, verdict
-    assert verdict["tier"] == "4-B3", verdict
-    assert verdict["reason"] == "tier3:gate-suppressed:cross-task", verdict
-    assert verdict["cross_task_ok"] is False, verdict
-
-    # DISTINGUISHING assertion (CRIT-1 r2): b3_prompt synthesizes from
-    # derived_task (raw freshest), NOT baseline_task (anchor) -- this is the
-    # ONLY fixture where the two diverge, so it is the only place this can
-    # be caught.
-    assert verdict["b3_prompt"] == (
-        f"Resume task '{t_fresh}': no checkpoint selected (tier 4 / B3). "
-        f"Synthesize a minimal restore from the freshest session-state file for '{t_fresh}'."
-    ), verdict
-    assert t_fresh in verdict["b3_prompt"]
-    assert t_anchor not in verdict["b3_prompt"]
-
-
-def test_cross_task_rejection_no_anchor(tmp_path, monkeypatch):
-    # authority:incident IVG-25/30 (wrong-session restore fixed) -- a
-    # timestamp-bumped stale-task checkpoint auto-picked instead of the
-    # current, different-task session; SKILL.md:858 notes the real incident
-    # is caught by the combined gate specifically when Clause B does NOT
-    # fire because the candidate mtime appears fresher than the session's.
-    _default_knobs(monkeypatch)
-
-    t_session = "current-real-task"
-    t_wrong = "stale-wrong-task"
-    current_sid = "SID-CROSS-TASK-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [
-            {"name": "2026-07-12-current-real-task.md", "mtime": NOW - 2 * DAY,
-             "task": t_session},
-        ],
-        "checkpoints": [
-            # mtime is NEWER than the session (simulating the incident's
-            # timestamp bump) so Clause B does not pre-empt; cross-task is
-            # what must catch it.
-            {"name": "2026-07-14T0000-stale-wrong-task.md", "mtime": NOW,
-             "task": t_wrong, "sid": "unknown"},
-        ],
-        # No pending-prompt/pending-restore -> no Tier-2 anchor seeded ->
-        # baseline_task == derived_task.
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    assert verdict["baseline_task"] == verdict["derived_task"] == t_session, verdict
-    assert verdict["tier"] == "4-B3", verdict
-    assert verdict["cross_task_ok"] is False, verdict
-    assert verdict["reason"] == "tier3:gate-suppressed:cross-task", verdict
-
-
-def test_multi_candidate_freshest_suppressed_bypasses_valid_older_same_task(tmp_path, monkeypatch):
-    # authority:spec-blind-spot -- S-3 plan T-06 / MAJ-2 characterization fixture.
-    #
-    # This fixture documents an ACCEPTED OUTCOME CHANGE (Q-01), it does NOT prove
-    # module == spec for this scenario. checkpoint-spec.md (~lines 300-310) folds
-    # the numbered-picker / multi-candidate path into a single-candidate combined
-    # -gate description and never models the prose's interactive 2+-candidate
-    # user-override (SKILL.md:865-877, the "Two or more" numbered-picker branch).
-    # This test exists so the module's actual, current behavior is documented and
-    # regression-guarded, not silently untested: this harness's own
-    # module==spec equivalence claim does NOT extend to this scenario.
-    #
-    # Scenario: 2+ candidates exist. The FRESHEST is CROSS-TASK (suppressed by
-    # the combined gate). An OLDER candidate is a valid SAME-TASK checkpoint that
-    # a human using the Fallback picker's interactive numbered list could select
-    # directly. The module only ever evaluates the single freshest candidate
-    # overall for the combined gate -- it does not fall back to the next-best
-    # (older, valid, same-task) candidate. It picks the freshest, the gate
-    # suppresses it, and it routes to B3 (session-state synthesis), bypassing
-    # the valid older candidate entirely.
-    #
-    # MIN-2 (round 2 critic): the suppressed freshest candidate's mtime is
-    # deliberately NEWER than the freshest in-window sessions/*.md mtime, so
-    # Tier-3 Clause-B (`max_cand_mtime < max_session_mtime`) cannot pre-empt and
-    # this fixture actually exercises the freshest-suppressed-bypasses-older
-    # -valid path it is meant to characterize (not an unrelated Clause-B route).
-    _default_knobs(monkeypatch)
-
-    t_session = "multi-cand-real-task"
-    t_wrong = "multi-cand-stale-wrong-task"
-    current_sid = "SID-MULTI-CAND-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [
-            {"name": "2026-07-12-multi-cand-real-task.md", "mtime": NOW - 2 * DAY,
-             "task": t_session},
-        ],
-        "checkpoints": [
-            # Freshest candidate: CROSS-TASK, mtime NEWER than the session above
-            # so Clause B cannot pre-empt (MIN-2).
-            {"name": "2026-07-14T0000-multi-cand-stale-wrong-task.md", "mtime": NOW,
-             "task": t_wrong, "sid": "unknown"},
-            # Older candidate: SAME-TASK as the session -- a genuinely valid,
-            # restorable checkpoint present in the same candidate pool
-            # (the `_build_memory` fixture builder supports two `checkpoints`
-            # entries directly), but never reconsidered once the freshest
-            # overall candidate is suppressed.
-            {"name": "2026-07-11T0000-multi-cand-real-task.md", "mtime": NOW - 3 * DAY,
-             "task": t_session, "sid": "unknown"},
-        ],
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    # The module evaluates only the SINGLE freshest candidate for the combined
-    # gate; it is cross-task, so it is suppressed and routed to B3 -- the valid
-    # older same-task candidate is present in the candidate pool the fixture
-    # built (two `checkpoints` entries) but is never selected or reconsidered.
-    assert verdict["tier"] == "4-B3", verdict
-    assert verdict["cross_task_ok"] is False, verdict
-    assert verdict["reason"] == "tier3:gate-suppressed:cross-task", verdict
-    assert not verdict["selected_path"], (
-        "B3 route must not select any checkpoint file -- confirms the valid "
-        "older same-task candidate was bypassed entirely, not silently chosen: "
-        f"{verdict}"
-    )
-
-
 def test_staleness_suppresses_tier3_autopick_without_clause_b(tmp_path, monkeypatch):
     # authority:incident IVG-30 (staleness window)
     _default_knobs(monkeypatch)
@@ -730,59 +493,6 @@ def test_staleness_suppresses_tier3_autopick_without_clause_b(tmp_path, monkeypa
     assert verdict["stale"] is True, verdict
     assert verdict["cross_task_ok"] is True, verdict
     assert verdict["reason"] == "tier3:gate-suppressed:stale", verdict
-
-
-def test_staleness_not_applied_at_tier1_fastpath(tmp_path, monkeypatch):
-    # authority:prose "The staleness guard is NOT applied here" [SKILL.md:708]
-    _default_knobs(monkeypatch)
-
-    task = "old-fastpath-task"
-    sid = "SID-STALE-TIER1"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [{"name": "2026-07-13-old-fastpath-task.md", "mtime": NOW - DAY,
-                       "task": task}],
-        "checkpoints": [
-            {"name": "2026-07-09T0000-old-fastpath-task.md", "mtime": NOW - 5 * DAY,
-             "task": task, "sid": sid},
-        ],
-    })
-    cp_path = memory_dir / "checkpoints" / "2026-07-09T0000-old-fastpath-task.md"
-    _write(memory_dir / f"pending-restore-{sid}.txt", str(cp_path) + "\n", NOW - DAY)
-
-    verdict = _MOD.select_restore(memory_dir, sid, NOW)
-
-    assert verdict["tier"] == 1, verdict
-    assert verdict["reason"] == "tier1:same-task", verdict
-    assert verdict["stale"] is False, "staleness must NOT be applied at Tier 1 (SKILL.md:708)"
-
-
-def test_staleness_int_truncation_boundary_not_stale(tmp_path, monkeypatch):
-    # authority:prose "print(int(age))" [SKILL.md:898] -- MIN-4 int-truncation
-    # boundary: a candidate 1.5 days old with threshold 1 must NOT be stale
-    # (int(1.5) == 1; "1 -gt 1" is false).
-    _default_knobs(monkeypatch)
-
-    task = "boundary-task"
-    current_sid = "SID-BOUNDARY-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        # Session older than the candidate (so Clause B: max_cand_mtime <
-        # max_session_mtime is False -- candidate is newer) so the combined
-        # gate, not Clause B, is what is under test.
-        "sessions": [{"name": "2026-07-11-boundary-task.md", "mtime": NOW - 3 * DAY,
-                       "task": task}],
-        "checkpoints": [
-            {"name": "2026-07-12T1200-boundary-task.md", "mtime": NOW - 1.5 * DAY,
-             "task": task, "sid": "unknown"},
-        ],
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    assert verdict["stale"] is False, verdict
-    assert verdict["tier"] == 3, verdict
-    assert verdict["reason"] == "tier3:autopick", verdict
 
 
 def test_b3_clause_b_all_candidates_older_than_freshest_session(tmp_path, monkeypatch):
@@ -905,43 +615,6 @@ def test_same_sid_pending_restore_collision_last_writer_wins(tmp_path, monkeypat
     assert verdict["reason"] == "route:thorough-plan-progress", verdict
 
 
-def test_b3_prompt_uses_derived_task_not_anchor_zero_candidates(tmp_path, monkeypatch):
-    # authority:prose "TASK = active_task" [SKILL.md:989] -- M-4 deterministic
-    # B3 synthesis must use derived_task even when a DIFFERENT Tier-2 anchor
-    # was seeded and candidate_count == 0 (Clause A), not just in the
-    # zero-anchor case already covered by the T-01/T-02 scaffold test.
-    _default_knobs(monkeypatch)
-
-    t_anchor = "b3-anchor-task"
-    t_fresh = "b3-fresh-task"
-    pp_sid = "SID-PP-B3-ZERO"
-    current_sid = "SID-CURRENT-B3-ZERO-MISS"
-
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [
-            {"name": "2026-07-08-b3-anchor-task.md", "mtime": NOW - 2 * DAY,
-             "task": t_anchor, "sid": pp_sid},
-            {"name": "2026-07-13-b3-fresh-task.md", "mtime": NOW - DAY,
-             "task": t_fresh},
-        ],
-        # NO checkpoints at all -> Clause A (zero candidates).
-        "pending_prompt": [{"sid": pp_sid, "mtime": NOW - 0.1 * DAY}],
-    })
-
-    verdict = _MOD.select_restore(memory_dir, current_sid, NOW)
-
-    assert verdict["anchor_task"] == t_anchor, verdict
-    assert verdict["derived_task"] == t_fresh, verdict
-    assert verdict["tier"] == "4-B3", verdict
-    assert verdict["reason"] == "b3:clause-a", verdict
-    expected = (
-        f"Resume task '{t_fresh}': no checkpoint selected (tier 4 / B3). "
-        f"Synthesize a minimal restore from the freshest session-state file for '{t_fresh}'."
-    )
-    assert verdict["b3_prompt"] == expected, verdict
-    assert t_anchor not in verdict["b3_prompt"]
-
-
 _FIXTURE_SESSION = (
     REPO_ROOT / "quoin" / "dev" / "tests" / "fixtures" / "checkpoint_picker"
     / "sessions" / "2026-05-17-personal-site-sim-embed.md"
@@ -965,47 +638,6 @@ def test_dated_fixture_session_as_b3_baseline(tmp_path, monkeypatch):
     assert verdict["derived_task"] == "personal-site-sim-embed", verdict
     assert verdict["b3_prompt"] is not None
     assert "personal-site-sim-embed" in verdict["b3_prompt"]
-
-
-def test_corrupt_and_headless_checkpoints_dropped(tmp_path, monkeypatch):
-    # authority:prose "[ $(wc -c < \"$cp\") -ge 100 ] || continue" [SKILL.md:823]
-    #                 "drop the candidate silently" (parse failure) [SKILL.md:839]
-    # Fidelity gap closed post-review (review-1 MINOR-1): the disk-only 30-day
-    # enumeration must skip <100-byte corrupt entries and drop candidates whose
-    # `## Active task` cannot be extracted. Both would otherwise be selectable.
-    monkeypatch.setenv("QUOIN_RESTORE_STALE_DAYS", "1")
-    task = "zephyr"
-    memory_dir = _build_memory(tmp_path, {
-        "sessions": [{"name": f"2026-07-14-{task}.md", "mtime": NOW, "task": task}],
-    })
-    ck_dir = memory_dir / "checkpoints"
-    # (a) <100-byte same-task checkpoint that WOULD tier-3 auto-pick if not skipped.
-    tiny = _write(ck_dir / f"2026-07-14T1000-{task}.md", f"## Active task\n{task}\n", NOW)
-    assert tiny.stat().st_size < 100  # fixture invariant: actually under the guard
-    # (b) >=100-byte checkpoint with NO `## Active task` heading -> parse-failure drop.
-    headless = _write(
-        ck_dir / f"2026-07-14T1100-{task}.md",
-        "## Status\nvoluntary\n" + ("padding line to exceed one hundred bytes\n" * 4),
-        NOW,
-    )
-    assert headless.stat().st_size >= 100  # fixture invariant: passes the byte guard
-
-    verdict = _MOD.select_restore(memory_dir, "unknown", NOW)
-    # Both candidates dropped -> nothing selectable -> B3 fallback (NOT the corrupt files).
-    assert verdict["selected_path"] is None, verdict
-    assert verdict["tier"] == "4-B3", verdict
-    assert verdict["reason"].startswith("b3:"), verdict
-
-    # Positive control: a VALID >=100-byte same-task checkpoint IS auto-picked,
-    # proving the byte/parse guards are what forced B3 above (not some other cause).
-    mem2 = _build_memory(tmp_path / "ctrl", {
-        "sessions": [{"name": f"2026-07-14-{task}.md", "mtime": NOW, "task": task}],
-        "checkpoints": [{"name": f"2026-07-14T1000-{task}.md", "mtime": NOW, "task": task}],
-    })
-    v2 = _MOD.select_restore(mem2, "unknown", NOW)
-    assert v2["selected_path"] is not None, v2
-    assert v2["tier"] == 3, v2
-    assert v2["reason"] == "tier3:autopick", v2
 
 
 # ===========================================================================

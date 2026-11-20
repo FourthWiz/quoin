@@ -5,10 +5,10 @@
 ### Step 1 — User-level setup (once per machine)
 
 ```bash
-bash /path/to/quoin/install.sh
+pip install quoin && quoin install     # or, from a checkout: bash /path/to/quoin/install.sh
 ```
 
-Installs skills to `~/.claude/skills/` and writes workflow rules to `~/.claude/CLAUDE.md`. Safe to re-run — updates everything idempotently.
+Installs the quoin Claude Code plugin at user scope. Skills are named `/quoin:<skill>`, and the short workflow rules reach every session through the plugin's SessionStart hook. Safe to re-run — it updates the plugin in place. Restart Claude Code afterwards.
 
 ### Step 2 — Project setup (once per project, no bash needed)
 
@@ -24,18 +24,19 @@ claude
 
 ## What the script does
 
-**`install.sh` — user-level, run once per machine:**
-1. **Copies skills** — all skills into `~/.claude/skills/` (globally available in every project)
-2. **Writes workflow rules** — appends the short core rules to `~/.claude/CLAUDE.md` (auto-loaded by Claude Code everywhere); the full rules live in `~/.claude/memory/workflow-catalog.md`
+**`quoin install` — user-level, run once per machine:**
+1. **Stages the plugin** — copies its skills, hooks, scripts and memory guides to `~/.local/share/quoin/plugin/`
+2. **Installs it** — registers that folder as the `quoin` marketplace and installs or updates `quoin@quoin` with the `claude` CLI
+3. **Removes an earlier install** — the files a pre-plugin `install.sh` copied into `~/.claude` (unless edited), its hook stanzas and its rules block in `~/.claude/CLAUDE.md` (your own lines stay)
 
 **`/init_workflow` — run once per project inside Claude:**
-3. **Configures permissions** — creates `.claude/settings.json` with allow/deny lists
-4. **Creates artifact structure** — `.workflow_artifacts/` at project root (gitignored) with `memory/sessions/`, `memory/daily/`, `memory/weekly/` and template files
-5. **Adds to .gitignore** — ensures `.workflow_artifacts/` is gitignored in the project
-6. **Runs /discover** — scans repos and populates memory
-7. **Generates quickstart** — command reference card
+4. **Configures permissions** — creates `.claude/settings.json` with allow/deny lists
+5. **Creates artifact structure** — `.workflow_artifacts/` at project root (gitignored) with `memory/sessions/`, `memory/daily/`, `memory/weekly/` and template files
+6. **Adds to .gitignore** — ensures `.workflow_artifacts/` is gitignored in the project
+7. **Runs /discover** — scans repos and populates memory
+8. **Generates quickstart** — command reference card
 
-> **After pulling workflow updates:** always re-run `bash install.sh` to propagate path changes to `~/.claude/CLAUDE.md` and `~/.claude/skills/`. Without this step, Claude will have contradictory path instructions between the global CLAUDE.md and the updated skill files.
+> **After pulling workflow updates:** re-run `quoin install` (or `bash install.sh`) so Claude Code picks up the new plugin version.
 
 ## Prerequisites
 
@@ -45,35 +46,23 @@ claude
 
 ## Manual Installation (if you prefer)
 
-The script is the recommended path — it handles idempotent updates and edge cases. For reference, here's what it does manually:
+`quoin install` is the recommended path. By hand, from a checkout:
 
-### 1. Install skills (user-level, once)
 ```bash
-mkdir -p ~/.claude/skills
-for skill in /path/to/quoin/adapters/claude/skills/*/; do
-  name=$(basename "$skill")
-  cp -r "$skill" ~/.claude/skills/$name
-done
+claude plugin marketplace add /path/to/quoin/quoin --scope user
+claude plugin install quoin@quoin --scope user
 ```
 
-### 2. Write workflow rules (user-level, once)
-```bash
-echo "" >> ~/.claude/CLAUDE.md
-echo "# === DEV WORKFLOW START ===" >> ~/.claude/CLAUDE.md
-sed "s|__QUOIN_HOME__|$HOME/.claude|g" /path/to/quoin/CLAUDE.slim.md >> ~/.claude/CLAUDE.md
-echo "# === DEV WORKFLOW END ===" >> ~/.claude/CLAUDE.md
-```
+This loads the plugin straight from the checkout's `quoin/` folder (tests and benchmarks included, so the plugin cache is larger than a staged install).
 
-The default rules are the short core text in `CLAUDE.slim.md`; the sed call fills in the path to the catalog of full rules. To install every rule inline instead, pass `--claude-md-variant full` to `install.sh` (or set `QUOIN_CLAUDE_MD_VARIANT=full`). An explicit `--claude-md-variant` choice is remembered per scope in `.quoin-claude-md-variant` inside the install folder (`~/.claude/` for user scope, `<project>/.claude/` for project scope; commit that file to share the choice with the team, or add it to `.gitignore` to keep it personal). `--claude-md-variant slim` clears it.
-
-### 3. Create project artifact structure
+### Project artifact structure
 ```bash
 cd ~/projects/my-app
 mkdir -p .workflow_artifacts/memory/sessions .workflow_artifacts/memory/daily .workflow_artifacts/memory/weekly
 echo '.workflow_artifacts/' >> .gitignore
 ```
 
-### 4. Initialize
+### Initialize
 ```bash
 claude
 # then type: /init_workflow
@@ -83,30 +72,7 @@ claude
 
 After installation, your project looks like:
 ```
-~/.claude/
-├── CLAUDE.md                ← workflow rules (auto-loaded everywhere)
-└── skills/                  ← all workflow skills (global; partial list)
-    ├── discover/
-    ├── triage/
-    ├── architect/
-    ├── plan/
-    ├── critic/
-    ├── revise/
-    ├── revise-fast/
-    ├── thorough_plan/
-    ├── gate/
-    ├── implement/
-    ├── review/
-    ├── rollback/
-    ├── run/
-    ├── end_of_task/
-    ├── end_of_day/
-    ├── start_of_day/
-    ├── init_workflow/
-    ├── weekly_review/
-    ├── cost_snapshot/
-    ├── expand/
-    └── capture_insight/
+~/.local/share/quoin/plugin/   ← the staged quoin plugin (skills, hooks, scripts, memory guides)
 
 ~/projects/my-app/
 ├── .claude/
@@ -152,9 +118,7 @@ git pull
 bash quoin/install.sh
 ```
 
-Skills and `~/.claude/CLAUDE.md` are updated. Project `.workflow_artifacts/` is never touched.
-
-> **Always re-run `install.sh` after pulling updates.** Path changes in CLAUDE.md and skills must be propagated to `~/.claude/` — without this, Claude operates with stale path references.
+The plugin is re-staged and updated; restart Claude Code to load it. Project `.workflow_artifacts/` is never touched.
 
 ## Migrating a legacy project
 
@@ -174,11 +138,9 @@ claude
 
 ## Troubleshooting
 
-**Skills not recognized:** check that skills are in `~/.claude/skills/` — `ls ~/.claude/skills/` should list every workflow skill. Re-run `bash install.sh` to reinstall them.
+**Skills not recognized:** run `quoin doctor`; it checks that `quoin@quoin` is installed and enabled. `claude plugin list` shows the same. Re-run `quoin install` and restart Claude Code.
 
-**Claude doesn't follow workflow rules:** check that `~/.claude/CLAUDE.md` contains the quoin section (look for `# === DEV WORKFLOW START ===`). Re-run `bash install.sh` to rewrite it.
-
-**Claude uses old `memory/` paths:** re-run `bash install.sh` — the updated CLAUDE.md with `.workflow_artifacts/` paths wasn't propagated to `~/.claude/CLAUDE.md`.
+**Claude doesn't follow workflow rules:** the rules come from the plugin's SessionStart hook; check that the plugin is enabled (`claude plugin list`) and restart the session.
 
 **/discover finds nothing:** your repos need to be git repositories (each has a `.git/` folder) inside the project root.
 

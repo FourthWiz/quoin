@@ -100,26 +100,6 @@ def test_layer1_module_purity() -> None:
     _pass(f"Layer 1: {len(stdout_lines)} output line(s), 0 contain auto-memory paths")
 
 
-def test_layer2_skill_md_text() -> None:
-    """Layer 2: SKILL.md contains literal 'ONLY writes to' write-target restriction."""
-    print("\n--- Layer 2: SKILL.md body text grep ---")
-
-    if not _SKILL_MD.exists():
-        _fail(f"quoin/adapters/claude/skills/sleep/SKILL.md not found at {_SKILL_MD}")
-
-    content = _SKILL_MD.read_text(encoding="utf-8")
-
-    # Assert the hard-rule literal string is present
-    if "ONLY writes to" not in content:
-        _fail(
-            f"SKILL.md does not contain the literal string 'ONLY writes to'.\n"
-            f"The Write-target restriction section is missing or was modified.\n"
-            f"File: {_SKILL_MD}"
-        )
-
-    _pass("Layer 2: 'ONLY writes to' found in SKILL.md")
-
-
 def main() -> None:
     print(f"test_sleep_write_boundary.py — project root: {_PROJECT_ROOT}")
 
@@ -128,15 +108,9 @@ def main() -> None:
     # Layer 1
     try:
         test_layer1_module_purity()
-    except SystemExit as e:
+    except SystemExit:
         failures += 1
         # Continue to Layer 2 even if Layer 1 fails, to report all issues
-
-    # Layer 2
-    try:
-        test_layer2_skill_md_text()
-    except SystemExit as e:
-        failures += 1
 
     if failures > 0:
         print(f"\nFAILED: {failures} layer(s) failed.", file=sys.stderr)

@@ -29,7 +29,6 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 import _adapter_pilot_helpers
 
 THIS_FILE = Path(__file__).resolve()
@@ -113,135 +112,15 @@ def test_core_skill_doc_mentions_anchor(skill_name, expected_model, has_section_
 
 
 @pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_exists(skill_name, expected_model, has_section_0):
-    path = _adapter_skill(skill_name)
-    assert path.is_file(), f"Missing adapter SKILL.md: {path}"
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_declares_correct_model(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    assert len(parts) >= 3, f"Adapter SKILL.md for {skill_name} missing YAML frontmatter"
-    fm = yaml.safe_load(parts[1])
-    assert fm.get("model") == expected_model, (
-        f"Adapter SKILL.md for {skill_name} must declare model: {expected_model} "
-        f"(got {fm.get('model')!r})"
-    )
-    assert fm.get("name") == skill_name, (
-        f"Adapter SKILL.md for {skill_name} must declare name: {skill_name} "
-        f"(got {fm.get('name')!r})"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_references_core_doc(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    ref = f"quoin/core/skills/{skill_name}.md"
-    assert ref in text, (
-        f"Adapter SKILL.md for {skill_name} must reference the portable intent doc: {ref}"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
 def test_install_sh_has_adapter_override(skill_name, expected_model, has_section_0):
     # IVG-69 Stage B retarget: install.sh no longer carries ADAPTER_*_SRC vars.
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter(skill_name)
 
 
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_has_or_lacks_section_0(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    has_block = "## §0 Model dispatch" in text
-    if has_section_0:
-        assert has_block, (
-            f"Adapter SKILL.md for {skill_name} (cheap-tier) must carry "
-            "## §0 Model dispatch block"
-        )
-    else:
-        assert not has_block, (
-            f"Adapter SKILL.md for {skill_name} (Opus-tier) must NOT carry "
-            "## §0 dispatch block"
-        )
-
-
 # ── Non-parametrized constraint guards ────────────────────────────────────
-
-
-def test_discover_has_no_preamble_md():
-    """discover is NOT a subagent-preamble spawn target.
-
-    Per CLAUDE.md "Subagent preamble" section, the 7 spawn-target skills
-    are: critic, revise, revise-fast, plan, review, gate, architect.
-    discover is excluded — build_preambles.py does not generate one.
-    Asserting absence prevents accidental preamble leak.
-    """
-    adapter_preamble = (
-        PKG_DIR / "adapters" / "claude" / "skills" / "discover" / "preamble.md"
-    )
-    assert not adapter_preamble.exists(), (
-        f"CONSTRAINT VIOLATION: {adapter_preamble} unexpectedly exists. "
-        "discover is NOT a spawn-target; build_preambles.py must not generate one."
-    )
-
-
-def test_adapter_preserves_load_bearing_behaviors():
-    """T-02 byte-copy must preserve discover's structural anchors and
-    key behavior phrases.
-
-    Note: 'Incremental scan — skip unchanged repos' is an H3 nested under
-    '## What to scan' (line 23 of the legacy file); 'Cache population' is
-    a true H2 (line 258). Both are structurally load-bearing. The behavior
-    phrases guard against partial-content deletion that heading tests alone
-    would miss.
-    """
-    adapter = _adapter_skill("discover").read_text(encoding="utf-8")
-    # Heading anchors (H3 for incremental-scan, H2 for cache-population)
-    assert "\n### Incremental scan — skip unchanged repos\n" in adapter
-    assert "## Cache population" in adapter
-    # Behavior anchors (short unique phrases that byte-copy must preserve)
-    assert "rescan everything" in adapter  # incremental-scan force-rescan trigger
-    assert "Skipping <repo-name> — unchanged since last scan" in adapter  # skip-path log
-    assert "_staleness.md" in adapter  # cache-population key file
-    assert "for backward compatibility" in adapter  # repo-heads.md dual-write
 
 
 # ── Regression-guard tests (Phase 19 skills must still be covered) ────────
 
 
-def test_phase_19_skills_still_covered():
-    """Regression guard for the discover work — verifies all 19 Phase 6–19 skills are still covered.
-
-    Asserts that each Phase 6–19 migrated skill still has:
-    - its core doc at quoin/core/skills/<skill>.md
-    - its adapter at quoin/adapters/claude/skills/<skill>/SKILL.md
-    - its install.sh override variable and elif branch
-    """
-    from quoin import installer
-    for skill in PRIOR_PHASE_SKILLS:
-        core_doc = _core_doc(skill)
-        assert core_doc.is_file(), (
-            f"Regression: core doc for prior-phase skill {skill!r} is missing: {core_doc}"
-        )
-        adapter = _adapter_skill(skill)
-        assert adapter.is_file(), (
-            f"Regression: adapter SKILL.md for prior-phase skill {skill!r} is missing: {adapter}"
-        )
-        assert skill in installer.CANONICAL_SKILLS, (
-            f"Regression: installer.CANONICAL_SKILLS missing {skill!r} for prior-phase skill"
-        )
-
-
-def test_install_fresh_clone_lists_discover_in_migrated_skills():
-    """Guard that test_install_fresh_clone.py includes discover in MIGRATED_SKILLS (T-07 edit)."""
-    target = PKG_DIR / "dev" / "tests" / "test_install_fresh_clone.py"
-    text = target.read_text(encoding="utf-8")
-    tuple_start = text.find('MIGRATED_SKILLS = (')
-    assert tuple_start != -1, "test_install_fresh_clone.py missing MIGRATED_SKILLS tuple"
-    tuple_end = text.find(')', tuple_start)
-    tuple_region = text[tuple_start:tuple_end + 1]
-    assert '"discover"' in tuple_region, (
-        'test_install_fresh_clone.py MIGRATED_SKILLS tuple must include "discover" '
-        "(T-07 edit). The entry was reverted — restore it."
-    )

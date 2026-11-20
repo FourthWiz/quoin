@@ -1,7 +1,6 @@
 """Tests for IVG-106 T-04: discovery-refresh-routine.md memory file and init_workflow wiring."""
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
@@ -62,39 +61,7 @@ def test_routine_doc_has_execution_environment_caveat() -> None:
 def test_routine_doc_has_no_literal_home_claude() -> None:
     text = _ROUTINE_DOC.read_text(encoding="utf-8")
     assert "~/.claude/" not in text, (
-        "discovery-refresh-routine.md must use __QUOIN_HOME__ token, not literal ~/.claude/"
+        "discovery-refresh-routine.md must use ${CLAUDE_PLUGIN_ROOT} token, not literal ~/.claude/"
     )
 
 
-def test_routine_doc_registered_in_tier1_memory_files() -> None:
-    """discovery-refresh-routine.md must be in TIER1_MEMORY_FILES in installer.py."""
-    source = _INSTALLER.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    tier1: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "TIER1_MEMORY_FILES":
-                    if isinstance(node.value, ast.Tuple):
-                        tier1 = [
-                            elt.value
-                            for elt in node.value.elts
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                        ]
-    assert "discovery-refresh-routine.md" in tier1, (
-        "'discovery-refresh-routine.md' not found in TIER1_MEMORY_FILES in installer.py"
-    )
-
-
-def test_init_workflow_has_step_7_5() -> None:
-    text = _INIT_WORKFLOW.read_text(encoding="utf-8")
-    assert "Step 7.5" in text, (
-        "init_workflow SKILL.md must contain 'Step 7.5' for scheduled discovery refresh offer"
-    )
-
-
-def test_init_workflow_step_7_5_references_routine() -> None:
-    text = _INIT_WORKFLOW.read_text(encoding="utf-8")
-    assert "discovery-refresh-routine" in text, (
-        "init_workflow SKILL.md must reference discovery-refresh-routine in Step 7.5"
-    )

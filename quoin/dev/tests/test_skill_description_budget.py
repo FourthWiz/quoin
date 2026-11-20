@@ -41,7 +41,3 @@ def test_total_description_bytes_within_budget():
     assert total <= TOTAL_BYTES, total
 
 
-def test_revise_fast_is_listed_by_name_only():
-    from quoin.installer import SKILL_OVERRIDES
-
-    assert SKILL_OVERRIDES["revise-fast"] == "name-only"

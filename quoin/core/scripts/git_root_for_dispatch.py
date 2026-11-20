@@ -120,8 +120,8 @@ def _extract_candidate_paths(text: str) -> list[str]:
         # Skip workflow-artifacts paths
         if token.startswith(".workflow_artifacts/"):
             continue
-        # Skip __QUOIN_HOME__ and ~ references
-        if token.startswith("~") or token.startswith("__QUOIN_HOME__"):
+        # Skip plugin-root, legacy placeholder and ~ references
+        if token.startswith(("~", "__QUOIN_HOME__", "${CLAUDE_PLUGIN_ROOT}")):
             continue
         suffix = Path(token).suffix.lower()
         if suffix not in _CODE_EXT:

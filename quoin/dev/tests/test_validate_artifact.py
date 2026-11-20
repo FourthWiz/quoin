@@ -178,7 +178,7 @@ def test_v05_fail_undefined_ref():
 
 def test_v05_def_re_matches_check_glyph():
     """✓ glyph between list-marker and T-NN must be a valid def."""
-    import importlib.util, sys as _sys
+    import importlib.util
     spec = importlib.util.spec_from_file_location('validate_artifact', VALIDATOR)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -785,31 +785,6 @@ def test_v07_prefix_match_with_space_separator():
 
 
 # ── T-11 / MAJ-4: validate_artifact.py uses __QUOIN_HOME__ for deploy-time substitution ─────
-
-def test_validate_artifact_uses_quoin_home_placeholder():
-    """validate_artifact.py source must use __QUOIN_HOME__ placeholder in the
-    deployed-path fallback so substitute_quoin_home() corrects it at deploy time.
-
-    Before T-11, the fallback was hardcoded to ~/.claude/memory/... which was
-    always wrong in project-scope installs (MAJ-4).
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    core_scripts = os.path.normpath(os.path.join(here, "..", "..", "core", "scripts"))
-    source_path = os.path.join(core_scripts, "validate_artifact.py")
-    with open(source_path, encoding="utf-8") as f:
-        source = f.read()
-
-    # Must NOT contain the old hardcoded user-home path in the fallback
-    assert "expanduser('~/.claude" not in source, (
-        "validate_artifact.py still uses expanduser('~/.claude') — "
-        "should use __QUOIN_HOME__ placeholder instead (MAJ-4 fix)"
-    )
-
-    # Must contain __QUOIN_HOME__ in the fallback section
-    assert "__QUOIN_HOME__" in source, (
-        "validate_artifact.py source is missing __QUOIN_HOME__ placeholder — "
-        "deploy-time substitution will not work in project-scope installs (MAJ-4)"
-    )
 
 
 # ── T-06 (specify-skill stage 1): spec artifact type ──────────────────────────

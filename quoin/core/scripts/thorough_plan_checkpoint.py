@@ -153,7 +153,7 @@ def _write_checkpoint(
         f"## Session ID\n{sid}\n\n"
         f"## Session link\n"
         + (
-            f"Resume: (see __QUOIN_HOME__/scripts/get_session_uuid.py)\n"
+            f"Resume: (see ${{CLAUDE_PLUGIN_ROOT}}/scripts/get_session_uuid.py)\n"
             if sid and sid != "unknown"
             else "Resume: (session UUID unavailable)\n"
         )

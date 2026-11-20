@@ -126,7 +126,7 @@ def test_background_child_holding_stdout_does_not_stall(cell, tmp_path):
 
 
 def _identity(mode, tmp_path):
-    canonical = tuple(gate._load_arm_installer(REPO_ROOT).CANONICAL_SKILLS)
+    canonical = tuple(gate._load_arm_installer(REPO_ROOT / "quoin" / "dev" / "tests" / "fixtures" / "legacy_arm").CANONICAL_SKILLS)
     return ai.ArmIdentity(
         mode=mode, config_dir=tmp_path / ".claude", canonical=canonical,
         distinctive=ai.distinctive_quoin_skills(canonical), arm_config_mode="symmetric",

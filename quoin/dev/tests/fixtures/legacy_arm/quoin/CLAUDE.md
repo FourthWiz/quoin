@@ -1,0 +1,423 @@
+# Development Workflow — Shared Rules
+
+## Open-model routing (opt-in)
+
+Two launch modes exist for quoin users running claude-code-router (CCR):
+
+- **Open models via CCR (v2):** `ccr code` — auto-starts the local proxy and launches `claude`.
+  Quoin's skills work normally (the proxy uses `stdio: "inherit"`, preserving the PTY).
+- **Open models via CCR (v3):** `ccr default-claude-code` — v3 has no `code` subcommand; the
+  profile exists but routes nothing until you configure its models in `ccr ui`.
+- **Native Anthropic:** `claude` — launch Claude Code directly with your Anthropic key.
+
+**Sanity-check:** inside an open-model session, type `/help`. The quoin skill list should
+resolve. If it doesn't, run `quoin router status` and check liveness.
+The header model stays unchanged — CCR routes below the UI.
+
+Setup: `export OPENROUTER_API_KEY=sk-or-... && quoin router setup`
+
+Note: `__QUOIN_HOME__` is the quoin deploy root (installed by `quoin install`). CCR's
+config lives in `$HOME/.claude-code-router/`; quoin's model defaults live in
+`$HOME/.config/quoin/models.json` — neither is deploy-tree, neither is substituted
+by the installer.
+
+This file defines the common rules and behaviors shared across all development workflow skills: `/init_workflow`, `/discover`, `/enrich`, `/specify`, `/architect`, `/plan`, `/critic`, `/revise`, `/thorough_plan` (orchestrator), `/run` (end-to-end orchestrator), `/gate`, `/implement`, `/review`, `/rollback`, `/end_of_task`, `/pr`, `/end_of_day`, `/start_of_day`, `/weekly_review`, `/cost_snapshot`, `/capture_insight`, `/next-steps`, `/triage`, and `/continue_work`.
+
+Portability: shared workflow semantics are in `quoin/core/workflow/` (`rules.md`, `task-layout.md`, `session-state.md`, `cost-ledger.md`, `handoff-format.md`, `handoff-format-reference.md` — handoff envelope). This file stays the active Claude Code runtime rules file (installed by `bash quoin/install.sh`), not generated. OpenCode release: `quoin/adapters/opencode/release-acceptance.md`.
+
+## Working Rules
+
+### Git & PR Safety
+- **Never push to remote or create PRs outside of `/end_of_task` and `/pr`.** During implementation and review, only commit locally. Push happens as part of `/end_of_task` (which requires `/review` first). PR creation is handled by `/pr`, invoked explicitly by the user after `/end_of_task`. PR creation is always a separate explicit user action — never auto-create PRs.
+- **Use `/pr` to create pull requests.** After `/end_of_task` finalizes and pushes the branch, invoke `/pr` to create the PR (with optional version bump), wait for merge, and switch to the merge target branch.
+- **Always start each new task on a fresh branch.** Commit current work, switch to main, fetch latest, then create the new branch. This is now ENFORCED, not just advisory: `/implement` runs a branch-hygiene precheck at dispatch entry (prompts if on a protected branch), `/gate` FAILS if task commits land on a protected branch (commits ahead of upstream on main/master), and `/review` flags it as a diff-independent backstop. See `branch_hygiene.py`.
+
+### Communication
+- **Keep multi-step workflow progress verbose.** When working through plans, implementations, or multi-round processes, provide status updates at each step. Don't go silent during long operations.
+- **End-of-step inline summary.** After `/thorough_plan`, `/implement`, or `/review` completes its major step, the skill MUST print a concise human-readable English summary in the chat as its **final user-facing message, before the STOP/next-step instruction**. The summary is a chat message (Tier 1 always-English), never terse, never written to disk. Canonical field set:
+  1. **What this step produced** — one sentence (e.g., "Produced a converged Medium-profile plan in 1 round" / "Implemented tasks T-01 through T-04").
+  2. **Main tasks or components** — 2–4 bullets in plain language, no terse glyphs.
+  3. **Remaining concerns or decisions for the user** — one line; "none" if clean.
+  4. **Artifact location** — the path to the written artifact, with a note that the body is terse and can be `/expand`-ed for detail.
+  This rule is REQUIRED even when `/gate` will also render a summary — the skill's inline chat summary and the gate's `## For human` echo are complementary (the skill summary describes the step's work; the gate echo renders the stored artifact summary). Do NOT rely on the user reading terse artifacts — restate the substance in plain English in the chat. `/run` already satisfies this via its Checkpoint A–D summaries; the per-skill summaries additionally cover **standalone invocation** (skill run directly, not under `/run`).
+
+### Workflow conventions
+- **Never place stage plans into `.workflow_artifacts/finalized/` until `/end_of_task` is explicitly run.**
+
+## Project structure
+
+This workspace uses a multi-repo layout. Multiple repositories are cloned side-by-side in the project folder. When exploring the codebase, scan all directories at the root level to discover all repos/services.
+
+## Task subfolder convention
+
+All planning and review artifacts are stored under `.workflow_artifacts/` at the project root:
+```
+<project-folder>/.workflow_artifacts/<task-name>/
+```
+
+Task names are descriptive, kebab-case, derived from the task description (e.g., `auth-refactor`, `payment-v2-migration`, `api-rate-limiting`). Ask the user for a name when it's not obvious from context.
+
+When running parallel tasks, each gets its own subfolder. Never mix artifacts from different tasks in the same folder.
+
+**Single-root invariant (IVG-119):** exactly one `.workflow_artifacts/` root per project, at the project root. Subproject dirs must not create their own — a second nested root breaks run resume and artifact discovery. Enforced by `nested_root_check.py` at `/gate` and `/discover` (non-blocking WARN, fail-OPEN; opt-out `QUOIN_DISABLE_NESTED_ROOT_CHECK=1`, bless one root with a `.quoin-nested-ok` marker or `QUOIN_NESTED_ROOT_EXCLUDE`).
+
+### Multi-stage tasks
+
+When a task has multiple stages, create per-stage subfolders inside the task folder:
+
+```
+PROJECT-FOLDER/.workflow_artifacts/TASK-NAME/
+├── architecture.md           ← parent-level (single source of truth)
+├── cost-ledger.md            ← parent-level (single ledger across all stages)
+├── stage-1/
+│   ├── current-plan.md
+│   ├── critic-response-1.md
+│   ├── review-1.md
+│   └── gate-*.md
+├── stage-2/
+│   └── ...
+└── ...
+```
+
+A task is "multi-stage" when its `architecture.md` has a `## Stage decomposition` section. Single-stage tasks keep the legacy root-level layout.
+
+Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution order:
+1. **Explicit:** `stage N of <task>` → `<task-name>/stage-N/`.
+2. **By name:** stage descriptive name + `## Stage decomposition` in architecture.md → resolver looks up stage number → `<task-name>/stage-N/`.
+3. **Default:** `<task-name>/` (legacy / single-stage / mixed-layout grandfathering).
+
+**Grandfathering:** folders with root-level `current-plan.md` and no `## Stage decomposition` keep root-level layout. Resolver never auto-migrates; opt-in via a future `/thorough_plan stage N of <task>`. Task root: `architecture.md`, `cost-ledger.md`, `spec.md`. Repo `spec.md` is at `.workflow_artifacts/` root.
+
+### Archiving completed work
+
+`/end_of_task` moves the task folder into `.workflow_artifacts/finalized/` (sub-task → `<parent>/finalized/`; top-level task → `finalized/<task>/`). **IMPORTANT: Never move to `finalized/` during planning or implementation** — only via `/end_of_task`, or `/cleanup` after per-task confirm.
+
+## Workflow sequence
+
+**Default: light `/run`.** Most tasks use `/run`: one session that triages the task's scope. r0 (default) implements on Opus with proportionate tests and commits locally; r1 (auth, crypto, schema, public API and the like) adds one Opus review; r2 (several repos, or ordered parts) adds discovery when stale, a context pack and two to five stages in a short `architecture.md` (`## Stage decomposition` layout), each run as r0 or r1; r3 (needs design) offers the heavy pipeline, opt-in only. The heavy pipeline below runs via `/run hard:` (`/run_hard`) or a light `/run` escalation; it can hand small tasks back (once).
+
+### Canonical flow
+
+The heavy flow depends on the task profile (Small / Medium / Large). `/thorough_plan` triages and routes automatically.
+
+```
+/discover → /specify → GATE → /architect → GATE → /thorough_plan → GATE → /implement → GATE → /review → GATE → /end_of_task
+```
+
+Variations: (a) Small tasks skip `/architect` and the critic loop — `/thorough_plan` auto-routes to a single `/plan` pass. (b) `/run hard:` (`/run_hard`) chains every phase automatically, each phase in its own subagent session, pausing at each GATE for confirmation; accepts the same profile tags as `/thorough_plan`. (c) Discover is skipped if a recent (<7 days) discovery file exists. (d) Small tasks may skip `/specify`, mirroring the `/architect` skip; `/specify` is advisory when no task spec exists. (e) `/enrich` sits upstream of `/specify`, sharpening the raw task prompt before intent elicitation begins; it is default-on/prompted (not a hard gate) and never invokes `/specify` itself. (f) `/run_hard` also supports a `fast:` tag: on an eligible task it skips `/architect` and `/thorough_plan` entirely and dispatches `/implement` directly against a mechanically-derived plan stub, confirmed at a checkpoint before it takes effect.
+
+**Discovery/Serena refresh policy:** The `<7 days` skip threshold mirrors the `QUOIN_DISCOVERY_STALE_DAYS` default (7). Session-start staleness is surfaced via the `S-5` hook banner in `sessionstart.sh` and `/start_of_day` Step 1c. Automated weekly refresh: `discovery-refresh-routine.md` documents the `/schedule` cron recipe. Environment knobs: `QUOIN_DISCOVERY_STALE_DAYS` (default 7), `QUOIN_SERENA_STALE_DAYS` (default 30), `QUOIN_DISCOVERY_AUTOREFRESH` (auto-run /discover on SOD, off by default), `QUOIN_DISCOVERY_REFRESH_DISABLE` (master off switch), `QUOIN_DISCOVERY_REFRESH_CRON` (cron schedule, default `0 6 * * 1`).
+
+**Note on `/architect`:** Phase 4 critic loop is INTERNAL to `/architect` — the canonical flow string above is unchanged. `/architect` internally runs a critic loop (max 2 rounds default, max 4 in strict mode) before returning `architecture.md` as final. This does not add a visible step to the flow.
+
+### Explicit-command rule
+
+**CRITICAL RULE: `/implement` and `/end_of_task` require explicit user commands.** No skill may auto-invoke either. After `/thorough_plan` converges, the workflow STOPS and waits for `/implement`. After `/review` approves and the gate passes, the workflow STOPS and waits for `/end_of_task`. The user must consciously decide to start writing code AND to ship it.
+
+**Exception: `/run_hard` (incl. `--autonomous`).** May invoke `/implement`/`/end_of_task` for the user. Light `/run` implements and commits locally itself and never pushes — see `autonomous-mode.md`. Stage 2 adds a `quoin run --autonomous <task>` supervisor that relaunches fresh sessions across context windows.
+
+**Gate invocation modes:** Post-implement and post-review gates run **inline** by default (same session, no subagent spawn — preserves the parent session's prompt cache). Post-architect and post-plan gates spawn **subagent** by default (different context shape after those phases). There is no `/gate` after `/discover`. Audit-log persistence (`gate-{phase}-{date}.md`) is mandatory regardless of mode — see `/gate/SKILL.md`.
+
+### Task profiles
+
+| Profile | Triggered by | Planning | Critic loop | Gate intensity | Typical cost |
+|---------|-------------|----------|-------------|---------------|-------------|
+| **Small** | `small:` prefix, or auto-classified + confirmed | Single `/plan` pass (Opus) | Skipped | Smoke → Standard → Full | ~$2.49 |
+| **Medium** | `medium:` prefix, auto-classified, or no tag (default) | `/plan` (Opus) + critic loop with Sonnet `/revise-fast` | Up to 4 rounds | Smoke → Standard → Full | ~$2.99–$4.00 |
+| **Large** | `large:` or `strict:` prefix | `/plan` (Opus) + critic loop with Opus `/revise` | Up to 5 rounds | Smoke → Full → Full | ~$4.65+ |
+
+**Triage criteria at a glance:**
+- **Small** — 1-3 files, single module, no integration risk, well-understood pattern (bug fix, config change, simple endpoint)
+- **Medium** — multiple files across 1-2 modules, moderate complexity, some integration points
+- **Large** — cross-service/cross-repo, high risk, data migrations, auth changes, significant unknowns
+
+When in doubt, default to Medium. The user can always override with an explicit tag.
+
+The fast route (`fast:` tag) and task profile are orthogonal: the fast route only changes which phases run, never the profile classification, so a `fast:`-forced Large task still gates at Large intensity — the fast route never downgrades gate intensity or profile classification.
+
+Each stage feeds into the next, with `/gate` checkpoints requiring explicit human approval:
+- `/init_workflow` bootstraps the workflow in a new project. Creates `.workflow_artifacts/` structure, configures permissions, runs `/discover`, generates quickstart guide. Run once per project. (Skills and rules are installed separately via `bash install.sh`.)
+- `/discover` scans all repos and saves inventory, architecture overview, and dependency map to `.workflow_artifacts/memory/`. Run once on setup, re-run when repos change.
+- `/enrich` (optional, prompted) sharpens a raw task prompt upstream of `/specify` — fills genuine gaps, writes enriched-prompt.md, echoes it in chat; never writes a spec/plan and never invokes a downstream phase itself.
+- `/specify` (Medium/Large; Small may skip) elicits intent and writes the task feature spec at the task-root spec.md (user stories, functional requirements, acceptance criteria, out-of-scope); advisory — offered when no task spec exists, never blocking.
+- **GATE** — user reviews the spec, explicitly approves
+- `/architect` produces `architecture.md` with stages decomposed for planning (uses `/discover` output as baseline context); reads the task-root spec.md if present as upstream intent; runs an internal Phase 4 critic loop (max 2 rounds default, 4 in strict mode) before returning architecture.md as final
+- **GATE** — user reviews architecture, explicitly approves
+- `/thorough_plan` triages the task and routes accordingly:
+  - **Small:** runs `/plan` (Opus) as a single pass → produces `current-plan.md` → smoke gate → done
+  - **Medium:** runs the plan→critic→revise convergence loop (Opus plan, Sonnet revise, Opus critic, max 4 rounds)
+  - **Large:** runs the convergence loop in strict mode (all Opus, max 5 rounds)
+  - Override with `max_rounds: N` for any profile (ignored for Small)
+- `/run hard:` (`/run_hard`) chains the entire workflow end-to-end: discover (if stale) → specify (if not Small and no task spec) → architect (if not Small) → thorough_plan → implement → review → end_of_task. Pauses at each gate for user confirmation. Accepts same profile tags as `/thorough_plan`. Use when you want the full pipeline in one command. Add `--autonomous` for a zero-prompt span through `/end_of_task` once formulation clears the quality bar.
+- **GATE** — automated checks (plan completeness, risk coverage), user reviews plan, explicitly approves
+- `/implement` executes tasks from the converged plan, writing code and tests
+- **GATE** — automated checks (scope depends on task profile — Standard for Small/Medium, Full for Large)
+- `/review` verifies implementation against the plan, checking quality and safety (always Opus)
+- **GATE** — Full checks: review verdict is APPROVED, full test suite passes, no conflicts, user approves
+- `/end_of_task` — user explicitly accepts the work. Commits remaining changes, pushes branch to remote, prompts for lessons learned, marks task complete. Does NOT create a PR — that's a separate explicit action.
+
+After `/end_of_task`: the user explicitly invokes `/pr` to create a pull request. This is a separate user action — `/pr` is never auto-invoked by any skill or orchestrator.
+
+- `/rollback` is available at any point to safely undo implementation work
+
+Not every task needs every stage. Small tasks typically skip `/architect` entirely. Bug fixes might only need `/implement` + `/review` (bypassing `/thorough_plan` entirely). But gates ALWAYS run between phases.
+
+Session lifecycle:
+- `/start_of_day` — restores context from daily cache and checks git state. Run at the beginning of a work session.
+- `/end_of_day` — saves session state and consolidates unfinished work into a daily cache. Run when wrapping up.
+- `/weekly_review` — aggregates the week's progress into a structured review. Run on Friday (or whenever you want a week-level summary). Saves to `.workflow_artifacts/memory/weekly/`.
+
+Multiple sessions can run in a day (parallel tasks). Each session writes its own state to `.workflow_artifacts/memory/sessions/`. `/end_of_day` reads all unprocessed session files within the date window from the last daily-cache up to today (not only today's files) and rolls them into `.workflow_artifacts/memory/daily/<date>.md`.
+
+## Session independence
+
+**Each skill is designed to run in its own chat session.** File-based artifacts ARE the shared memory between sessions — never rely on a previous session's memory.
+
+**Recommended session pattern:** One command per session for heavy work. `/run` gets its own session. Always run `/end_of_task` in a fresh session (8 sequential steps; compaction can silently skip steps). Short flows can share a session. When context feels heavy, close and start fresh.
+
+**Every skill must be self-bootstrapping:** reads CLAUDE.md, lessons-learned.md, task subfolder artifacts, and session state on startup. Per-skill SKILL.md lists exact files. If a skill can't find what it needs, it asks the user.
+
+**When closing a session:** update the session state file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`) — this is the handoff to the next session.
+
+## Common rules for all skills
+
+### Branch hygiene (essential)
+
+This rule is enforced at three layers: (1) `/implement` §0b branch-hygiene precheck (prompts to create a feature branch if on a protected branch pre-first-commit); (2) `/gate` FAILS if task commits (`has_task_commits: true` — commits ahead of upstream on main/master) land on a protected branch; (3) `/review` flags it as a backstop. Keys on the commits-ahead signal, NOT bare on-main status — a clean repo on main with no ahead commits is NOT a violation. Env knobs: `QUOIN_PROTECTED_BRANCHES` (csv, default `main,master`), `QUOIN_DISABLE_BRANCH_HYGIENE=1` (opt-out). Recovery recipe (mis-placed commits): `__QUOIN_HOME__/memory/branch-recovery.md`.
+- **Reinstall (`bash quoin/install.sh`) after a `quoin/**`/`src/quoin/**` diff** — `/gate` `deploy_drift_check.py` flags drift (`QUOIN_DISABLE_DEPLOY_DRIFT=1`; IVG-136).
+
+### Git workflow
+
+#### Branch hygiene before new tasks
+
+Before starting any new task on a repo, always:
+
+1. Check if the repo is on another branch with uncommitted changes
+2. Commit (or stash) those changes first
+3. Switch to main/master
+4. Fetch and pull to ensure it's up to date
+5. Create a new branch for the task
+
+Clean working state before each task avoids mixing unrelated changes and working on stale code. At the start of every implementation task, run `git status` + `git branch` on each affected repo. Handle any dirty state before proceeding. This applies to ALL repos involved, not just the primary one.
+
+#### Commit messages
+
+When the user asks to commit changes, write clear, conventional commit messages:
+
+```
+<type>(<scope>): <short description>
+
+<body — what changed and why, not what files were edited>
+
+<footer — references, breaking changes>
+```
+
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`
+
+The body should explain the "why" — the motivation for the change, not a list of files modified (the diff shows that).
+
+**Clean authored content.** Comments, commit bodies, and PR descriptions are shipped work product: they read as plain engineering to someone who has never seen the planning artifacts — no plan/decision/finding IDs, severities, review-round narration, gate verdicts, confidence scores, or `.workflow_artifacts/` paths. Full rule (all skills that author shipped content follow it): `__QUOIN_HOME__/memory/clean-authored-content.md`.
+
+#### Pull requests
+
+PR creation is handled by the `/pr` skill. When the user asks to create a PR, invoke `/pr` which handles: pre-flight checks (branch ≠ main/master, gh CLI available and authenticated), optional version bump, push if not already pushed, PR creation via `gh pr create` with a structured message, waiting for the user to merge, and switching to the merge target branch after merge.
+
+The manual PR review checklist below applies as a fallback when `/pr` is not available or when creating PRs outside the quoin workflow.
+
+When creating a PR manually, before doing so:
+
+1. **Run all tests** for the affected code areas
+2. **Check for untested new code** — if tests are missing, flag it. If the plan specified tests, write them before the PR.
+3. **Self-review the diff** — read `git diff <base>...HEAD` completely. Look for:
+   - Debug code, console.logs, commented-out code
+   - Missing error handling
+   - Hardcoded values that should be configurable
+   - Security issues (exposed secrets, injection vulnerabilities)
+   - Accidental file inclusions (.env, node_modules, etc.)
+4. **Call the planner for tests if needed** — if significant new code lacks tests and writing them is non-trivial, escalate to `/thorough_plan` to plan the test strategy before writing them
+
+### Web research
+
+When answering complex questions or designing systems:
+- Search for best practices with specific technologies involved
+- Check official documentation for APIs and frameworks
+- Look for known issues, migration guides, or deprecation notices
+- Find examples of similar architectures in open source
+
+Don't guess about external system behavior — verify it.
+
+### Serena (conditional)
+
+If `ToolSearch select:mcp__serena__activate_project` loads a schema, run the activation protocol at task start (`activate_project` then `initial_instructions`) and prefer Serena symbol tools over grep. If no schema loads, do nothing — never call Serena tools that don't exist. Full protocol: `__QUOIN_HOME__/memory/serena-activation.md`.
+
+For periodic re-onboarding when Serena memory becomes stale (marker `serena-onboarded.md` exists AND is older than `QUOIN_SERENA_STALE_DAYS`): see `__QUOIN_HOME__/memory/serena-activation.md §Refresh / Re-onboarding`. The `/start_of_day` Step 6b offers the "Set up / Refresh Serena memory" option when staleness is detected.
+
+### Daily insight capture
+
+As you work through any task, watch for patterns, surprises, and friction points worth remembering. When you notice one, write it to the daily insights scratchpad immediately — do not wait for `/end_of_day`:
+
+```
+.workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md
+```
+
+Write an entry when you encounter:
+- A gotcha that cost time and would cost time again (e.g., "this API silently ignores malformed requests")
+- A non-obvious pattern in this codebase (e.g., "all services use X pattern for Y")
+- A decision whose rationale is non-obvious and will be forgotten by tomorrow
+- A workflow step that felt wrong or slow (mark `Applies to: workflow` — this becomes a Tier 3 suggestion at end of day)
+- Any moment you think "I wish I'd known this earlier in the session"
+
+**Write without asking the user first.** This is your scratchpad. Keep entries short (2-4 sentences). Tag each with `Promote?: yes | maybe | no`. Append via `__QUOIN_HOME__/scripts/append_artifact.py`, not Write/Edit.
+
+Do NOT use the insights scratchpad for task progress tracking — that belongs in `.workflow_artifacts/memory/sessions/<date>-<task>.md`.
+
+You can also invoke `/capture_insight` explicitly to log something the user calls out mid-task.
+
+### Lessons learned
+
+The file `.workflow_artifacts/memory/lessons-learned.md` accumulates insights from completed tasks. It captures what surprised us, what went wrong, and what to do differently next time.
+
+**Reading:** Every planning skill (`/plan`, `/critic`, `/architect`) should read `lessons-learned.md` at the start to avoid repeating known mistakes. Native auto memory (`MEMORY.md`) is for personal, ad-hoc facts; when a takeaway is a reusable engineering lesson, append it here instead (or keep only a one-line pointer to this file in auto memory).
+
+**Writing:** Append a new entry after each task reaches merge (or after a rollback, or when the user shares a lesson). Format:
+
+```markdown
+## <date> — <task-name>
+**What happened:** <the surprise, failure, or insight>
+**Lesson:** <the reusable takeaway>
+**Applies to:** <which skills should pay attention — /plan, /critic, /implement, etc.>
+```
+
+Keep entries concise — 2-4 lines each. This file grows over time and becomes the team's institutional memory.
+
+### Session state tracking
+
+Every skill that does meaningful work (architect, plan, critic, revise, implement, review, run) writes `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` once per run, at the stage boundary, to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule). `/end_of_day` and `/start_of_day` read it.
+
+`end_of_day_due: yes` is set at every write; `/end_of_day` Step 3d flips it to `no` per processed session (hybrid date-window + flag rule); `sessionstart.sh`/`/start_of_day` use it as the second missing-EOD-banner signal (36 h window). `fallback_fires` counts Class B English-fallback + Haiku-dispatch retries (incremented in place, preserved across rewrites, never decremented). Full semantics: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+
+`verification_ran`/`verification_mismatches` (§V, IVG-115) reset to `no`/`0` at every write — omission or `no` reads as a failure signal, never a silent pass. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
+
+The cost ledger (`.workflow_artifacts/<task-name>/cost-ledger.md`) is the source of truth for per-session costs.
+
+### Cost tracking
+
+Every skill records its session to the task's cost ledger at session start.
+
+**Ledger path:** `.workflow_artifacts/<task-name>/cost-ledger.md`. Create with header `# Cost Ledger — <task-name>` if new. Columns: `UUID | DATE | PHASE | MODEL | task | NOTE | FALLBACK_FIRES` (7-col); 6-col rows (no FALLBACK_FIRES) remain valid forever — readers tolerate both. Append-only; never delete or rewrite rows.
+
+**Phase values:** `discover`, `architect`, `plan`, `critic`, `revise`, `specify`, `enrich`, `implement`, `review`, `gate`, `end-of-task`, `pr`, `run-orchestrator`, `thorough-plan`, `rollback`, `init-workflow`, `start-of-day`, `end-of-day`, `weekly-review`, `capture-insight`, `triage`, `expand`, `checkpoint`, `cleanup`, `sleep`, `session-close-hook`, `next-steps`, `workspace`, `ad-hoc`
+
+Note: `/thorough_plan` writes phase-boundary session-state updates (IVG-98) to a dedicated orchestrator file (`{date}-{task}-orchestrator.md`) at each planning-loop boundary, using `## Current stage: thorough-plan:round-{N}-{phase}` (phase ∈ {plan, critic, revise}) — recognized by `/start_of_day`, `/end_of_day`, `/status`. Subagents write only the standard `{date}-{task}.md`; the orchestrator file is owned solely by the orchestrator (M-02/D-07, see lifecycle-guide.md).
+
+**Category:** Always write `task`.
+
+**Conditional skills:** `/discover`, `/gate`, `/start_of_day`, `/capture_insight`, and `/triage` skip cost recording if no task context is active.
+
+Bash one-liner, UUID rules, writer guidance, NOTE-quoting, and parser-tolerance details: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+
+### Knowledge cache
+
+Cache lives under `.workflow_artifacts/cache/` (advisory; missing/stale never an error; rollback by deletion). Three rules, directory structure, entry format, staleness, and the "per-skill inline copies are never pointer-replaced" caveat (lesson 2026-04-13): `__QUOIN_HOME__/memory/cache-guide.md`.
+
+### Tier 1 — files that always stay English (caveman-token-optimization carve-out)
+
+The full catalog of always-English Tier-1 files (hand-edited, contract-approval, rendered briefings, source files) lives at `__QUOIN_HOME__/memory/tier1-files.md` (source: `quoin/memory/tier1-files.md`) — consult it when deciding if a file is exempt from terse-style writing.
+
+## Model assignments
+
+| Skill | Model | Reasoning |
+|-------|-------|-----------|
+| /discover | Opus | Cross-repo scanning, understanding how services connect |
+| /architect | Opus | Deep exploration, complex reasoning, cross-repo analysis |
+| /specify | Opus | Interactive intent elicitation → task spec (upstream of /architect) |
+| /enrich | Opus | Prompt enrichment upstream of /specify (interactive gap-filling) |
+| /plan | Opus | Detailed planning requires strong reasoning (always Opus — strong foundation reduces iteration) |
+| /critic | Opus | Finding real issues requires deep understanding (never tiered) |
+| /revise | Opus | Addressing critic feedback requires strong reasoning (used in strict mode) |
+| /revise-fast | Sonnet | Cost-efficient revision (used by /thorough_plan in normal mode, rounds 2+) |
+| /thorough_plan | Opus | Orchestrates task triage and plan→critic→revise loop. Routes Small tasks to single-pass /plan; Medium uses Sonnet /revise-fast; Large/strict: uses all-Opus. Critic always Opus. |
+| /run | Opus | Light pipeline: implements on Opus (inline, or an Opus subagent on other tiers); r1 adds an Opus review, r2 a Sonnet context pack and stages. |
+| /run_hard | Opus | Heavy end-to-end orchestrator managing phase transitions, user checkpoints, and subagent dispatch. Explicit opt-in only. |
+| /implement | Sonnet | Efficient code generation, plan already defines what to do |
+| /review | Opus | Thorough analysis, integration safety, risk assessment |
+| /security_review | Opus | Standalone OWASP-style security pass; auto-included in Large /review fan-out |
+| /repo_cleanup | Opus | Whole-repo comment and test-suite cleanup; explicit invocation |
+| /gate | Sonnet | Automated checks and human approval checkpoint |
+| /rollback | Sonnet | Safe undo of implementation phases |
+| /end_of_task | Sonnet | Commit, push branch, lessons, mark complete |
+| /pr | Sonnet | Procedural automation: version bump detection, PR creation, post-merge cleanup |
+| /end_of_day | Sonnet | Session state capture, insight deduplication, and lessons-learned consolidation |
+| /sleep | Sonnet | Promote/forget judgment for lessons-learned (IVG-263) |
+| /init_workflow | Opus | Project bootstrap, /discover invocation, structure creation |
+| /start_of_day | Haiku | Context restoration and git state reconciliation (structured checklist) |
+| /weekly_review | Haiku | Aggregates weekly progress, decisions, and outcomes (template-driven) |
+| /capture_insight | Haiku | Quick insight logging to daily scratchpad during task work |
+| /cost_snapshot | Haiku | Read-only cost reporting from ledger files and ccusage (lightweight) |
+| /status | Haiku | Read-only pipeline-graph reporting (shows active workflow phase) |
+| /triage | Haiku | Lightweight routing: reads prompt, inspects state, proposes a skill. |
+| /next-steps | Haiku | Lightweight queue management for future work items (skill dir: `next_steps`) |
+| /continue_work | Sonnet | Revive context from a prior session: reads recent-sessions.md, presents session picker, extracts checkpoint summary and recent messages from JSONL. |
+| /cleanup | Sonnet | Mechanical trash-move of stale sentinels/checkpoints (IVG-263). |
+| /workspace | Sonnet | Per-repo git-worktree workspaces for concurrent sessions (create/status/takeover/teardown) |
+
+### Subagent preamble (Stage 2 of pipeline-efficiency-improvements)
+
+Purely additive prompt-cache warm-up for 9 spawn-target skills; generated by `build_preambles.py`; never hand-edit. Full details: `__QUOIN_HOME__/memory/preamble-guide.md`.
+
+### §0 Model dispatch preamble
+
+The 19 cheap-tier skills (gate, end_of_day, start_of_day, triage, capture_insight, cleanup, cost_snapshot, weekly_review, end_of_task, implement, rollback, expand, revise-fast, sleep, next_steps, continue_work, pr, status, workspace) carry a `## §0 Model dispatch` block as the first body H2 after the H1. When invoked from a session running on a model strictly more expensive than the declared tier, the skill self-dispatches via the Agent tool to its declared model and prefixes the child prompt with `[no-redispatch]` to prevent recursion. Counter form `[no-redispatch:N]` (N≥2) is an abort signal. The 13 Opus-tier skills do NOT carry §0. The 11 Opus-tier leaf skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich, repo_cleanup) carry `## §0″ Minimum-tier guard` (under-tier protection) instead; orchestrators `/run` and `/thorough_plan` carry neither.
+
+Fail-OPEN on Agent unavailable (best-effort cost guardrail, architecture I-01). Manual override: prefix slash invocation with `[no-redispatch]`. Drift detection: `test_quoin_stage1_preamble.py`, `test_quoin_stage1_recursion_abort.py`. Full branch set — worktree-error classification, sentinel forms, recovery options, 1M-credit handling (IVG-89/IVG-90): `__QUOIN_HOME__/memory/dispatch-guide.md`.
+
+### §0' Pollution dispatch
+
+The 11 Opus-tier non-orchestrator skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich, repo_cleanup) carry a `## §0' Pollution dispatch` block. Fires when `pollution_guard.py` prints `OVER` (score ≥ `QUOIN_POLLUTION_THRESHOLD`, default 5000) AND no `[no-redispatch]` AND no prior §0 dispatch; §0 fires first, §0' only if no §0 dispatch. Excluded: `/run`, `/thorough_plan`. Fail-OPEN on Agent unavailable. Drift: `quoin/dev/tests/test_quoin_pollution_preamble.py`. Per-skill dispatch contract, 1M-credit recovery (IVG-89), and full detection rules: `__QUOIN_HOME__/memory/dispatch-guide.md`.
+
+### §0″ Minimum-tier guard
+
+The 11 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block. Fires when `current_tier < declared_tier` (inverse of §0); up-dispatches to Opus (mirrors §0), with an AskUserQuestion fallback on failure. Env knob `QUOIN_DISABLE_MINTIER_GUARD=1` → silent skip. Generated by `inject_pollution_dispatch.py`; drift test `test_mintier_guard.py`. Orchestrators excluded (D-04); `/run` hands implementing to Opus from any other tier (same knob). The 12 Sonnet-tier §0 skills carry the mirrored `§0‴` block (same knob; drift test `test_sonnet_mintier_guard.py`). Full decision tree and 1M-credit details: `__QUOIN_HOME__/memory/dispatch-guide.md`.
+
+### §V Ground-truth verification
+
+`end_of_day`/`start_of_day`/`weekly_review` carry `## §V Ground-truth verification`: `verify_claims.py` reconciles claimed task/PR state vs re-derived truth (`end_of_day`'s early `## Claims` manifest is backstopped by a SessionEnd hook). `status`/`triage`/`cost_snapshot` carry a lighter block; `pr`/`end_of_task`/`continue_work` deferred. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
+
+### Hooks deployed by quoin
+
+`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 9 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` only clears or stamps run-continuation sentinels (no transcript read); `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
+
+The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
+
+All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, etc.) use integer basis-points arithmetic. Context % comes from real transcript usage (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` overrides the window), with a byte-estimate fallback. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
+
+Opt-in mods (asked in a TTY): `install.sh --with-context-tracker`, `--with-workflow-tasks` (undo `--remove-*`); hooks-guide.md.
+
+### Lifecycle skills (end_of_day / sleep / cleanup)
+
+Three skills handle session lifecycle at different granularities (v3 lifecycle separation):
+- `/end_of_day` — rolls up daily session state into `.workflow_artifacts/memory/daily/<date>.md`; touches `lessons-learned.md` if insights promoted; auto-invokes `/sleep`.
+- `/sleep` — Scans daily insights + session files (30-day window); three-bucket decisions (Promote/Soft-Forget/deferred). Writes ONLY to `lessons-learned.md` + `forgotten/`.
+- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires from `/end_of_day` (Step 5b).
+
+Full subcommand contracts and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+
+### /sleep importance signals
+
+`/sleep` reads signals from `__QUOIN_HOME__/memory/sleep-signals.yaml` (source: `quoin/memory/sleep-signals.yaml`). Thresholds override via `QUOIN_SLEEP_<KEY>` env vars. Fallback if YAML absent: `sleep_score.py` parses this section, then hardcoded defaults.
+
+### Workflow memory layers
+
+The workflow uses several distinct memory layers, each with a different lifecycle:
+
+| Memory layer | Purpose | Writer |
+|---|---|---|
+| auto-memory | user/feedback/project facts | Claude ad-hoc |
+| `lessons-learned.md` | reusable engineering takeaways | `/end_of_task` + `/sleep` |
+| `daily/insights-<date>.md` | in-session scratchpad | `/capture_insight` |
+| `daily/<date>.md` | rendered daily briefing | `/end_of_day` |
+| `weekly/<iso-week>.md` | rendered weekly review | `/weekly_review` |
+| `forgotten/<date>.md` | soft-forget archive | `/sleep` |
+| `run-state-<task>.json` + `run-notes-<task>.md`[`.1`] | task-keyed resume record (`phase`/`next_action`/`step`) + its append-only notes log — session-id anchoring and adoption timing: `__QUOIN_HOME__/memory/lifecycle-guide.md` | `/run` (sole creator) + `/thorough_plan` (refines only) |
+
+**Hard boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Enforced by `test_sleep_write_boundary.py`. `trash/` directory is outside `/sleep --purge` scope (gap-seven narrowed: 8 live `*.txt` sentinel families under `memory/` are now covered via `/sleep --purge --sentinels`; `trash/<date>/` remains the residual gap). Directory tree + `forgotten/<date>.md` entry-format + `> Source:` restore anchor: `__QUOIN_HOME__/memory/lifecycle-guide.md`.

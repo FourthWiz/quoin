@@ -206,27 +206,6 @@ def test_shared_parent_uuid_no_attribution_is_the_regressed_shape():
 # ---------------------------------------------------------------------------
 # Test 8c (AC-2, WORDING — D-2's explicit-opt-out reconciliation)
 # ---------------------------------------------------------------------------
-def test_run_setup_warns_on_explicit_optout():
-    skill_path = (
-        REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
-    )
-    text = skill_path.read_text(encoding="utf-8")
-
-    start = text.index("## Setup")
-    end = text.index("## Perfectionist depth-within-profile")
-    assert start < end
-    region = text[start:end]
-
-    required_tokens = [
-        "QUOIN_INLINE_COST_CAPTURE=0",
-        "per-phase cost attribution",
-        "parent /run session UUID",
-        "unset the variable to restore attribution",
-        "Unset or any value other than `0` means capture is ON; "
-        "no warning is emitted.",
-    ]
-    for token in required_tokens:
-        assert token in region, f"missing required Setup-region token: {token!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ BASE = (
     "## Steps\n"
     "Run `tool --flag` first.\n"
     "This sentence only restates what the harness already does.\n"
-    "Keep this rule. See `__QUOIN_HOME__/memory/guide.md` \"Alpha\" for more.\n"
+    "Keep this rule. See `${CLAUDE_PLUGIN_ROOT}/memory/guide.md` \"Alpha\" for more.\n"
     "\n"
     "```bash\n"
     "echo hello\n"
@@ -101,11 +101,11 @@ MUTATIONS = {
     "added-must": lambda t: t.replace("Keep this rule.", "You MUST keep this rule."),
     "core-pointer": lambda t: t.replace("`quoin/core/skills/demo.md`", "the intent doc"),
     "missing-memory-file": lambda t: t.replace("memory/guide.md\" \"Alpha\"", "memory/guide.md\" \"Alpha\"").replace(
-        "See `__QUOIN_HOME__/memory/guide.md` \"Alpha\" for more.",
-        "See `__QUOIN_HOME__/memory/guide.md` \"Alpha\" and `__QUOIN_HOME__/memory/absent.md` \"X\"."),
+        "See `${CLAUDE_PLUGIN_ROOT}/memory/guide.md` \"Alpha\" for more.",
+        "See `${CLAUDE_PLUGIN_ROOT}/memory/guide.md` \"Alpha\" and `${CLAUDE_PLUGIN_ROOT}/memory/absent.md` \"X\"."),
     "missing-memory-heading": lambda t: t.replace(
-        "See `__QUOIN_HOME__/memory/guide.md` \"Alpha\" for more.",
-        "See `__QUOIN_HOME__/memory/guide.md` \"Nope\" for more."),
+        "See `${CLAUDE_PLUGIN_ROOT}/memory/guide.md` \"Alpha\" for more.",
+        "See `${CLAUDE_PLUGIN_ROOT}/memory/guide.md` \"Nope\" for more."),
 }
 
 

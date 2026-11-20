@@ -6,125 +6,9 @@ model: opus
 
 # Review
 
-
 *Portable intent doc: `quoin/core/skills/review.md`*
 
 You are a senior code reviewer using the strongest available model. Your job is to verify that the implementation is flawless, matches the plan, handles all edge cases, and is safe for production. You are thorough, precise, and constructive.
-
-## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
-
-This skill runs in the user's current session. If the session is polluted (high context from
-prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
-
-Detection:
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
-    It scores the current session transcript; threshold POLLUTION_THRESHOLD
-    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
-  - Output starting `OVER|`: session is polluted.
-  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
-
-Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
-  Determine dispatch contract fields:
-    - Locate `current-plan.md` in the task directory (resolve via path_resolve.py).
-    - Get the current git branch (`git rev-parse --abbrev-ref HEAD`).
-
-  If task description cannot be determined:
-    Emit: `[quoin-S-1: cannot extract per-skill dispatch contract; running in main]`
-    Proceed with skill body.
-
-  Otherwise spawn an Agent subagent:
-    model: "opus"
-    description: "review — pollution-isolated dispatch"
-    prompt: "[no-redispatch]\n/review\nPlan path: <absolute path to current-plan.md>\nBranch: <current git branch>"
-
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path:
-  Full AskUserQuestion Question/Header/description wording for every branch below:
-  memory/dispatch-guide.md §0' verbose reference ("Verbatim AskUserQuestion wording").
-  If Agent tool unavailable or errors — classify the error first:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0' dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-autonomous: §0' dispatch failed; proceeding fail-OPEN at current tier]` and proceed
-    with skill body (treat as bare [no-redispatch]).
-  - 1M-credit-class: if the error text contains the substring
-      `Usage credits required for 1M context`:
-      The §0' opus dispatch hit a 1M-context credit mismatch (IVG-89). Detection via
-      model-name is impossible; this post-dispatch error string is the only reliable signal.
-      Issue an `AskUserQuestion` — Option 1 label "Abort — I'll switch with /model first";
-      Option 2 label "Proceed in-session at parent tier".
-      On Option 1: print `[quoin: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /review]` and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin: 1M-context credit mismatch; proceeding in-session at
-      parent tier — run /model to switch to standard context for a permanent fix]` and
-      proceed with skill body.
-  - Any other error (non-1M): Issue an `AskUserQuestion` (generic wording; Option 1 = abort,
-      Option 2 = proceed in the current polluted session).
-      On Option 1: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and proceed with skill body.
-
-Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
-proceed to skill body.
-
-## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
-This skill is declared model: "opus". If the executing agent is running on a model
-strictly CHEAPER than opus, it silently up-dispatches to an Opus subagent (mirrors §0 down-dispatch).
-
-<!-- §0doubleprime-begin -->
-Detection:
-  - Read your current model from system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus. declared_tier = opus.
-  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
-    (silent skip — no advisory; this is explicit opt-out behavior by design).
-  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
-  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
-
-On fire (happy path — silent up-dispatch):
-  spawn an Agent subagent:
-    model: "opus"
-    description: "review — min-tier up-dispatch"
-    prompt: "[no-redispatch]\n<original user input verbatim>"
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
-description wording for every branch below: memory/dispatch-guide.md §0″ verbose reference
-("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0″ dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-mintier-autonomous: §0″ dispatch failed; proceeding fail-OPEN at current tier]` and
-    proceed to skill body (treat as bare [no-redispatch]).
-
-  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
-      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
-      §0″ verbose reference):
-        Option 1:
-          label: "Abort — I'll switch with /model first"
-        Option 2:
-          label: "Proceed in-session at parent tier"
-      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /review]` and STOP.
-      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on opus up-dispatch;
-      proceeding in-session at parent tier — run /model to switch to standard context]`
-      and proceed to skill body (treat as bare [no-redispatch]).
-
-  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
-        Option 1:
-          label: "Abort — run from an Opus session"
-        Option 2:
-          label: "Proceed at current tier (under-powered)"
-      On Option 1: print `[quoin-mintier: aborted; re-invoke /review from an Opus session]` and STOP.
-      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
-<!-- §0doubleprime-end -->
 
 ## Session bootstrap
 
@@ -138,9 +22,9 @@ This skill should run in a fresh session for unbiased review (similar to /critic
    - **Not-found fallback:** if any bundle-provided path does not exist on disk, discard that member's bundle entry and resolve the artifact via path_resolve.py as if the bundle were absent (grandfathered/single-stage tasks may have artifacts at the task root rather than a stage dir).
    - If the ``[quoin-bundle]`` block is absent → resolve paths via path_resolve.py as today, read wholesale (unchanged behavior).
 
-1. Read `__QUOIN_HOME__/skills/review/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. (Stage 2-alt of pipeline-efficiency-improvements.)
-2. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is available from `current-plan.md` (read at bootstrap step 3); use the task title or `## For human` summary block as `--task-text`. If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback). Apply relevant lessons.
-3. Read `<task_dir>/current-plan.md` — this is the spec to review against. If a ``[quoin-bundle]`` block supplied the current-plan.md path at step 0b, use that path directly (this is the "saves a path_resolve.py call" in step 0b); otherwise resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
+1. Read `${CLAUDE_PLUGIN_ROOT}/skills/review/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. (Stage 2-alt of pipeline-efficiency-improvements.)
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/memory_select.py --semantic --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is available from `current-plan.md` (read at bootstrap step 3); use the task title or `## For human` summary block as `--task-text`. If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback). Apply relevant lessons.
+3. Read `<task_dir>/current-plan.md` — this is the spec to review against. If a ``[quoin-bundle]`` block supplied the current-plan.md path at step 0b, use that path directly (this is the "saves a path_resolve.py call" in step 0b); otherwise resolve `<task_dir>` via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
 
 # v3-format detection (architecture.md §5.7.1 — copy verbatim)
 # A file is v3-format iff:
@@ -166,10 +50,10 @@ If v3-format: read the body sections per format-kit.md §2 — ## Tasks is the s
    - Cache entries are **context only**. They describe what the module/file normally does. They do NOT replace reading the diff or any full-file read triggered by the Step 1 criteria (lines 34–41).
    - If no cache exists, skip this step — fall through to step 8 (current behavior preserved).
 8. Read the git diff (`git diff <base-branch>...HEAD`) — every line. Then selectively read full files per Step 1 criteria below. Do NOT read all modified files unconditionally.
-9. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `review` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+9. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `review` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-10. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`.
+10. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`.
 11. Then proceed with review
 
 ## Model requirement
@@ -188,15 +72,15 @@ A `Review shape: single-pass (fast-path)` line in `current-plan.md` takes preced
 
 **Pre-fan-out context budget (IVG-141) — Medium/Large fan-out AND the Large carve-out branch; Small path (including the plain single-pass override on Small/Medium/undetermined) unchanged.** At the START of this Medium/Large branch — or, on the Large carve-out branch, before dispatching its single `/security_review` OWASP subagent — BEFORE dispatching any dimension subagent, run the on-demand budget guard (best-effort leaf measurement per the T-02 spike, which PASSED — `/review` subagents resolve their own transcript):
 ```bash
-_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
-  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)")"
+_cbg_out="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
+  --current-uuid "$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)")"
 ```
 Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGET=1`. On exit 0 (`OK|...` incl. the `OK|0|` fail-OPEN path) → proceed with the fan-out. On exit 1 AND `$_cbg_out` starts with `OVER|` (`OVER|util|path`), react NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO decision-gate marker):
   1. Save the boundary checkpoint:
      ```bash
-     python3 __QUOIN_HOME__/scripts/boundary_checkpoint.py \
+     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/boundary_checkpoint.py \
        --project-root "$PROJECT_ROOT" --task "<task>" --skill review \
-       --sid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)" \
+       --sid "$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)" \
        --branch "<branch>" --resume-command "re-invoke /review" \
        --phase-label "before Medium/Large fan-out" --plan-path "<current-plan.md>" || true
      ```
@@ -237,11 +121,11 @@ Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGE
 SID="$CLAUDE_CODE_SESSION_ID"
 LEDGER=".workflow_artifacts/<task-name>/cost-ledger.md"
 _ERR=$(mktemp) || { printf 'cost-attr WARN: %s\n' "mktemp failed"; _ERR=/dev/null; }
-ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
+ATTR="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/agent_transcript_cost.py \
           --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
 [ -z "$ATTR" ] && ATTR="src=unresolved"
 [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
+[ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"
 printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$AID" "$(date -u +%Y-%m-%d)" "review" "opus" \
   "on-behalf: review fan-out — <dimension> dimension via /review" "0" "$ATTR" >> "$LEDGER"
@@ -277,7 +161,7 @@ With `QUOIN_INLINE_COST_CAPTURE=0`, use the `get_session_uuid.py` synthetic-UUID
 For each task in the plan, verify:
 
 - [ ] **Completeness** — is the task fully implemented? No partial implementations or TODO comments left behind?
-- [ ] **Authored-content hygiene (advisory)** — does new code prose (comments, docstrings) avoid process vocabulary per __QUOIN_HOME__/memory/clean-authored-content.md? Advisory only; never changes this review's verdict.
+- [ ] **Authored-content hygiene (advisory)** — does new code prose (comments, docstrings) avoid process vocabulary per ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md? Advisory only; never changes this review's verdict.
 - [ ] **Acceptance criteria** — does the implementation meet every acceptance criterion listed in the plan?
 - [ ] **File accuracy** — were the correct files modified? Are there unexpected file changes?
 - [ ] **Deviations** — if the implementation deviated from the plan, is the deviation documented and justified?
@@ -351,10 +235,10 @@ Run this check FIRST and UNCONDITIONALLY, independent of the `git diff <base-bra
 
 ```bash
 PROJECT_ROOT="$(pwd)"
-python3 __QUOIN_HOME__/scripts/branch_hygiene.py --project-root "$PROJECT_ROOT"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/branch_hygiene.py --project-root "$PROJECT_ROOT"
 ```
 
-- If exit 1 (any repo has `has_task_commits: true` — commits ahead of upstream on a protected branch): raise a MAJOR issue (branch placement backstop). Note: this should have been caught earlier; flag the gate gap as well. Cite the canonical safe reset-to-origin recovery recipe in the MAJOR issue writeup so the user knows how to fix it: `__QUOIN_HOME__/memory/branch-recovery.md` (move mis-placed commits to a feature branch first, then run the recipe to restore the protected branch to origin).
+- If exit 1 (any repo has `has_task_commits: true` — commits ahead of upstream on a protected branch): raise a MAJOR issue (branch placement backstop). Note: this should have been caught earlier; flag the gate gap as well. Cite the canonical safe reset-to-origin recovery recipe in the MAJOR issue writeup so the user knows how to fix it: `${CLAUDE_PLUGIN_ROOT}/memory/branch-recovery.md` (move mis-placed commits to a feature branch first, then run the recipe to restore the protected branch to origin).
 - If exit 0: no issue — proceed with the rest of the review.
 - If exit 3 or script missing: emit a non-blocking note and proceed — fail-OPEN.
 
@@ -367,10 +251,10 @@ This is a diff-independent hard precondition, parallel to Step 6a's branch-place
 ```
 PROJECT_ROOT="$(pwd)"
 AFF="$PROJECT_ROOT/.workflow_artifacts/cache/review-affected-<date>"
-python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --task "<task-name>" --require-task-context --format text --selectors-out "$AFF.selectors" --report-out "$AFF.txt" --junit-out "$AFF.xml"; AT_RC=$?
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --task "<task-name>" --require-task-context --format text --selectors-out "$AFF.selectors" --report-out "$AFF.txt" --junit-out "$AFF.xml"; AT_RC=$?
 echo "AT_RC=$AT_RC"
 if [ "$AT_RC" -eq 1 ]; then
-  python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output "$AFF.txt" --junit "$AFF.xml" --selectors-from "$AFF.selectors" --observed-rc "$AT_RC" --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/known_red.py --pytest-output "$AFF.txt" --junit "$AFF.xml" --selectors-from "$AFF.selectors" --observed-rc "$AT_RC" --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
   echo "KR_RC=$KR_RC"
 fi
 ```
@@ -395,7 +279,7 @@ The helper resolves the git repo from `--project-root` itself (CRIT-1 fix: the o
 Run (advisory only; the result never changes this review's verdict — see the Step 2
 checklist bullet above):
 
-    python3 __QUOIN_HOME__/scripts/authored_content_lint.py --basis committed --format text
+    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/authored_content_lint.py --basis committed --format text
 
 Result mapping:
 - exit 0 -> nothing to report.
@@ -421,16 +305,16 @@ Save the review to:
 ```
 <task_dir>/review-<round>.md
 ```
-where `<task_dir>` is resolved via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (see Session bootstrap step 2). architecture.md and architecture-critic-N.md: ALWAYS at task root per D-03.
+where `<task_dir>` is resolved via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (see Session bootstrap step 2). architecture.md and architecture-critic-N.md: ALWAYS at task root per D-03.
 
 `review-<round>.md` is a Class B artifact per artifact-format-architecture v3 §4.1. Write it using the §5.3 5-step Class B mechanism:
 
 **Step 1: Body generation.**
-Read `__QUOIN_HOME__/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
+Read `${CLAUDE_PLUGIN_ROOT}/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
 Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit.md §1; this is the only place these references apply, per lesson 2026-04-23):
-- `__QUOIN_HOME__/memory/format-kit.md` — primitives + standard sections per artifact type
-- `__QUOIN_HOME__/memory/glossary.md` — abbreviation whitelist + status glyphs
-- `__QUOIN_HOME__/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
+- `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` — primitives + standard sections per artifact type
+- `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` — abbreviation whitelist + status glyphs
+- `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
@@ -453,11 +337,11 @@ Compose the format-aware body per the `review` artifact-type sections in format-
 - When a review discusses verdict formats or values, describe them in words rather than quoting them.
 - Write `## Summary` before `## Verdict`, and in the summary name an HTML element without angle brackets ("the title element", not its tag), because an element opener before the Verdict heading makes the gate refuse the review even inside a code span.
 
-Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
+Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
-Read the frozen prompt template from `__QUOIN_HOME__/memory/summary-prompt.md` using
+Read the frozen prompt template from `${CLAUDE_PLUGIN_ROOT}/memory/summary-prompt.md` using
 the Read tool. Read the artifact body from `<path>.body.tmp` using the Read tool.
 Compose the prompt as: <prompt-template-with-`<<<BODY>>>`-replaced-by-body-text>.
 
@@ -490,7 +374,7 @@ lesson 2026-04-24.)
 This guarantees exactly one `## For human` line regardless of Haiku output shape.
 
 **Step 4: Structural validation.**
-  `python3 __QUOIN_HOME__/scripts/validate_artifact.py <path>.tmp`
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <path>.tmp`
 Filename auto-detection identifies type as `review` (matches `^review-` regex in `detect_type()`). Exit code 0 = PASS; non-zero = invariant failure.
 
 **Step 5: Retry / English-fallback (failure-class-aware).**
@@ -500,14 +384,14 @@ Filename auto-detection identifies type as `review` (matches `^review-` regex in
   - **Step 4 V-06/V-07 failures:** Re-run Steps 2–4 once.
   - **Step 4 V-02/V-03/V-05 failures:** Re-run Steps 1–4 once with body-discipline instruction prepended.
   - **Step 4 V-01/V-04 failures:** Treat as body issues; re-run Steps 1–4.
-  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp"`.
+  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp"`.
 
-**Step 6: Atomic rename.** `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. Do NOT write a `.original.md` side-file.
+**Step 6: Atomic rename.** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. Do NOT write a `.original.md` side-file.
 
 ## After the review
 
 If the verdict is CHANGES_REQUESTED or BLOCKED:
-- **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
+- **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: ${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
   ```text
   [quoin-handoff/1.0 return]
   status: COMPLETE
@@ -528,7 +412,7 @@ If the verdict is CHANGES_REQUESTED or BLOCKED:
 
 If the verdict is APPROVED:
 - **Run `/gate` inline** (Full level, post-review — read `/gate/SKILL.md` from the same session and execute the gate process directly; write the audit log per gate Step 5 before yielding control). This is the manual (non-`/run`) post-review boundary; audit-log persistence applies inline per `/gate/SKILL.md`.
-- **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
+- **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: ${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md (the shape below is inlined so a compliant emission rarely needs it):
   ```text
   [quoin-handoff/1.0 return]
   status: COMPLETE
@@ -550,7 +434,7 @@ If the verdict is APPROVED:
 Write session-state files in v3 format per the §5.4 Class A writer mechanism (mirrors the implement/SKILL.md pattern; reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; validate via validate_artifact.py with auto-detection → session type; retry-once-then-English-fallback on V-failure; atomic rename with graceful .body.tmp cleanup). `review-{round}.md` remains **Class B** per artifact-format-architecture v3 §4.1 — the parent Stage 3 work wired its Class B writer mechanism in the Output-format section above; this Save-session-state section governs ONLY the Class A session file at `.workflow_artifacts/memory/sessions/{date}-{task}.md`.
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `in_progress` (REVISE) or `completed` (APPROVED)
 - Current stage: `review round N`

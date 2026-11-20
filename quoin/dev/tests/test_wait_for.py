@@ -264,14 +264,6 @@ def test_wrapper_cli_parity(tmp_path):
     assert a.stdout == b.stdout == "READY|5\n" and a.returncode == b.returncode == 0
 
 
-def test_installer_registers_in_both_script_tuples():
-    spec = importlib.util.spec_from_file_location("installer_under_test", INSTALLER_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert "wait_for.py" in mod.DEPLOYED_SCRIPTS
-    assert "wait_for.py" in mod.CORE_SCRIPTS
-
-
 def test_core_imports_under_python_38(tmp_path):
     exe = shutil.which("python3.8")
     if not exe:

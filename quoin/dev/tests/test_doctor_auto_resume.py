@@ -9,7 +9,6 @@ import stat
 import sys
 from pathlib import Path
 
-import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
@@ -218,36 +217,3 @@ def test_claude_found_only_outside_minimal_path_is_informational_only(tmp_path, 
     assert "claude resolves only outside" in out
 
 
-def test_cmd_doctor_project_scope_missing_record_exits_nonzero(tmp_path, monkeypatch, capsys):
-    import argparse
-
-    project_dir = tmp_path / "proj"
-    dest_root = project_dir / ".claude"
-    _build_mini_deploy(dest_root)
-    # Minimum install shape _cmd_doctor needs before reaching the auto-resume block.
-    import quoin.installer as inst
-    (dest_root / "memory").mkdir(exist_ok=True)
-    for fname in inst.TIER1_MEMORY_FILES:
-        (dest_root / "memory" / fname).write_text("x", encoding="utf-8")
-    (dest_root / "scripts").mkdir(exist_ok=True)
-    for fname in inst.DEPLOYED_SCRIPTS:
-        (dest_root / "scripts" / fname).write_text("x", encoding="utf-8")
-    for fname in inst.CORE_SCRIPTS:
-        (dest_root / "core" / "scripts" / fname).write_text("x", encoding="utf-8")
-    (dest_root / "core" / "workflow").mkdir(exist_ok=True)
-    for fname in inst.CORE_WORKFLOW_FILES:
-        (dest_root / "core" / "workflow" / fname).write_text("x", encoding="utf-8")
-    (dest_root / "skills").mkdir(exist_ok=True)
-    for skill in inst.CANONICAL_SKILLS:
-        (dest_root / "skills" / skill).mkdir(exist_ok=True)
-    (project_dir / "CLAUDE.md").write_text(
-        "# === DEV WORKFLOW START ===\nx\n# === DEV WORKFLOW END ===\n", encoding="utf-8"
-    )
-
-    monkeypatch.chdir(project_dir)
-    monkeypatch.setattr("shutil.which", lambda *a, **k: None)
-    args = argparse.Namespace(runtime="claude", scope="project", json=False)
-    rc = cli._cmd_doctor(args)
-    out = capsys.readouterr().out
-    assert rc == 1
-    assert "no install record" in out

@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -98,7 +98,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A0 — Consult the worktree-isolation decider FIRST (default is skip):
      Run via Bash:
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --decide
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --decide
      Isolation is opt-in (D-04): the decider prints `skip` unless
      QUOIN_WORKTREE_ISOLATION=on, the dispatch.json config opts in, or a prior probe
      wrote a `works` sentinel. If the output is `skip`, DO NOT write the sidecar and
@@ -109,8 +109,8 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A — Write the dispatch sidecar BEFORE calling the Agent tool:
      Run via Bash:
-       PROJECT_ROOT="$(python3 __QUOIN_HOME__/scripts/path_resolve.py --print-project-root)"
-       python3 __QUOIN_HOME__/scripts/dispatch_sidecar.py \
+       PROJECT_ROOT="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --print-project-root)"
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_sidecar.py \
            --skill <skill-name> \
            --project-root "$PROJECT_ROOT" \
            --plan "<resolved-plan-path-or-empty>"
@@ -119,14 +119,14 @@ Fail-graceful path with error-class triage (per architecture I-01):
   STEP B — Phase 1: Agent dispatch WITH isolation: "worktree" (normal path):
      Call the Agent tool with isolation: "worktree" at the declared cheap-tier
      model (sonnet for this skill). The deployed WorktreeCreate hook at
-     __QUOIN_HOME__/hooks/worktreecreate.sh reads the sidecar, runs
+     ${CLAUDE_PLUGIN_ROOT}/hooks/worktreecreate.sh reads the sidecar, runs
      git_root_for_dispatch.py, and (when a single nested repo resolves)
      creates a worktree IN the nested git root and returns its path.
      One-time probe (opt-in path only): when the probe sentinel is still unknown,
      instruct the child to record its working directory to a marker; after the Agent
      returns, compare it to the created worktree path and persist the result exactly
      once via
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --write-probe --result works|broken
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --write-probe --result works|broken
 
   STEP C — Phase 2 retry WITHOUT isolation (on Worktree-class error):
      If Phase 1 fails with a Worktree-class error (regex above), the hook
@@ -249,8 +249,8 @@ boundary (after each committed batch, before starting the next task), run the
 on-demand budget guard (best-effort leaf measurement per the T-02 spike, which
 PASSED — `/implement` subagents resolve their own transcript):
 ```bash
-_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
-  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)")"
+_cbg_out="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
+  --current-uuid "$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)")"
 ```
 Bypass entirely on `[no-phase-budget]` (strip at bootstrap) or
 `QUOIN_DISABLE_PHASE_BUDGET=1`. On exit 0 (`OK|...` incl. the `OK|0|` fail-OPEN
@@ -263,9 +263,9 @@ handoff path:
      soft cap above — one handoff mechanism).
   2. Save the boundary checkpoint:
      ```bash
-     python3 __QUOIN_HOME__/scripts/boundary_checkpoint.py \
+     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/boundary_checkpoint.py \
        --project-root "$PROJECT_ROOT" --task "<task>" --skill implement \
-       --sid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)" \
+       --sid "$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)" \
        --branch "<branch>" --resume-command "/implement" \
        --phase-label "task boundary (over budget)" --plan-path "<current-plan.md>" || true
      ```
@@ -302,7 +302,7 @@ If `QUOIN_DISABLE_BRANCH_HYGIENE=1` is set, skip this section entirely and proce
 Under worktree-isolated `/implement` dispatch, `$(pwd)` is the WORKTREE (a single git repo), NOT the multi-repo project root. A bare `$(pwd)` would silently miss sibling repos on a protected branch. Use `path_resolve.py --print-project-root` — a self-inclusive walk-up (IVG-119) that prints the nearest self-or-ancestor dir containing `.workflow_artifacts/`, spaces-safe, on a single clean stdout line:
 
 ```bash
-PROJECT_ROOT="$(python3 __QUOIN_HOME__/scripts/path_resolve.py --print-project-root)"
+PROJECT_ROOT="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --print-project-root)"
 [ -z "$PROJECT_ROOT" ] && PROJECT_ROOT="$(pwd)"   # fail-OPEN: fall back to cwd if the call yields nothing
 ```
 
@@ -311,7 +311,7 @@ Use `--print-project-root` (NOT the bare `--project-root` input flag, which has 
 **Step 2: Run the check**
 
 ```bash
-python3 __QUOIN_HOME__/scripts/branch_hygiene.py --project-root "$PROJECT_ROOT"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/branch_hygiene.py --project-root "$PROJECT_ROOT"
 ```
 
 Parse the JSON output. The check uses `repos[]` from the JSON and filters on `on_protected` (at implement start, before any commits, we prompt on `on_protected` — broader than the gate's `has_task_commits` check, which requires actual commits to have landed).
@@ -327,7 +327,7 @@ Parse the JSON output. The check uses `repos[]` from the JSON and filters on `on
   **`[autonomous]` bypass (D-01 — a NEW path PARALLEL to, and INDEPENDENT of, the benchmark dual-guard above):** if the incoming prompt carries the `[autonomous]` sentinel (parsed at Session bootstrap step 0), skip `AskUserQuestion` regardless of `QUOIN_GATE_AUTO_APPROVE`/`QUOIN_BENCHMARK_RUN` — this path does NOT require either env var and is keyed solely on the sentinel. Reuse the SAME auto-branch logic as the benchmark bypass: for each flagged repo, run `git -C {repo} switch -c {branch}` where `{branch}` = Linear `gitBranchName` if discoverable from task/session context, else `feat/{task-name}`; if the branch already exists, `git -C {repo} switch {branch}`. Emit `[quoin: branch-hygiene auto-branch for autonomous run]`, echo the branch created per repo, and proceed to §1.
 
   <!-- decision-gate: fail-closed site=branch-hygiene tokens=0 -->
-  **`[no-interactive]` / non-interactive fail-closed (D-01 parallel path; evaluated AFTER the `[autonomous]` auto-branch above, which takes precedence):** if `_INTERACTIVE` is false (the `[no-interactive]` sentinel was set, or `AskUserQuestion` is unavailable — e.g. an Agent subagent, where it is not provisioned) AND `_AUTONOMOUS` is NOT set, a human cannot pick a branch strategy: FAIL CLOSED rather than committing on a protected branch — run `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill implement --site branch-hygiene --reason "affected repos on a protected branch; branch strategy could not be surfaced" --resume-hint "re-run /implement interactively, or pass --autonomous"`, echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP. This block stays the final message on this path, and the phase emits no envelope here, even when the dispatch carried `return: envelope`. Rule doc: `__QUOIN_HOME__/memory/decision-gate-guard.md`.
+  **`[no-interactive]` / non-interactive fail-closed (D-01 parallel path; evaluated AFTER the `[autonomous]` auto-branch above, which takes precedence):** if `_INTERACTIVE` is false (the `[no-interactive]` sentinel was set, or `AskUserQuestion` is unavailable — e.g. an Agent subagent, where it is not provisioned) AND `_AUTONOMOUS` is NOT set, a human cannot pick a branch strategy: FAIL CLOSED rather than committing on a protected branch — run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill implement --site branch-hygiene --reason "affected repos on a protected branch; branch strategy could not be surfaced" --resume-hint "re-run /implement interactively, or pass --autonomous"`, echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP. This block stays the final message on this path, and the phase emits no envelope here, even when the dispatch carried `return: envelope`. Rule doc: `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
 
   Otherwise, present `AskUserQuestion`:
   - Question: "One or more affected repos are on a protected branch (main/master): {flagged-repo-list}. Implementation commits must NOT land on a protected branch. How do you want to proceed?"
@@ -342,7 +342,7 @@ Parse the JSON output. The check uses `repos[]` from the JSON and filters on `on
 
   On Option 3: print `[quoin: branch-hygiene override — proceeding on protected branch per user choice]` and proceed to §1.
 
-  **Recovery (commits already on a protected branch):** if task commits have already landed on a protected branch (Option 3 was chosen previously, or the precheck was bypassed), use the safe reset-to-origin recipe at `__QUOIN_HOME__/memory/branch-recovery.md`. Move the mis-placed commits onto a feature branch first (e.g., `git cherry-pick` or `git rebase`), then run the recipe to restore the protected branch to origin.
+  **Recovery (commits already on a protected branch):** if task commits have already landed on a protected branch (Option 3 was chosen previously, or the precheck was bypassed), use the safe reset-to-origin recipe at `${CLAUDE_PLUGIN_ROOT}/memory/branch-recovery.md`. Move the mis-placed commits onto a feature branch first (e.g., `git cherry-pick` or `git rebase`), then run the recipe to restore the protected branch to origin.
 
 ## Explicit invocation only
 
@@ -353,10 +353,10 @@ This skill MUST be explicitly invoked by the user typing `/implement`. No other 
 ## Session bootstrap
 
 This skill typically runs in a fresh session (clean context is a feature, not a bug — implementation doesn't need planning back-and-forth). On start:
-0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `run_hard` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
-1. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is derived from `current-plan.md`'s `## For human` summary block (read at bootstrap step 3). If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback).
+0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `run_hard` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
+1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/memory_select.py --semantic --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is derived from `current-plan.md`'s `## For human` summary block (read at bootstrap step 3). If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback).
 2. Read `.workflow_artifacts/memory/sessions/` for active session state (which tasks are done, where to resume)
-3. Read `<task_dir>/current-plan.md` — this is your specification. Resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
+3. Read `<task_dir>/current-plan.md` — this is your specification. Resolve `<task_dir>` via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
 
 # v3-format detection (architecture.md §5.7.1 — copy verbatim)
 # A file is v3-format iff:
@@ -375,7 +375,7 @@ If v3-format: read the body sections per format-kit.md §2 — the ## Tasks sect
    - For stale repos: run `git diff --name-only <cached-head> <current-head>` to identify changed files. Trust cache entries for unchanged files; read source for changed files.
    - If no cache exists, skip this step — fall through to source reads (current behavior)
 5. Read the actual source code you'll modify — but now **targeted**: skip source reads where the cache entry was fresh and sufficient for understanding context. Always read source immediately before modifying a file (cache aids understanding, not editing).
-6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `implement` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `implement` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
 7. Then proceed with implementation
@@ -396,7 +396,7 @@ This skill uses Sonnet for fast, high-quality implementation. The architectural 
 
    **Fix scope (checked first, interactive and `[autonomous]`):** when the dispatch prompt carries a line beginning `Fix scope:` followed by `gate <gate audit path>` or `review <review file path>` (plus the failing checks or review issues), skip task selection and the zero-pending stop, fix only the listed items, commit, and return COMPLETE / PASS with `summary` beginning `gate fix applied` or `review fix applied`. The plan check and marker below never run on a scoped dispatch.
 
-   **`[autonomous]` branch:** if `_AUTONOMOUS` is set (Session bootstrap step 0), skip `AskUserQuestion` entirely and auto-select "All remaining tasks" — implement every pending (⏳) task in `current-plan.md` in plan order, with no wait for user input. If 0 pending tasks, run `python3 __QUOIN_HOME__/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` and key on the stdout prefix, never the exit code alone. `ALLDONE|n`: write the marker `$PROJECT_ROOT/.workflow_artifacts/memory/autonomous-progress-{task}/implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, via `fsops.py write-atomic --parents`) and finish with the COMPLETE / PASS envelope whose `summary` begins `all plan tasks complete`; do NOT write `implement.done` (only the orchestrator writes it, after its gate). `PENDING|`, `UNKNOWN|` or empty output: inform the user "All tasks already implemented." and stop (same as the interactive path below); with an envelope requested, return COMPLETE / PASS with `summary` beginning `no selectable tasks`, and write nothing.
+   **`[autonomous]` branch:** if `_AUTONOMOUS` is set (Session bootstrap step 0), skip `AskUserQuestion` entirely and auto-select "All remaining tasks" — implement every pending (⏳) task in `current-plan.md` in plan order, with no wait for user input. If 0 pending tasks, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` and key on the stdout prefix, never the exit code alone. `ALLDONE|n`: write the marker `$PROJECT_ROOT/.workflow_artifacts/memory/autonomous-progress-{task}/implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, via `fsops.py write-atomic --parents`) and finish with the COMPLETE / PASS envelope whose `summary` begins `all plan tasks complete`; do NOT write `implement.done` (only the orchestrator writes it, after its gate). `PENDING|`, `UNKNOWN|` or empty output: inform the user "All tasks already implemented." and stop (same as the interactive path below); with an envelope requested, return COMPLETE / PASS with `summary` beginning `no selectable tasks`, and write nothing.
 
    - If 0 pending tasks: inform the user "All tasks already implemented." and stop.
    - If 1 pending task: present it with "Yes, implement it" / "Skip for now".
@@ -443,7 +443,7 @@ On dispatch failure (harness rejects subagent or times out): fall back to keepin
 ### Code quality
 - Follow existing code style and conventions in the repository
 - Write meaningful variable and function names
-- Comments follow the shared clean-authored-content rule (why-only, no process vocabulary): __QUOIN_HOME__/memory/clean-authored-content.md.
+- Comments follow the shared clean-authored-content rule (why-only, no process vocabulary): ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md.
 - Handle errors properly — no swallowed exceptions, no TODO error handling
 - Respect existing abstractions and patterns
 
@@ -470,7 +470,7 @@ On dispatch failure (harness rejects subagent or times out): fall back to keepin
 
 ### Cache write-through
 
-Write cache `_index.md` and `<file-stem>.md` entries in terse style per `__QUOIN_HOME__/memory/terse-rubric.md`. Code, commit messages, and PR descriptions are NOT compressed — they are source artifacts, not workflow markdown.
+Write cache `_index.md` and `<file-stem>.md` entries in terse style per `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md`. Code, commit messages, and PR descriptions are NOT compressed — they are source artifacts, not workflow markdown.
 
 After committing changes for a task, update the knowledge cache for files you modified, created, or deleted. This keeps the cache fresh for downstream skills (`/critic`, `/review`) without requiring a `/discover` re-scan.
 
@@ -538,11 +538,11 @@ After committing changes for a task, update the knowledge cache for files you mo
 
 ### Automated verify-fix loop (post-task)
 
-After a task's code and tests are written, and BEFORE marking the task ✓ and committing, run this bounded verify-fix loop. It orchestrates the existing `__QUOIN_HOME__/scripts/affected_tests.py` — no new wrapped script is added.
+After a task's code and tests are written, and BEFORE marking the task ✓ and committing, run this bounded verify-fix loop. It orchestrates the existing `${CLAUDE_PLUGIN_ROOT}/scripts/affected_tests.py` — no new wrapped script is added.
 
 **Retry bound:** `QUOIN_VERIFY_RETRIES` (env knob, default `3`).
 
-**Step 1 — Resolve PROJECT_ROOT.** Reuse the §0b resolution exactly: `PROJECT_ROOT="$(python3 __QUOIN_HOME__/scripts/path_resolve.py --print-project-root)"` (self-inclusive walk-up to the nearest ancestor containing `.workflow_artifacts/`), falling back to `$(pwd)` if empty.
+**Step 1 — Resolve PROJECT_ROOT.** Reuse the §0b resolution exactly: `PROJECT_ROOT="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --print-project-root)"` (self-inclusive walk-up to the nearest ancestor containing `.workflow_artifacts/`), falling back to `$(pwd)` if empty.
 
 **Step 2 — Resolve REPO_ROOT (anchored SEPARATELY from PROJECT_ROOT — never conflate the two).**
 
@@ -573,7 +573,7 @@ Each attempt's run step is one Bash call (re-assign `PROJECT_ROOT`/`REPO_ROOT` f
 T="$PROJECT_ROOT/.workflow_artifacts/cache/verify-touched.txt"; mkdir -p "$(dirname "$T")"
 { git -C "$REPO_ROOT" diff --name-only HEAD; git -C "$REPO_ROOT" diff --name-only --cached
   git -C "$REPO_ROOT" ls-files --others --exclude-standard; } | sort -u > "$T"
-if [ -s "$T" ]; then python3 __QUOIN_HOME__/scripts/affected_tests.py --files-from "$T" --repo-root "$REPO_ROOT" --format text; echo "VERIFY_RC=$?"
+if [ -s "$T" ]; then python3 ${CLAUDE_PLUGIN_ROOT}/scripts/affected_tests.py --files-from "$T" --repo-root "$REPO_ROOT" --format text; echo "VERIFY_RC=$?"
 else echo "[quoin-verify: no touched files detected; skipping]"; fi
 ```
 
@@ -602,7 +602,7 @@ while attempt <= QUOIN_VERIFY_RETRIES:
         # runs pytest with inherited stdout, so diagnostics are already visible; no
         # separate feedback-capture step is needed
         apply a targeted fix
-        uuid = python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement
+        uuid = python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement
         append to cost-ledger.md: "<uuid> | <date> | implement | sonnet | task | \"verify-retry <attempt+1>/<QUOIN_VERIFY_RETRIES> on <task-id>\" | 0"
         attempt += 1
         continue
@@ -645,7 +645,7 @@ callers don't need to handle token expiry themselves.
 Closes #142
 ```
 
-Commit bodies follow the same clean-authored-content rule as comments — plain engineering language, no plan/review process narration: __QUOIN_HOME__/memory/clean-authored-content.md.
+Commit bodies follow the same clean-authored-content rule as comments — plain engineering language, no plan/review process narration: ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md.
 
 ## Pull request preparation
 
@@ -687,7 +687,7 @@ When the user asks to create a PR:
 - Tracker ID: <if applicable>
 ```
 
-Body text is shipped work product — see __QUOIN_HOME__/memory/clean-authored-content.md for what belongs in it.
+Body text is shipped work product — see ${CLAUDE_PLUGIN_ROOT}/memory/clean-authored-content.md for what belongs in it.
 
 5. **Create the PR** using `gh pr create`
 
@@ -714,10 +714,10 @@ After completing each task, update `<task_dir>/current-plan.md` (where `<task_di
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write session-state files in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives + section set per artifact type), `__QUOIN_HOME__/memory/glossary.md` (abbreviation whitelist + status glyphs), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline). The session-state body follows `__QUOIN_HOME__/memory/session-schema.md` (sections and `## Cost` lines). After composing the body to `{session-path}.body.tmp`, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {session-path}.tmp` (auto-detection → session type via the parent-directory check `parent in ('session', 'sessions')`). On validator failure: retry once with section-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename: `python3 __QUOIN_HOME__/scripts/fsops.py finalize "{session-path}.tmp" "{session-path}" --cleanup "{session-path}.body.tmp" "{session-path}.tmp"`.
+Write session-state files in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` (primitives + section set per artifact type), `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` (abbreviation whitelist + status glyphs), `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` (prose discipline). The session-state body follows `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (sections and `## Cost` lines). After composing the body to `{session-path}.body.tmp`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py {session-path}.tmp` (auto-detection → session type via the parent-directory check `parent in ('session', 'sessions')`). On validator failure: retry once with section-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "{session-path}.tmp" "{session-path}" --cleanup "{session-path}.body.tmp" "{session-path}.tmp"`.
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `in_progress`, or `completed` when every plan task is done
 - Current stage: `implement task K of M`
@@ -737,7 +737,7 @@ When all requested tasks are complete:
 1. Run `/gate` **inline** — read `/gate/SKILL.md` from the same session and execute the gate process directly (do not spawn a subagent). The post-implement boundary keeps the parent's cache hot. Step 5 audit-log persistence applies; write `gate-implement-<date>.md` per `/gate/SKILL.md` before yielding control.
 2. **Completion marker.** Under `[autonomous]`, after a clean finish (never on the PARTIAL path, never on a scoped dispatch), run the same `plan_tasks.py` check and on `ALLDONE` write the same marker before the envelope, `summary` beginning `all plan tasks complete`.
 
-3. **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shapes below are inlined so a compliant emission rarely needs it):
+3. **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: ${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md (the shapes below are inlined so a compliant emission rarely needs it):
 
    Clean finish:
    ```text

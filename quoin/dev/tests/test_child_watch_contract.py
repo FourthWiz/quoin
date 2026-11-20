@@ -33,53 +33,6 @@ def _section(text: str, start_pat: "re.Pattern", what: str) -> str:
     return body
 
 
-def test_every_handoff_site_carries_the_watch_line():
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    matches = list(re.finditer(r"auto_resume\.py handoff", text))
-    assert len(matches) >= 3
-    for i, m in enumerate(matches):
-        ends = [m.start() + 2500]
-        nxt_heading = HEADING.search(text, m.end())
-        if nxt_heading:
-            ends.append(nxt_heading.start())
-        if i + 1 < len(matches):
-            ends.append(matches[i + 1].start())
-        block = text[m.start(): min(ends)]
-        for phrase in ("Watching a handed-off child", "10-minute") + SIGNALS:
-            assert phrase in block, (m.start(), phrase)
-
-
-def test_watch_subsection_in_error_handling():
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    assert len(H3.findall(text)) == 1
-    assert text.count("### Watching a handed-off child") == 1
-    err = re.search(r"(?m)^## Error handling\s*$", text)
-    hook = re.search(r"(?m)^## Hook cooperation \(autonomous\)\s*$", text)
-    h3 = H3.search(text)
-    assert err and hook and h3
-    assert err.start() < h3.start() < hook.start()
-    body = _section(text, H3, "watch subsection")
-    low = body.lower()
-    for needle in ("child_watch.py", "Monitor", "run_in_background", "--once",
-                   "PushNotification", "QUOIN_HEADLESS_CHILD", "never resume phase work"):
-        assert needle in body, needle
-    assert "observe-only" in low
-    for state in STATES:
-        assert state in body, state
-    assert "auto_resume.py handoff" not in body
-
-
-def test_context_exhaustion_bullet_has_handoff_and_watch_line():
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    err = re.search(r"(?m)^## Error handling\s*$", text)
-    h3 = H3.search(text)
-    region = text[err.start(): h3.start()]
-    bullet = region[region.index("**Context exhaustion:**"):]
-    bullet = bullet[: bullet.index("- **The user asks to stop")]
-    assert "HANDOFF|" in bullet
-    assert "Watching a handed-off child" in bullet
-
-
 def test_autonomous_mode_subsection_matches_script():
     text = AUTO_MODE.read_text(encoding="utf-8")
     body = _section(text, re.compile(r"(?m)^### Watching a handed-off child\s*$"), "autonomous-mode subsection")

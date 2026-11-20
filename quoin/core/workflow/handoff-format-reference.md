@@ -1,6 +1,6 @@
 # Agent Handoff Format — Checkable Rules Reference
 
-This file holds the checkable-rule table (`H-01` through `H-21`) and the rule interaction cascade for the inter-agent handoff envelope. The normative reference for the envelope itself — required and optional fields, field ordering, delimiters, escaping, byte bounds, and version-marker rules — is `__QUOIN_HOME__/core/workflow/handoff-format.md`. Read that file first; this one enumerates every checkable rule and how the rules interact when more than one fires on the same payload.
+This file holds the checkable-rule table (`H-01` through `H-21`) and the rule interaction cascade for the inter-agent handoff envelope. The normative reference for the envelope itself — required and optional fields, field ordering, delimiters, escaping, byte bounds, and version-marker rules — is `${CLAUDE_PLUGIN_ROOT}/core/workflow/handoff-format.md`. Read that file first; this one enumerates every checkable rule and how the rules interact when more than one fires on the same payload.
 
 ## Checkable Rules
 

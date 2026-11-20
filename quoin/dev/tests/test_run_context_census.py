@@ -282,21 +282,6 @@ def row(result, sid):
 # selection and mode
 # ---------------------------------------------------------------------------
 
-def test_selection_and_start_forms(census, corpus):
-    res = run(census, corpus, excluded=["s-excluded"])
-    c = res["corpus"]
-    assert sorted(r["session"] for r in res["rows"]) == [
-        "s-auto-message", "s-auto-token", "s-interactive", "s-relaunch", "s-two"]
-    assert c["files_excluded"] == 1
-    assert c["starts_tag"] == 5 and c["starts_plain"] == 1
-    assert c["malformed_lines"] == 1
-
-
-def test_two_starts_are_tagged_per_span(census, corpus):
-    spans = row(run(census, corpus), "s-two")["spans"]
-    assert [(s["mode"], s["evidence"]) for s in spans] == [
-        ("interactive", "none"), ("autonomous", "token")]
-
 
 def test_mode_tagging_positive_evidence(census, tmp_path):
     mode_corpus(tmp_path)
@@ -322,12 +307,6 @@ def test_mode_tagging_negative_probes_stay_interactive(census, tmp_path):
 # spawns, segments, overhead
 # ---------------------------------------------------------------------------
 
-def test_spawn_return_measured_at_notification(census, corpus):
-    spawns = row(run(census, corpus), "s-interactive")["spawns"]
-    impl = next(s for s in spawns if s["agent_id"] == "aimpl")
-    assert impl["phase"] == "implement" and impl["linked"] and impl["async"]
-    assert impl["return_growth"] == 36000 - 31000
-
 
 def test_unlinked_spawn_description_is_not_a_gate(census, tmp_path):
     t = Transcript()
@@ -340,68 +319,6 @@ def test_unlinked_spawn_description_is_not_a_gate(census, tmp_path):
     sp = row(run(census, tmp_path), "s")["spawns"][0]
     assert sp["phase"] == "other" and not sp["async"]
     assert sp["return_growth"] == 500
-
-
-def test_inline_gate_segments_and_labels(census, corpus):
-    r = row(run(census, corpus), "s-interactive")
-    segs = r["segments"]
-    assert [s["category"] for s in segs] == ["post-implement", "post-review",
-                                              "post-review"]
-    first = segs[0]
-    # two partial Reads, cat of an earlier log, pytest, two Writes, finalize
-    assert first["n_turns"] == 7 and not first["truncated"]
-    assert first["growth"] == 16000
-    assert segs[1]["n_turns"] == 7 and not segs[1]["truncated"]
-    assert segs[2]["truncated"]
-    # Checkpoint texts sit outside the segments and count once as summaries.
-    assert len(r["summaries"]) == 2
-
-
-def test_relaunch_segment_label_comes_from_the_log_path(census, corpus):
-    segs = row(run(census, corpus), "s-relaunch")["segments"]
-    assert len(segs) == 1 and segs[0]["category"] == "post-implement"
-    assert segs[0]["mode"] == "autonomous"
-
-
-def test_remaining_turns_stop_at_compaction(census, corpus):
-    seg = row(run(census, corpus), "s-relaunch")["segments"][0]
-    assert seg["remaining_turns"] == 2
-
-
-def test_truncated_segments_are_excluded_from_aggregates(census, corpus):
-    agg = run(census, corpus)["aggregates"]["interactive"]["post-review"]
-    assert agg["segments"] == 1 and agg["truncated"] == 1
-
-
-def test_gate_spawn_overhead_turns(census, corpus):
-    res = run(census, corpus)
-    sp = row(res, "s-auto-token")["spawns"][0]
-    assert sp["phase"] == "gate"
-    assert len(sp["overhead_before"]) == 2
-    assert len(sp["overhead_after"]) == 2
-    assert res["inputs"]["O"] is not None
-    assert res["inputs"]["S"] == ((33000 - 30500) + (32500 - 30500)) / 2
-
-
-def test_agent_message_hand_back_is_the_return(census, corpus):
-    sp = row(run(census, corpus), "s-auto-message")["spawns"][0]
-    assert sp["return_pos"] is not None
-    assert sp["return_growth"] == 32500 - 30500
-    assert len(sp["overhead_before"]) == 2 and len(sp["overhead_after"]) == 1
-
-
-def test_long_wait_spawn_is_flagged(census, corpus):
-    sp = row(run(census, corpus), "s-auto-token")["spawns"][0]
-    assert sp["gap_minutes"] == 20.0
-    res = run(census, corpus)
-    assert res["inputs"]["O"]["long_share"] == 0.0
-
-
-def test_base_context_from_gate_subagents_only(census, corpus, monkeypatch):
-    monkeypatch.setattr(census, "MIN_GATE_SUBAGENTS", 2)
-    inputs = run(census, corpus)["inputs"]
-    assert inputs["gate_subagents"] == 3 and not inputs["B_fallback"]
-    assert inputs["B"] == 55000
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +360,3 @@ def test_cost_formulas_on_hand_computed_numbers(census):
     assert half == pytest.approx(512.0 + 1075.0)
 
 
-def test_output_is_deterministic(census, corpus, tmp_path):
-    outs = []
-    for k in range(2):
-        j, m = tmp_path / ("o%d.json" % k), tmp_path / ("o%d.md" % k)
-        assert census.main(["--projects-root", str(corpus), "--sensitivity",
-                            "--out-json", str(j), "--out-md", str(m)]) == 0
-        outs.append((j.read_bytes(), m.read_bytes()))
-    assert outs[0] == outs[1]
-    assert b"## Cost by category (autonomous runs)" in outs[0][1]

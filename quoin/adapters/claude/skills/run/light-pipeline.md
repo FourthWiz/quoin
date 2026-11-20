@@ -1,7 +1,7 @@
 # Run — light pipeline steps
 
 *Reference for `/run`, deployed as
-`__QUOIN_HOME__/skills/run/light-pipeline.md`. `/run` reads this file once,
+`${CLAUDE_PLUGIN_ROOT}/skills/run/light-pipeline.md`. `/run` reads this file once,
 with one Read, when the task is r2 (multi-part): the routes file picks r2 (or r3 runs
 as r2), a plain run reclassifies to r2, or `--resume` (or `stage N of <task>`)
 continues a staged run. It also holds the run_hard switch procedure. Step
@@ -9,7 +9,7 @@ numbers, phase markers, artifacts and the "as written" rules of SKILL.md apply
 unchanged here.*
 
 An r2 task runs, in order: Step 2, Step 3, Step 4 and Step 4b below; then, per
-stage, the implementer tier guard and Steps 5, 6, 7 (r1 stages only; Step 7
+stage, Steps 5, 6, 7 (r1 stages only; Step 7
 is in the routes file) and 8 in SKILL.md. "Steps 5–8" means that same sequence.
 
 ## Resuming a staged run
@@ -43,7 +43,7 @@ and by the routes file for an interactive r3 task (trigger `design`).
    `switched: to hard — <trigger>` to the brief's `## Scope` section.
 3. **Keep the work.** No reset, stash or commit of the partial diff; stages
    already committed stay. A staged task renames, with
-   `python3 __QUOIN_HOME__/scripts/fsops.py mv`, `architecture.md` to
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv`, `architecture.md` to
    `light-architecture.md` and each `stage-N/` to `light-stage-N/`, so
    run_hard's architect starts clean and can read them.
 4. **Keep the claim.** run_hard continues the run in this session and releases
@@ -59,7 +59,7 @@ Discovery memory is refreshed when it is missing, older than 7 days
 (`.workflow_artifacts/memory/discovery-dirty`, written in Step 8):
 
 ```bash
-if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1)" ]; then echo recent; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover --skipped; else echo stale; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover; fi
+if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1)" ]; then echo recent; python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run_phase.py" "<task>" discover --skipped; else echo stale; python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run_phase.py" "<task>" discover; fi
 ```
 
 - Under `LEAN`, do not run that check (nor read the dirty marker): log
@@ -140,9 +140,8 @@ Escalation does not allow switching (`NO_SWITCH`, or `pipeline-switch.md`
 exists), the third option is stop and recommend `/run hard:` instead. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
 note the decomposition under Assumptions in the brief.
 
-**Implementer tier guard, per stage.** Apply the guard per stage: one Opus
-implementer per stage, given the stage brief. Multi-stage `PARALLEL` waves always use
-one Opus implementer per stage, even when this session is on Opus.
+**Parallel waves.** Multi-stage `PARALLEL` waves use one Opus implementer per
+stage, given the stage brief (reference.md "Opus implementer (dispatch)").
 
 **Then run Steps 5–8 once per stage, in order.** For stage N:
 
@@ -171,7 +170,7 @@ one Opus implementer per stage, even when this session is on Opus.
 
 **Parallel waves (`PARALLEL` only).** Stages run in dependency waves instead
 of strict file order. Below, `PS` means
-`python3 __QUOIN_HOME__/scripts/parallel_stages.py`. Each command prints one
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parallel_stages.py`. Each command prints one
 JSON object. Double-quote every path, branch and task value you substitute.
 `<repo>` below is the stage repo's task working tree: `WT` from that repo's
 Step 1 claim, which is an isolated worktree when the run was isolated. Stage
@@ -179,7 +178,7 @@ worktrees then branch from that tree.
 
 1. **Plan the next wave.** If `QUOIN_PARALLEL_BUDGET_USD` (a dollar budget
    for today's project spend) is set, read `today_usd` from
-   `python3 __QUOIN_HOME__/scripts/spend_monitor.py --once --json --scope project`
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/spend_monitor.py --once --json --scope project`
    and pass it as `--spent-usd`. Then run
    `PS plan --task-dir ".workflow_artifacts/<task>" [--spent-usd <usd>]`.
    - It groups the ⏳ stages into `waves`, at most `cap` stages each
@@ -200,8 +199,8 @@ worktrees then branch from that tree.
      it reuses an existing stage branch or worktree and prints
      `status: exists`.
    - Spawn one Opus implementer per stage, all in a single message so they
-     run concurrently. Use the implementer tier guard's dispatch prompt (even
-     on Opus), and add four rules:
+     run concurrently. Use reference.md "Opus implementer (dispatch)" for the
+     prompt, and add four rules:
      - work and run tests only inside `path`, never in the main checkout;
      - use the junit token `impl-<task>-S-0N-<stamp>`;
      - commit on the stage branch with a conventional message;
@@ -211,7 +210,7 @@ worktrees then branch from that tree.
 4. **Cost rows.** When `QUOIN_INLINE_COST_CAPTURE` is not `0`, append one
    on-behalf row per stage implementer and per stage reviewer to
    `.workflow_artifacts/<task>/cost-ledger.md`. Follow the recipe in
-   `__QUOIN_HOME__/memory/cost-ledger-format.md`:
+   `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`:
    - `AID` and `TUID` are that agent's `agentId` and tool-use id;
    - PHASE is `implement` or `review`;
    - NOTE is `on-behalf: <phase> via /run (stage S-0N)`;

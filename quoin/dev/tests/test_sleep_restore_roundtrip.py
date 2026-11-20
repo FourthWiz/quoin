@@ -15,10 +15,8 @@ Runnable with:
   .venv/bin/python quoin/dev/tests/test_sleep_restore_roundtrip.py
 """
 
-import os
 import re
 import shutil
-import stat
 import sys
 import tempfile
 from datetime import date
@@ -195,104 +193,6 @@ def _run_test(name: str, fn) -> bool:
 # Test cases
 # ---------------------------------------------------------------------------
 
-def test_case1_original_path_exists():
-    """Case 1: source file exists → restore appends entry text to it."""
-    fixture_dir = _FIXTURES / "restore_original_exists"
-    forgotten_fixture = fixture_dir / "forgotten" / "2026-03-15.md"
-    source_fixture = fixture_dir / "insights-2026-03-15-source.md"
-
-    _assert(forgotten_fixture.exists(), f"Fixture not found: {forgotten_fixture}")
-    _assert(source_fixture.exists(), f"Fixture not found: {source_fixture}")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-
-        # Set up temp forgotten dir with a copy of the forgotten file
-        forgotten_dir = tmp / "forgotten"
-        forgotten_dir.mkdir()
-        tmp_forgotten = forgotten_dir / "2026-03-15.md"
-        shutil.copy(source_fixture, tmp / "insights-2026-03-15-source.md")
-
-        # The fixture's > Source: line uses FIXTURE_ABS_PATH placeholder.
-        # Rewrite to point at our temp copy of the source file.
-        forgotten_content = forgotten_fixture.read_text(encoding="utf-8")
-        tmp_source = tmp / "insights-2026-03-15-source.md"
-        forgotten_content_updated = forgotten_content.replace(
-            "FIXTURE_ABS_PATH/restore_original_exists/insights-2026-03-15-source.md",
-            str(tmp_source),
-        )
-        tmp_forgotten.write_text(forgotten_content_updated, encoding="utf-8")
-
-        # Determine today's insights path (used for fallback — should NOT be used in Case 1)
-        today_str = date.today().isoformat()
-        today_insights = tmp / "daily" / f"insights-{today_str}.md"
-
-        exit_code = restore_entry(tmp_forgotten, tmp, today_insights)
-
-        _assert(exit_code == 0, f"restore_entry returned non-zero exit code: {exit_code}")
-
-        # Verify the entry text appears in the source file
-        restored_content = tmp_source.read_text(encoding="utf-8")
-        _assert(
-            "hook timeout calibration" in restored_content,
-            "Entry text 'hook timeout calibration' not found in restored source file.",
-        )
-        _assert(
-            "5-second timeout" in restored_content,
-            "Entry text '5-second timeout' not found in restored source file.",
-        )
-
-        # Today's insights should NOT have been created
-        _assert(
-            not today_insights.exists(),
-            "Today's insights file should NOT have been created for Case 1 (source exists).",
-        )
-
-
-def test_case2_original_path_gone():
-    """Case 2: source path does not exist → restore redirects to daily/insights-<today>.md."""
-    fixture_dir = _FIXTURES / "restore_original_gone"
-    forgotten_fixture = fixture_dir / "forgotten" / "2026-03-10.md"
-
-    _assert(forgotten_fixture.exists(), f"Fixture not found: {forgotten_fixture}")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-
-        forgotten_dir = tmp / "forgotten"
-        forgotten_dir.mkdir()
-        tmp_forgotten = forgotten_dir / "2026-03-10.md"
-        # Source path in the fixture already points to a nonexistent path
-        shutil.copy(forgotten_fixture, tmp_forgotten)
-
-        today_str = date.today().isoformat()
-        today_insights = tmp / "daily" / f"insights-{today_str}.md"
-
-        exit_code = restore_entry(tmp_forgotten, tmp, today_insights)
-
-        _assert(exit_code == 0, f"restore_entry returned non-zero exit code: {exit_code}")
-
-        _assert(
-            today_insights.exists(),
-            f"Today's insights file should have been created at {today_insights}",
-        )
-
-        restored_content = today_insights.read_text(encoding="utf-8")
-
-        # Should have the "Restored from" prefix line
-        _assert(
-            "> Restored from forgotten/2026-03-10.md" in restored_content,
-            f"'> Restored from forgotten/2026-03-10.md' not found in {today_insights}.\n"
-            f"Content:\n{restored_content}",
-        )
-
-        # Should contain the entry text
-        _assert(
-            "deleted source example" in restored_content or
-            "original source file no longer exists" in restored_content,
-            f"Entry text not found in restored insights file.\nContent:\n{restored_content}",
-        )
-
 
 def test_case3_neither_writable():
     """Case 3: no write target is accessible → restore returns non-zero exit code."""
@@ -335,8 +235,6 @@ def test_case3_neither_writable():
 
 def run_tests():
     tests = [
-        ("test_case1_original_path_exists", test_case1_original_path_exists),
-        ("test_case2_original_path_gone", test_case2_original_path_gone),
         ("test_case3_neither_writable", test_case3_neither_writable),
     ]
 

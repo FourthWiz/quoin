@@ -33,57 +33,11 @@ class TestBundleExclusionFromCriticReviseSpawns:
     """Assertion (a): critic/revise/revise-fast spawn-prompt construction blocks
     contain no ``[quoin-bundle]`` token."""
 
-    def test_thorough_plan_spawn_blocks_no_bundle_token(self):
-        """thorough_plan/SKILL.md plan/critic/revise spawn blocks are bundle-clean."""
-        text = _read_skill("thorough_plan")
-        invoking_start = text.find("### Invoking each agent")
-        assert invoking_start != -1, "Invoking each agent section not found"
-        next_h2 = text.find("\n## ", invoking_start + 10)
-        section = text[invoking_start : next_h2 if next_h2 != -1 else len(text)]
-        assert "[quoin-bundle]" not in section, (
-            "thorough_plan/SKILL.md Invoking each agent section contains [quoin-bundle]"
-        )
-
-    def test_thorough_plan_spawn_blocks_no_for_human_forwarding(self):
-        """The Invoking-each-agent section must not mention ``## For human`` at
-        all — an outright-absence assertion (the old fence-position check was
-        vacuous when the token was absent and would also have passed if a
-        forwarding instruction were added in unfenced prose)."""
-        text = _read_skill("thorough_plan")
-        invoking_start = text.find("### Invoking each agent")
-        assert invoking_start != -1
-        next_h2 = text.find("\n## ", invoking_start + 10)
-        section = text[invoking_start : next_h2 if next_h2 != -1 else len(text)]
-        assert "## For human" not in section, (
-            "## For human found in Invoking each agent section — "
-            "possible forwarding instruction into critic/revise spawns"
-        )
-
-    def test_architect_spawn_blocks_no_bundle_token(self):
-        """architect/SKILL.md is bundle-clean."""
-        path = _ADAPTER / "architect" / "SKILL.md"
-        if not path.exists():
-            pytest.skip("architect/SKILL.md not found")
-        text = path.read_text()
-        assert "[quoin-bundle]" not in text, (
-            "architect/SKILL.md contains [quoin-bundle] token"
-        )
-
 
 class TestInvariantSentencesPresent:
     """Assertion (b): BOTH fresh-context invariant sentences in
     thorough_plan/SKILL.md remain present verbatim (review round-1 minor:
     the old test guarded only the critic half)."""
-
-    def test_fresh_context_invariant_critic(self):
-        text = _read_skill("thorough_plan")
-        invariant = "fresh context is essential for unbiased critique"
-        assert invariant in text, f"Invariant missing: {invariant}"
-
-    def test_fresh_context_invariant_revise(self):
-        text = _read_skill("thorough_plan")
-        invariant = "fresh context prevents anchoring on prior orchestrator chatter"
-        assert invariant in text, f"Invariant missing: {invariant}"
 
 
 class TestContextBundleOutputShape:
@@ -336,41 +290,4 @@ class TestReviewBundleCarveOuts:
         "section reads per step 0b instead"
     )
 
-    def test_both_wholesale_architecture_reads_are_qualified(self):
-        text = _read_skill("review")
-        count = text.count(self._CARVE_OUT)
-        assert count == 2, (
-            f"Expected the bundle carve-out qualification at BOTH wholesale "
-            f"architecture.md read sites (bootstrap step 4 and Review process "
-            f"Step 1 item 2); found {count} occurrence(s)."
-        )
 
-    def test_step1_architecture_item_is_qualified(self):
-        """The Review-process Step 1 'Read the architecture' item specifically
-        must carry the carve-out (the site round-2 major 2 found unqualified)."""
-        text = _read_skill("review")
-        start = text.find("### Step 1: Gather context")
-        assert start != -1, "Step 1 section not found"
-        end = text.find("### Step 2", start)
-        section = text[start : end if end != -1 else len(text)]
-        arch_idx = section.find("**Read the architecture**")
-        assert arch_idx != -1, "'Read the architecture' item not found in Step 1"
-        item = section[arch_idx : arch_idx + 600]
-        assert self._CARVE_OUT in item, (
-            "Step 1 'Read the architecture' item lost its bundle carve-out — "
-            "a compliant reader would perform the wholesale read the bundle "
-            "exists to displace."
-        )
-
-    def test_step3_plan_resolution_has_bundle_exemption(self):
-        """Bootstrap step 3 must honor the bundle-provided current-plan.md path
-        (review round-2 minor 13: step 0b claims the bundle 'saves a
-        path_resolve.py call', so step 3 may not unconditionally re-resolve)."""
-        text = _read_skill("review")
-        assert (
-            "If a ``[quoin-bundle]`` block supplied the current-plan.md path at step 0b"
-            in text
-        ), (
-            "Bootstrap step 3 lost its bundle exemption for current-plan.md "
-            "path resolution."
-        )

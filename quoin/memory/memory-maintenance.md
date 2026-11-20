@@ -7,7 +7,7 @@ file controls which files are protected from automated cleanup.
 ## Memory layers
 
 The quoin memory system uses several distinct layers. See the **Workflow memory layers**
-table in `__QUOIN_HOME__/memory/workflow-catalog.md` (§ "Workflow memory layers") for the
+table in `${CLAUDE_PLUGIN_ROOT}/memory/workflow-catalog.md` (§ "Workflow memory layers") for the
 full table and lifecycle descriptions. This document focuses on the fact-file layer
 (auto-memory) and
 the insights/lessons layer managed by `/sleep`.
@@ -24,7 +24,7 @@ the insights/lessons layer managed by `/sleep`.
 
 ## Pattern config: memory-maintenance.yaml
 
-The file `__QUOIN_HOME__/memory/memory-maintenance.yaml` is the single source of truth
+The file `${CLAUDE_PLUGIN_ROOT}/memory/memory-maintenance.yaml` is the single source of truth
 for maintenance patterns. Both consumers — `memory_check.py` and `/sleep` — load it
 using a stdlib-only YAML line parser; PyYAML is not required.
 
@@ -75,8 +75,8 @@ only — the consumers behave as if all lists are empty (fail-OPEN).
 ### Updating the pattern file
 
 Edit `quoin/quoin/memory/memory-maintenance.yaml` (the source), then re-run
-`bash quoin/install.sh` to deploy the updated copy to `__QUOIN_HOME__/memory/`.
-The deploy step runs `__QUOIN_HOME__` substitution on both the `.md` and `.yaml` files
+`bash quoin/install.sh` to deploy the updated copy to `${CLAUDE_PLUGIN_ROOT}/memory/`.
+The deploy step runs `${CLAUDE_PLUGIN_ROOT}` substitution on both the `.md` and `.yaml` files
 and validates that no raw placeholder tokens survive in the deployed copies.
 
 ## Forward-link policy

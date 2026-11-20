@@ -18,7 +18,7 @@ prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax
 Detection:
   - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
   - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+  - Otherwise run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pollution_guard.py` once.
     It scores the current session transcript; threshold POLLUTION_THRESHOLD
     (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
   - Output starting `OVER|`: session is polluted.
@@ -133,14 +133,14 @@ This skill requires the strongest available model (currently Claude Opus). If yo
 ## Session bootstrap
 
 This skill may run in a fresh chat session with no prior context. On start:
-1. Read `__QUOIN_HOME__/skills/specify/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read.
+1. Read `${CLAUDE_PLUGIN_ROOT}/skills/specify/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read.
 2. Read `.workflow_artifacts/memory/lessons-learned.md` for insights relevant to spec-writing and intent elicitation.
 3. Read `.workflow_artifacts/memory/sessions/` for any active session state for this task.
-4. Resolve the task dir via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name>` (no `--stage` flag — `spec.md` is ALWAYS at the task root, never per-stage, regardless of how many stages the task has). If exit code 2: display stderr verbatim, fall back to the task root, and ask the user to disambiguate. Read `<task-root>/spec.md` if it already exists — when a spec is already present, this skill revises it rather than creating from scratch.
-5. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `specify` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+4. Resolve the task dir via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name>` (no `--stage` flag — `spec.md` is ALWAYS at the task root, never per-stage, regardless of how many stages the task has). If exit code 2: display stderr verbatim, fall back to the task root, and ask the user to disambiguate. Read `<task-root>/spec.md` if it already exists — when a spec is already present, this skill revises it rather than creating from scratch.
+5. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `specify` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-6. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`.
+6. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`.
 7. Then proceed with the work below.
 
 **Autonomous sentinel:** check whether the invocation prompt carries the `[autonomous]` sentinel
@@ -231,8 +231,8 @@ Do NOT include a `## For human` heading — `spec.md` has no summary/body split;
 
 **Write mechanism:**
 1. Compose the full file content (frontmatter + the five sections) and write it to `<task-root>/spec.md.tmp` using the Write tool.
-2. Atomically rename: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-root>/spec.md.tmp" "<task-root>/spec.md"`.
-3. Validate: run `python3 __QUOIN_HOME__/scripts/validate_artifact.py <task-root>/spec.md`. Filename auto-detection identifies the type as `spec`. Expect exit code 0.
+2. Atomically rename: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<task-root>/spec.md.tmp" "<task-root>/spec.md"`.
+3. Validate: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <task-root>/spec.md`. Filename auto-detection identifies the type as `spec`. Expect exit code 0.
 4. If validation fails, re-read the failing invariant from the tool output, fix the specific section(s) named, rewrite via the same `.tmp` + atomic-rename mechanism, and re-validate once. If it still fails after one retry, tell the user which invariant is failing and ask whether to proceed with the file as-is or keep iterating — do not silently ship an invalid spec.
 
 ## Repo main spec update check
@@ -269,7 +269,7 @@ untouched. This is a `safe-degrade` boundary, NOT a fail-closed helper STOP: the
 degrade for a human-owned artifact is to do nothing to it (auto-Reject), so no needs-decision
 sentinel is written. The gate never proceeds on a default write in any mode.
 
-On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0. On Reject (including the autonomous auto-Reject above): leave the repo spec untouched. Either way, the task spec written earlier is unaffected.
+On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0. On Reject (including the autonomous auto-Reject above): leave the repo spec untouched. Either way, the task spec written earlier is unaffected.
 
 ## Important behaviors
 
@@ -282,7 +282,7 @@ On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then ru
 ## Save session state
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `in_progress`, or `completed` once `spec.md` is written and validated
 - Current stage: `specify`

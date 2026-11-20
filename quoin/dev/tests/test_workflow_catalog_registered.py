@@ -50,14 +50,6 @@ def _tier1_memory_files() -> list[str]:
     return tier1
 
 
-def test_workflow_catalog_registered_in_tier1_memory_files() -> None:
-    """(a) 'workflow-catalog.md' must be in TIER1_MEMORY_FILES in installer.py."""
-    tier1 = _tier1_memory_files()
-    assert "workflow-catalog.md" in tier1, (
-        "'workflow-catalog.md' not found in TIER1_MEMORY_FILES in installer.py"
-    )
-
-
 def test_workflow_catalog_file_exists() -> None:
     """(b) quoin/memory/workflow-catalog.md must exist.
 

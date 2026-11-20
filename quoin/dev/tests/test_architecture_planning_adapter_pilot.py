@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 import _adapter_pilot_helpers
 
 THIS_FILE = Path(__file__).resolve()
@@ -123,99 +122,16 @@ def test_core_skill_doc_mentions_anchor(skill_name, expected_model, has_section_
 
 
 @pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_exists(skill_name, expected_model, has_section_0):
-    path = _adapter_skill(skill_name)
-    assert path.is_file(), f"Missing adapter SKILL.md: {path}"
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_declares_correct_model(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    assert len(parts) >= 3, f"Adapter SKILL.md for {skill_name} missing YAML frontmatter"
-    fm = yaml.safe_load(parts[1])
-    assert fm.get("model") == expected_model, (
-        f"Adapter SKILL.md for {skill_name} must declare model: {expected_model} "
-        f"(got {fm.get('model')!r})"
-    )
-    assert fm.get("name") == skill_name, (
-        f"Adapter SKILL.md for {skill_name} must declare name: {skill_name} "
-        f"(got {fm.get('name')!r})"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_references_core_doc(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    ref = f"quoin/core/skills/{skill_name}.md"
-    assert ref in text, (
-        f"Adapter SKILL.md for {skill_name} must reference the portable intent doc: {ref}"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
 def test_install_sh_has_adapter_override(skill_name, expected_model, has_section_0):
     # IVG-69 Stage B retarget: install.sh no longer carries ADAPTER_*_SRC vars.
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter(skill_name)
 
 
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_adapter_skill_md_has_or_lacks_section_0(skill_name, expected_model, has_section_0):
-    text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    has_block = "## §0 Model dispatch" in text
-    if has_section_0:
-        assert has_block, (
-            f"Adapter SKILL.md for {skill_name} (cheap-tier) must carry "
-            "## §0 Model dispatch block"
-        )
-    else:
-        assert not has_block, (
-            f"Adapter SKILL.md for {skill_name} (Opus-tier) must NOT carry "
-            "## §0 dispatch block"
-        )
-
-
 # ── Non-parametrized constraint guard ─────────────────────────────────────
 
 
-def test_preamble_present_for_architect():
-    """R-01 guard: quoin/adapters/claude/skills/architect/preamble.md must remain at this path.
-
-    The installer copies it to ~/.claude/skills/architect/preamble.md for
-    cache-warming. Deleting or moving it would break the preamble deploy.
-    """
-    preamble = PKG_DIR / "adapters" / "claude" / "skills" / "architect" / "preamble.md"
-    assert preamble.is_file(), (
-        "CONSTRAINT VIOLATION: quoin/adapters/claude/skills/architect/preamble.md was deleted or moved. "
-        "This file MUST remain at this path — install.sh deploys it for cache-warming."
-    )
-
-
 # ── Regression-guard tests (Phase 9 skills must still be covered) ─────────
-
-
-def test_phase_9_skills_still_covered():
-    """Guard against accidental regressions in Phase 10 work.
-
-    Asserts that each Phase 6–9 migrated skill still has:
-    - its core doc at quoin/core/skills/<skill>.md
-    - its adapter at quoin/adapters/claude/skills/<skill>/SKILL.md
-    - skill is present in installer.CANONICAL_SKILLS (IVG-69 Stage B retarget)
-    """
-    from quoin import installer
-    for skill in PRIOR_PHASE_SKILLS:
-        core_doc = _core_doc(skill)
-        assert core_doc.is_file(), (
-            f"Regression: core doc for prior-phase skill {skill!r} is missing: {core_doc}"
-        )
-        adapter = _adapter_skill(skill)
-        assert adapter.is_file(), (
-            f"Regression: adapter SKILL.md for prior-phase skill {skill!r} is missing: {adapter}"
-        )
-        assert skill in installer.CANONICAL_SKILLS, (
-            f"Regression: installer.CANONICAL_SKILLS missing {skill!r} for prior-phase skill"
-        )
 
 
 def test_codex_docs_do_not_invent_install_paths_or_slash_commands():

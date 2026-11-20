@@ -34,7 +34,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -53,7 +53,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -93,7 +93,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -187,13 +187,13 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 ## Session bootstrap
 
 This skill may run in a fresh session. On start:
-1. Read `__QUOIN_HOME__/skills/revise-fast/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
-2. Read the task subfolder: resolve the artifact path via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` — then read `<task_dir>/current-plan.md`, latest `<task_dir>/critic-response-*.md`, and any prior critic responses. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 4 below — NOT edited per D-03). If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
+1. Read `${CLAUDE_PLUGIN_ROOT}/skills/revise-fast/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
+2. Read the task subfolder: resolve the artifact path via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` — then read `<task_dir>/current-plan.md`, latest `<task_dir>/critic-response-*.md`, and any prior critic responses. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 4 below — NOT edited per D-03). If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
 3. Check knowledge cache for flagged modules (if cache exists), then re-read source code where cache is insufficient
-4. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `revise` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+4. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `revise` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-5. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`
+5. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`
 6. Then proceed with revision
 
 ## Model requirement
@@ -282,20 +282,20 @@ First, perform the in-context revision:
 Then, write the updated plan using the §5.3 5-step Class B mechanism for `<task_dir>/current-plan.md` (where `<task_dir>` is resolved per Session bootstrap step 1):
 
 **Step 1: Body generation.**
-Read `__QUOIN_HOME__/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
+Read `${CLAUDE_PLUGIN_ROOT}/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
 Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit.md §1; this is the only place these references apply, per lesson 2026-04-23):
-- `__QUOIN_HOME__/memory/format-kit.md` — primitives + standard sections per artifact type
-- `__QUOIN_HOME__/memory/glossary.md` — abbreviation whitelist + status glyphs
-- `__QUOIN_HOME__/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
+- `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` — primitives + standard sections per artifact type
+- `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` — abbreviation whitelist + status glyphs
+- `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-**Step 1 pre-write sweep:** Before writing, clear stale leftovers from any prior aborted run: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp" "<plan-path>.tmp"`.
+**Step 1 pre-write sweep:** Before writing, clear stale leftovers from any prior aborted run: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<plan-path>.body.tmp" "<plan-path>.tmp"`.
 Compose the format-aware body per format-kit.md §2 `current-plan.md` enumeration. Include the `## Revision history` section (terse numbered list or table per format-kit.md §2) with the new round's changelog appended inside it. DO NOT include the `## For human` block in the body — that's Steps 2–3. Write the body to `<plan-path>.body.tmp` using the Bash tool.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
-Read the frozen prompt template from `__QUOIN_HOME__/memory/summary-prompt.md` using
+Read the frozen prompt template from `${CLAUDE_PLUGIN_ROOT}/memory/summary-prompt.md` using
 the Read tool. Read the artifact body from `<plan-path>.body.tmp` using the Read tool.
 Compose the prompt as: <prompt-template-with-`<<<BODY>>>`-replaced-by-body-text>.
 
@@ -326,7 +326,7 @@ lesson 2026-04-24.)
   (c) Write to `<plan-path>.tmp` using the Write tool.
 
 **Step 4: Structural validation.** Invoke:
-  `python3 __QUOIN_HOME__/scripts/validate_artifact.py <plan-path>.tmp`
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <plan-path>.tmp`
 Exit code 0 = PASS; non-zero = at least one invariant failed (stderr names which).
 
 **Step 5: Retry / English-fallback (failure-class-aware).**
@@ -334,10 +334,10 @@ Exit code 0 = PASS; non-zero = at least one invariant failed (stderr names which
   - **Step 2 failure:** re-run Step 2 once (re-spawn the Haiku Agent subagent); if still fails → English-fallback.
   - **V-06/V-07 failures:** re-run Steps 2–4 once.
   - **V-02/V-03/V-05 failures:** re-run Steps 1–4 once with explicit body-discipline instruction.
-  - **English-fallback:** v2-style write (no `## For human` block). Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log `format-kit-skipped` warning. Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp"`.
+  - **English-fallback:** v2-style write (no `## For human` block). Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log `format-kit-skipped` warning. Clean up body.tmp: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<plan-path>.body.tmp"`.
 
 **Step 6: Atomic rename.**
-  `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<plan-path>.tmp" "<plan-path>" --cleanup "<plan-path>.body.tmp" "<plan-path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed.
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "<plan-path>.tmp" "<plan-path>" --cleanup "<plan-path>.body.tmp" "<plan-path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed.
 
 The final `current-plan.md` contains the revised body. Do NOT write a `.original.md` side-file.
 
@@ -357,7 +357,7 @@ Do NOT append the changelog as a trailing markdown block after the assembled fil
 
 ### 5. Signal readiness
 
-**Plan-path self-check (advisory, IVG-143 I-2).** Before handing off to the next critic round, run `python3 __QUOIN_HOME__/scripts/plan_path_lint.py <plan-path> --format text` against the revised `current-plan.md`, so the author can fix any cited-path typos before `/critic` re-reviews. Surface any `UNRESOLVED` tokens and their hints. Advisory only — ALWAYS continue regardless of the result. Fail-OPEN: exit 2, a missing script, or any crash → emit a one-line `[quoin: plan-path-lint unavailable; proceeding]` warning and continue. Never aborts `/revise` on this check.
+**Plan-path self-check (advisory, IVG-143 I-2).** Before handing off to the next critic round, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan_path_lint.py <plan-path> --format text` against the revised `current-plan.md`, so the author can fix any cited-path typos before `/critic` re-reviews. Surface any `UNRESOLVED` tokens and their hints. Advisory only — ALWAYS continue regardless of the result. Fail-OPEN: exit 2, a missing script, or any crash → emit a one-line `[quoin: plan-path-lint unavailable; proceeding]` warning and continue. Never aborts `/revise` on this check.
 
 After updating the plan, the file is ready for the next critic round. If this is part of `/thorough_plan` orchestration, the orchestrator will invoke `/critic` next.
 
@@ -369,7 +369,7 @@ If running standalone, tell the user:
 ## Save session state
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `in_progress`
 - Current stage: `revise round N`

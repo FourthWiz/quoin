@@ -3,7 +3,7 @@
 Tests:
   Tier 1 (CI-safe):
     - Both new memory files exist in source and in TIER1_MEMORY_FILES
-    - Source files contain no literal ~/.claude/ and yaml has no __QUOIN_HOME__
+    - Source files contain no literal ~/.claude/ and yaml has no ${CLAUDE_PLUGIN_ROOT}
 
   Pattern behavior (tmp_path, importlib-load core):
     - archived orphan suppressed; without patterns it is an error (regression guard)
@@ -91,23 +91,6 @@ SS = _load_sleep_score()
 # Tier 1: installer membership + source file existence + token guards
 # ---------------------------------------------------------------------------
 
-def test_installer_tier1_contains_memory_maintenance_md():
-    """TIER1_MEMORY_FILES must include memory-maintenance.md."""
-    installer = _load_installer()
-    assert "memory-maintenance.md" in installer.TIER1_MEMORY_FILES, (
-        "installer.py TIER1_MEMORY_FILES missing 'memory-maintenance.md'. "
-        "Run T-09 to add it."
-    )
-
-
-def test_installer_tier1_contains_memory_maintenance_yaml():
-    """TIER1_MEMORY_FILES must include memory-maintenance.yaml."""
-    installer = _load_installer()
-    assert "memory-maintenance.yaml" in installer.TIER1_MEMORY_FILES, (
-        "installer.py TIER1_MEMORY_FILES missing 'memory-maintenance.yaml'. "
-        "Run T-09 to add it."
-    )
-
 
 def test_source_md_exists():
     """memory-maintenance.md must exist in quoin/memory/."""
@@ -124,15 +107,15 @@ def test_md_no_literal_claude_home():
     text = SHIPPED_MD.read_text(encoding="utf-8")
     assert "~/.claude/" not in text, (
         "memory-maintenance.md contains a literal '~/.claude/' path. "
-        "Use __QUOIN_HOME__ for deploy paths (rule T-07/b)."
+        "Use ${CLAUDE_PLUGIN_ROOT} for deploy paths (rule T-07/b)."
     )
 
 
 def test_yaml_no_quoin_home_token():
-    """memory-maintenance.yaml must not contain __QUOIN_HOME__ (T-01 acceptance)."""
+    """memory-maintenance.yaml must not contain ${CLAUDE_PLUGIN_ROOT} (T-01 acceptance)."""
     text = SHIPPED_YAML.read_text(encoding="utf-8")
-    assert "__QUOIN_HOME__" not in text, (
-        "memory-maintenance.yaml contains a __QUOIN_HOME__ token. "
+    assert "${CLAUDE_PLUGIN_ROOT}" not in text, (
+        "memory-maintenance.yaml contains a ${CLAUDE_PLUGIN_ROOT} token. "
         "The YAML is glob-only and must be token-free."
     )
 

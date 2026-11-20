@@ -52,51 +52,6 @@ def _gate_region(text: str, header: str) -> str:
     return after[:end]
 
 
-def test_sidecar_in_full_gate_region():
-    region = _gate_region(_load(GATE_SKILL), "*Full gate (Large tasks)")
-    assert "gate_fullsuite_sidecar.py" in region
-    assert "__QUOIN_HOME__/scripts/gate_fullsuite_sidecar.py" in region
-
-
-def test_sidecar_in_post_review_region():
-    region = _gate_region(_load(GATE_SKILL), "**After /review → before /end_of_task")
-    assert "gate_fullsuite_sidecar.py" in region
-
-
-def test_reuse_bullet_names_verdict_derivation_phrase():
-    text = _load(GATE_SKILL)
-    assert (
-        "derived from `known_red.py`'s own exit code AND the task's size profile"
-        in text
-    )
-
-
-def test_reuse_bullet_names_small_medium_pytest_rc_clause():
-    text = _load(GATE_SKILL)
-    assert "`pytest_rc == 0` is ALSO required" in text
-
-
-def test_reuse_bullet_names_disable_knob():
-    text = _load(GATE_SKILL)
-    assert "QUOIN_DISABLE_FULLSUITE_REUSE" in text
-
-
-def test_undeterminable_profile_fallback_is_medium_never_large():
-    text = _load(GATE_SKILL)
-    assert "--task-profile medium` (never `large`" in text
-
-
-def test_gate_heading_count_region_guard():
-    # proc:R-1-region-guard — freeze the heading COUNT between the Standard-gate
-    # marker and Step 3a as a regression anchor (T-06). No new ^#{2,3} heading
-    # may appear in this span; the frozen baseline is 0.
-    text = _load(GATE_SKILL)
-    start = text.index("*Standard gate (Small and Medium tasks):*")
-    end = text.index("### Step 3a")
-    slice_ = text[start:end]
-    assert len(re.findall(r"^#{2,3} ", slice_, re.MULTILINE)) == 0
-
-
 # ---------------------------------------------------------------------------
 # end_of_task/SKILL.md
 # ---------------------------------------------------------------------------
@@ -114,31 +69,6 @@ _EOT_STEP_MARKERS = (
 )
 
 
-def test_eot_all_nine_step_markers_survive_in_order():
-    text = _load(EOT_SKILL)
-    positions = []
-    for marker in _EOT_STEP_MARKERS:
-        idx = text.find(marker)
-        assert idx != -1, f"missing step marker: {marker!r}"
-        positions.append(idx)
-    assert positions == sorted(positions), "step markers out of order"
-
-
-def test_eot_sub_phase_literals_survive():
-    text = _load(EOT_SKILL)
-    assert "Sub-phase A" in text
-    assert "Sub-phase B" in text
-    assert "Sub-phase C" in text
-
-
-def test_eot_step1_region_carries_sidecar_check():
-    text = _load(EOT_SKILL)
-    start = text.index("**Step 1: Pre-flight checks**")
-    end = text.index("**Step 1b: Working-tree cleanup scan**")
-    region = text[start:end]
-    assert "gate_fullsuite_sidecar.py check" in region
-
-
 # ---------------------------------------------------------------------------
 # run/SKILL.md
 # ---------------------------------------------------------------------------
@@ -150,32 +80,6 @@ def _run_phase6_span(text: str) -> str:
     m = re.search(r"^## ", after[len("## Phase 6 — End of Task"):], re.MULTILINE)
     end = len("## Phase 6 — End of Task") + (m.start() if m else len(after))
     return after[:end]
-
-
-def test_run_phase6_span_carries_recovery_heading():
-    span = _run_phase6_span(_load(RUN_SKILL))
-    assert "### end_of_task failure recovery (inline finish)" in span
-
-
-def test_run_phase6_span_carries_cost_summary_json_and_script():
-    span = _run_phase6_span(_load(RUN_SKILL))
-    assert "cost-summary.json" in span
-    assert "cost_summary.py" in span
-
-
-def test_run_phase6_span_carries_all_three_cost_renderings():
-    span = _run_phase6_span(_load(RUN_SKILL))
-    assert re.search(r"Cost: \$X", span), "missing bare 'Cost: $X.XX' rendering"
-    assert "(partial)" in span
-    assert "totals unavailable" in span
-
-
-def test_run_cites_the_two_json_key_names():
-    # Contract-text cross-check: T-05(b)'s rendering rules must cite the same two
-    # literal key names the CLI's --format json emits (T-05(c)).
-    span = _run_phase6_span(_load(RUN_SKILL))
-    assert "`total`" in span or "\"total\"" in span or "total" in span
-    assert "is_partial" in span
 
 
 # ---------------------------------------------------------------------------

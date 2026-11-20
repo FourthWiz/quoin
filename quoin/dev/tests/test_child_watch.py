@@ -684,6 +684,3 @@ def test_real_38_once_run(tmp_path):
     assert r.stdout.startswith("WATCH|DEAD|")
 
 
-def test_installer_registers_script():
-    text = (REPO_ROOT / "src" / "quoin" / "installer.py").read_text(encoding="utf-8")
-    assert text.count('"child_watch.py"') == 2

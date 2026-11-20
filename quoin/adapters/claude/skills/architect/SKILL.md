@@ -19,7 +19,7 @@ prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax
 Detection:
   - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
   - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+  - Otherwise run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pollution_guard.py` once.
     It scores the current session transcript; threshold POLLUTION_THRESHOLD
     (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
   - Output starting `OVER|`: session is polluted.
@@ -136,15 +136,15 @@ This skill requires the strongest available model (currently Claude Opus). If yo
 ## Session bootstrap
 
 This skill may run in a fresh chat session with no prior context. On start:
-1. Read `__QUOIN_HOME__/skills/architect/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
-2. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --task-text "<task description>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback). Apply relevant lessons.
+1. Read `${CLAUDE_PLUGIN_ROOT}/skills/architect/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/memory_select.py --semantic --task-text "<task description>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback). Apply relevant lessons.
 3. Read `.workflow_artifacts/memory/sessions/` for any active session state for this task
-4. Read the task subfolder if it exists: architecture.md is ALWAYS at task root (`<task-root>/architecture.md`); for `current-plan.md`, resolve via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` and read `<task_dir>/current-plan.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 5 — NOT edited per D-03).
+4. Read the task subfolder if it exists: architecture.md is ALWAYS at task root (`<task-root>/architecture.md`); for `current-plan.md`, resolve via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` and read `<task_dir>/current-plan.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 5 — NOT edited per D-03).
 5. Read `<task-root>/spec.md` if present (task feature spec — ALWAYS at task root, read-if-exists; absence is normal/grandfather). Treat its `## Acceptance criteria` as a binding design input — the synthesis (Phase 2/3) MUST satisfy them. When present, spec.md is the preferred first input, upstream of architecture.md.
-6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `architect` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+6. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `architect` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-7. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`.
+7. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`.
 8. Then proceed with the work below
 
 ## Spec pre-flight (advisory, non-blocking)
@@ -358,11 +358,11 @@ Where `<task-name>` is a descriptive kebab-case name derived from the task (ask 
 `architecture.md` is a Class B artifact per artifact-format-architecture v3 §4.1. Write it using the §5.3 5-step Class B mechanism:
 
 **Step 1: Body generation.**
-Read `__QUOIN_HOME__/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
+Read `${CLAUDE_PLUGIN_ROOT}/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
 Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit.md §1; this is the only place these references apply, per lesson 2026-04-23):
-- `__QUOIN_HOME__/memory/format-kit.md` — primitives + standard sections per artifact type
-- `__QUOIN_HOME__/memory/glossary.md` — abbreviation whitelist + status glyphs
-- `__QUOIN_HOME__/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
+- `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` — primitives + standard sections per artifact type
+- `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` — abbreviation whitelist + status glyphs
+- `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
@@ -380,11 +380,11 @@ Compose the format-aware body for `architecture.md` per format-kit.md §2 enumer
 - `## Appendix` — any supplementary material (optional).
 - `## Revision history` — terse changelog if this is a revision (optional).
 
-Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to a temp file: `<path>.body.tmp`.
+Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to a temp file: `<path>.body.tmp`.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
-Read the frozen prompt template from `__QUOIN_HOME__/memory/summary-prompt.md` using
+Read the frozen prompt template from `${CLAUDE_PLUGIN_ROOT}/memory/summary-prompt.md` using
 the Read tool. Read the artifact body from `<path>.body.tmp` using the Read tool.
 Compose the prompt as: <prompt-template-with-`<<<BODY>>>`-replaced-by-body-text>.
 
@@ -417,7 +417,7 @@ lesson 2026-04-24.)
 This guarantees exactly one `## For human` line regardless of Haiku output shape.
 
 **Step 4: Structural validation.** Invoke the deployed validator:
-  `python3 __QUOIN_HOME__/scripts/validate_artifact.py <path>.tmp`
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <path>.tmp`
 Filename auto-detection identifies the type as `architecture` (matches `^architecture` regex in `detect_type()`). Exit code 0 = PASS; non-zero = at least one V-01..V-07 invariant failed.
 
 **Step 5: Retry / English-fallback (failure-class-aware).** Differentiate by which step failed:
@@ -432,9 +432,9 @@ Filename auto-detection identifies the type as `architecture` (matches `^archite
     (b) **V-02 / V-03 / V-05 failures** (body-section issues): re-run Steps 1–4 once with body-discipline instruction prepended.
     (c) **V-01 / V-04 failures** (frontmatter / code-fence): treat as body issues; re-run Steps 1–4.
 
-  - **English-fallback (after retry also fails):** fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning to the user with the failing invariant ID(s). Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp"`.
+  - **English-fallback (after retry also fails):** fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning to the user with the failing invariant ID(s). Clean up body.tmp: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp"`.
 
-**Step 6: Atomic rename.** `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. The final file at `<path>` IS what `/critic`, `/thorough_plan`, `/gate` will read. Do NOT write a `.original.md` side-file.
+**Step 6: Atomic rename.** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. The final file at `<path>` IS what `/critic`, `/thorough_plan`, `/gate` will read. Do NOT write a `.original.md` side-file.
 
 ### Phase 4: Critic loop (max 2 rounds default; max 4 in strict mode)
 
@@ -455,7 +455,7 @@ Phase 4 runs immediately after Step 6 above — `architecture.md` now exists on 
 - `architect/SKILL\.md`
 - `critic/SKILL\.md`
 - `quoin/skills/(architect|critic)/SKILL\.md`
-- `__QUOIN_HOME__/skills/(architect|critic)/SKILL\.md`
+- `${CLAUDE_PLUGIN_ROOT}/skills/(architect|critic)/SKILL\.md`
 
 If any form matches AND the user did NOT pass `strict:` or `max_rounds: N` (N ≥ 2) explicitly:
 - Warn the user: "This task modifies architect or critic SKILL.md — recursive self-critique applies."
@@ -490,7 +490,7 @@ while round <= max_rounds:
         if confirm != "Yes, proceed": break
 
     # Spawn /critic as a FRESH subagent (model: opus — non-negotiable; critic is always
-    # Opus per the skill-model roster, __QUOIN_HOME__/memory/workflow-catalog.md "## Model assignments").
+    # Opus per the skill-model roster, ${CLAUDE_PLUGIN_ROOT}/memory/workflow-catalog.md "## Model assignments").
     # Convey target via spawn-prompt (D-01 spawn-prompt convention, not CLI flag):
     #
     # On-behalf cost capture (default-ON unless QUOIN_INLINE_COST_CAPTURE=0, D-1/D-2/D-3, IVG-111 stage 3): when
@@ -553,11 +553,11 @@ while round <= max_rounds:
         # uuid=<AID> — REPLACES the child's suppressed self-write (D-2):
         #   SID="$CLAUDE_CODE_SESSION_ID"
         #   _ERR=$(mktemp) || { printf 'cost-attr WARN: %s\n' "mktemp failed"; _ERR=/dev/null; }
-        #   ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
+        #   ATTR="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/agent_transcript_cost.py \
         #             --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
         #   [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
         #   [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-        #   [ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
+        #   [ "$_ERR" != "/dev/null" ] && python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "$_ERR"
         #   printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
         #     "$AID" "$(date -u +%Y-%m-%d)" "critic" "opus" \
         #     "on-behalf: critic via /architect" "0" "$ATTR" >> "$LEDGER"
@@ -578,7 +578,7 @@ while round <= max_rounds:
     if verdict == PASS: break
 
     # Classify issues — always run (informs same-class detection):
-    run: python3 __QUOIN_HOME__/scripts/classify_critic_issues.py \
+    run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/classify_critic_issues.py \
          --critic-response .workflow_artifacts/<task-name>/architecture-critic-{round}.md
     # Capture: structural_count, dominant_surface_family for this round.
     #
@@ -641,7 +641,7 @@ if not critic_failed and verdict == REVISE and round > max_rounds:
 ## Save session state
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `in_progress`
 - Current stage: `architect`

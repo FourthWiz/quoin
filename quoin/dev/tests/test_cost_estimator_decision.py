@@ -6,7 +6,6 @@ fails here, so the record and the code cannot drift apart silently.
 from __future__ import annotations
 
 import pathlib
-import sys
 
 import pytest
 
@@ -34,15 +33,6 @@ def _section(text: str, heading: str) -> str:
     return text[start:end if end != -1 else None].strip()
 
 
-def _deployed_scripts():
-    sys.path.insert(0, str(REPO_ROOT / "src"))
-    try:
-        import quoin.installer as inst
-    finally:
-        sys.path.pop(0)
-    return tuple(inst.DEPLOYED_SCRIPTS)
-
-
 def test_doc_states_the_keep_decision():
     text = _doc()
     assert "Keep" in text
@@ -63,9 +53,8 @@ def test_doc_cites_each_native_source(url):
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
-def test_estimator_still_exists_and_is_deployed(name):
+def test_estimator_still_exists(name):
     assert (REPO_ROOT / "quoin" / "scripts" / name).is_file()
-    assert name in _deployed_scripts()
 
 
 @pytest.mark.parametrize("heading", ("Unknowns", "Revisit triggers"))

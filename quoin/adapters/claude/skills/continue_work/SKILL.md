@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).

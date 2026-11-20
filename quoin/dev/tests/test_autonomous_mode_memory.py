@@ -4,7 +4,6 @@ Mirrors the AST-parse pattern in test_discovery_refresh_routine.py.
 """
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
@@ -45,25 +44,6 @@ def test_doc_exists() -> None:
 def test_doc_starts_with_h1() -> None:
     assert _text().strip().startswith("# "), (
         "autonomous-mode.md must start with an H1 heading (Tier-1)"
-    )
-
-
-def test_doc_registered_in_tier1_memory_files() -> None:
-    source = _INSTALLER.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    tier1: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "TIER1_MEMORY_FILES":
-                    if isinstance(node.value, ast.Tuple):
-                        tier1 = [
-                            elt.value
-                            for elt in node.value.elts
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                        ]
-    assert "autonomous-mode.md" in tier1, (
-        "'autonomous-mode.md' not found in TIER1_MEMORY_FILES in installer.py"
     )
 
 

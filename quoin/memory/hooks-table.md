@@ -1,6 +1,6 @@
 # Hooks deployed by quoin — full reference table
 
-`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers nine (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`:
+`bash install.sh` deploys hook scripts to `${CLAUDE_PLUGIN_ROOT}/hooks/` and registers nine (event, matcher) stanzas in `${CLAUDE_PLUGIN_ROOT}/settings.json`:
 
 | Event | Matcher | Script | Timeout | Contract |
 |-------|---------|--------|---------|----------|

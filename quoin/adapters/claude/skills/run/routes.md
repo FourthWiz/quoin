@@ -1,6 +1,6 @@
 # Run — routes above r0
 
-*Reference for `/run`, deployed as `__QUOIN_HOME__/skills/run/routes.md`.
+*Reference for `/run`, deployed as `${CLAUDE_PLUGIN_ROOT}/skills/run/routes.md`.
 `/run` reads this file once, with one Read, when the task is r1, r2 or r3:
 Step 1b picks that class, a plain run reclassifies upward, or a resumed run's
 brief names it. An r0 run never reads it. Step numbers, phase markers and
@@ -26,7 +26,7 @@ signal: <the signal that fired; "forced by r1:" when a tag decided>
 Each class adds exactly one thing to r0. **r1** → the plain route plus the
 Step 7 review (markers: `discover`, `context` `--skipped`, `frame`). **r2** →
 a short stage plan: read the light pipeline file
-(`__QUOIN_HOME__/skills/run/light-pipeline.md`) once, with one Read, and
+(`${CLAUDE_PLUGIN_ROOT}/skills/run/light-pipeline.md`) once, with one Read, and
 follow it; it also holds the switch procedure an interactive r3 needs.
 
 **r3** → the heavy pipeline, on explicit opt-in only. Interactive, when
@@ -60,7 +60,7 @@ criteria (the brief's request), missed call sites, security, and
 proportionate tests (missing or excessive).
 
 Then log `review-fixes`, apply blockers and should-fixes (through the
-implementer when the guard dispatched: reference.md "Implementer tier guard
+implementer when one was dispatched: reference.md "Opus implementer
 (dispatch)"), skip nits unless trivial, and re-run Step 6 once if code
 changed. No second review. List each finding and what you did in
 `.workflow_artifacts/<task>/review.md` (`stage-N/review.md` on r2).

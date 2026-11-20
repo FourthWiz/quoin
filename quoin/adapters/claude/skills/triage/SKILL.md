@@ -25,7 +25,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -44,7 +44,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -84,7 +84,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -134,7 +134,7 @@ Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sent
 1. **CLAUDE.md is injected by the harness** — no explicit read is needed.
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-2. **Cost recording — explicit-only:** Record a cost-ledger entry ONLY if the user's prompt explicitly names a task folder (e.g., `/triage task=auth-refactor` or the prompt contains the exact folder name). In all other cases — including when exactly one non-reserved task folder exists — skip cost recording silently. This conservative policy prevents false ledger writes in multi-task-folder contexts. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `triage` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+2. **Cost recording — explicit-only:** Record a cost-ledger entry ONLY if the user's prompt explicitly names a task folder (e.g., `/triage task=auth-refactor` or the prompt contains the exact folder name). In all other cases — including when exactly one non-reserved task folder exists — skip cost recording silently. This conservative policy prevents false ledger writes in multi-task-folder contexts. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `triage` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 3. **Session state:** `/triage` does NOT write `.workflow_artifacts/memory/sessions/` files. Routing is not "meaningful work" in the session-state rule sense.
@@ -201,7 +201,7 @@ Sort skills by total score (Signal B + Signal C) descending.
 ## §V Reconcile (read-only — no side-effect check)
 
 <!-- §V-reconcile-begin -->
-Before surfacing any task/PR status, run `python3 __QUOIN_HOME__/scripts/verify_claims.py --reconcile-tasks --project-root <project-root>` and derive the displayed status from the reconcile table, not from a cached narrative alone. If the reconcile exits 8, surface the contradiction rather than silently reporting the narrative version.
+Before surfacing any task/PR status, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --reconcile-tasks --project-root <project-root>` and derive the displayed status from the reconcile table, not from a cached narrative alone. If the reconcile exits 8, surface the contradiction rather than silently reporting the narrative version.
 <!-- §V-reconcile-end -->
 
 ### Step 5: Present proposal

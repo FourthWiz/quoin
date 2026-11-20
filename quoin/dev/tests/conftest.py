@@ -319,6 +319,41 @@ def _install_prompts_non_interactive():
         mp.undo()
 
 
+_FAKE_CLAUDE = """#!/bin/sh
+# Stand-in for the claude CLI during tests: logs its arguments and succeeds.
+[ -n "$QUOIN_FAKE_CLAUDE_LOG" ] && printf '%s\\n' "$*" >> "$QUOIN_FAKE_CLAUDE_LOG"
+case "$*" in
+  "plugin list --json"*|"plugin marketplace list --json"*) echo "[]" ;;
+esac
+exit 0
+"""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_claude_cli(tmp_path_factory):
+    """No test may reach the real claude CLI: `quoin install` registers a
+    marketplace and installs a plugin through it, which would change the
+    developer's own Claude Code configuration. A stub goes first on PATH and
+    the plugin is staged under a temp folder. Tests that need a specific
+    claude stand-in prepend their own; a read-only use of the real CLI finds
+    it in QUOIN_REAL_CLAUDE."""
+    root = tmp_path_factory.mktemp("fake-claude")
+    stub = root / "bin" / "claude"
+    stub.parent.mkdir()
+    stub.write_text(_FAKE_CLAUDE)
+    stub.chmod(0o755)
+    mp = pytest.MonkeyPatch()
+    real = shutil.which("claude")
+    if real:
+        mp.setenv("QUOIN_REAL_CLAUDE", real)
+    mp.setenv("PATH", f"{stub.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    mp.setenv("QUOIN_PLUGIN_DIR", str(root / "plugin"))
+    try:
+        yield
+    finally:
+        mp.undo()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_ambient_claude_session_id():
     """Tests run inside a Claude session that exports CLAUDE_CODE_SESSION_ID;

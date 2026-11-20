@@ -1,7 +1,6 @@
 """Tests for the Serena code-intelligence integration (serena-integration task)."""
 from __future__ import annotations
 
-import ast
 import pathlib
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent  # quoin/
@@ -27,31 +26,11 @@ def test_serena_memory_file_exists_and_tier1() -> None:
     )
 
 
-def test_serena_memory_registered_in_installer() -> None:
-    """serena-activation.md must be in TIER1_MEMORY_FILES or deploy_memory() silently skips it."""
-    source = INSTALLER.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    tier1: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "TIER1_MEMORY_FILES":
-                    if isinstance(node.value, ast.Tuple):
-                        tier1 = [
-                            elt.value
-                            for elt in node.value.elts
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                        ]
-    assert "serena-activation.md" in tier1, (
-        "'serena-activation.md' not found in TIER1_MEMORY_FILES in installer.py"
-    )
-
-
 def test_serena_memory_uses_quoin_home_token() -> None:
-    """SOURCE memory file must use __QUOIN_HOME__ token, never the literal ~/.claude/ path."""
+    """SOURCE memory file must use ${CLAUDE_PLUGIN_ROOT} token, never the literal ~/.claude/ path."""
     text = SERENA_MEMORY.read_text(encoding="utf-8")
     assert "~/.claude/" not in text, (
-        "serena-activation.md must use __QUOIN_HOME__ token, not literal ~/.claude/"
+        "serena-activation.md must use ${CLAUDE_PLUGIN_ROOT} token, not literal ~/.claude/"
     )
 
 
@@ -70,41 +49,6 @@ def test_claude_md_has_conditional_serena_pointer() -> None:
     has_absence = any(phrase in text for phrase in ("do nothing", "don't exist", "no schema"))
     assert has_absence, (
         "CLAUDE.md Serena block must include a graceful-absence branch"
-    )
-
-
-def test_init_workflow_adapter_has_serena_step() -> None:
-    """The ADAPTER init_workflow SKILL.md must contain the three-branch Serena Step 6.5."""
-    text = ADAPTER_INIT_WORKFLOW.read_text(encoding="utf-8")
-    assert "Serena" in text, "adapter SKILL.md must reference Serena"
-    assert "activate_project" in text, "adapter SKILL.md must reference activate_project"
-    assert "onboarding" in text, "adapter SKILL.md must reference onboarding"
-    assert "Skip for now" in text, "adapter SKILL.md must have 'Skip for now' AskUserQuestion option"
-    # All three branches present
-    assert "ABSENT" in text or "not installed" in text or "Install Serena" in text, (
-        "adapter SKILL.md must have branch (a) — absent/install path"
-    )
-    assert "not yet onboarded" in text or "Onboarding has not been performed" in text or "PRESENT, not yet" in text, (
-        "adapter SKILL.md must have branch (b) — present-but-not-onboarded path"
-    )
-    assert "already onboarded" in text or "PRESENT, already" in text, (
-        "adapter SKILL.md must have branch (c) — already-onboarded path"
-    )
-
-
-def test_init_workflow_serena_uses_quoin_home_token() -> None:
-    """The adapter SKILL.md Serena block must not use literal ~/.claude/ paths."""
-    text = ADAPTER_INIT_WORKFLOW.read_text(encoding="utf-8")
-    # Find the Serena step section (between Step 6.5 and Step 7)
-    start = text.find("Step 6.5")
-    end = text.find("### Step 7", start)
-    if start == -1 or end == -1:
-        # Fallback: check the whole file
-        serena_section = text
-    else:
-        serena_section = text[start:end]
-    assert "~/.claude/" not in serena_section, (
-        "adapter SKILL.md Serena block must use __QUOIN_HOME__, not literal ~/.claude/"
     )
 
 
@@ -143,9 +87,3 @@ def test_serena_activation_has_refresh_section() -> None:
     )
 
 
-def test_serena_marker_written_by_init_workflow() -> None:
-    """init_workflow SKILL.md must reference serena-onboarded.md on onboarding branches."""
-    text = ADAPTER_INIT_WORKFLOW.read_text(encoding="utf-8")
-    assert "serena-onboarded.md" in text, (
-        "init_workflow SKILL.md must reference serena-onboarded.md staleness marker on onboarding branches"
-    )

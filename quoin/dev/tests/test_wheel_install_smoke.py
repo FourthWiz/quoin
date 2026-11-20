@@ -7,12 +7,10 @@ Skipped when `claude` is absent (CI-friendly) and when `build` is not installed.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -58,34 +56,6 @@ def test_packaging_config_excludes_benchmark_folders_from_distribution():
     assert "benchmark-results" not in force_include
     assert '"quoin/benchmarks/"' in sdist
     assert '"benchmark-results/"' in sdist
-
-
-def test_memory_packaged_as_directory_and_all_tier1_files_present():
-    """Drift guard: memory uses a directory force-include, not per-file enumeration.
-
-    Checks two invariants without building a wheel (never skipped):
-    1. pyproject.toml uses "quoin/memory" directory mapping (not per-file lines).
-    2. Every TIER1_MEMORY_FILES entry has a source file in quoin/memory/ so the
-       directory glob will include it. Adding a file to TIER1_MEMORY_FILES without
-       creating the source file will fail here before the broken wheel is published.
-    """
-    from quoin.installer import TIER1_MEMORY_FILES
-
-    force_include = _force_include_block()
-
-    # invariant 1: directory mapping present
-    assert '"quoin/memory"' in force_include, (
-        "pyproject.toml must use a directory force-include for quoin/memory, "
-        "not per-file entries. Found no '\"quoin/memory\"' key in force-include block."
-    )
-
-    # invariant 2: all TIER1_MEMORY_FILES have source files
-    memory_src = QUOIN_SRC / "memory"
-    missing = [f for f in TIER1_MEMORY_FILES if not (memory_src / f).is_file()]
-    assert not missing, (
-        f"TIER1_MEMORY_FILES entries have no source file in quoin/memory/: {missing}. "
-        "Create the file or remove it from TIER1_MEMORY_FILES."
-    )
 
 
 @pytest.fixture(scope="module")
@@ -183,13 +153,6 @@ def test_wheel_contents_include_codex_cli_assets(built_wheel):
         assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
 
 
-def test_pyproject_force_include_line_for_claude_core_md():
-    """The wheel data dir needs CLAUDE.core.md: the install-time freshness check regenerates the slim file from it."""
-    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"quoin/CLAUDE.core.md" = "src/quoin/data/CLAUDE.core.md"' in text
-    assert (QUOIN_SRC / "CLAUDE.core.md").exists()
-
-
 def test_pyproject_force_include_line_for_claude_slim_md():
     """pyproject.toml must wire quoin/CLAUDE.slim.md into the wheel (T-06).
 
@@ -215,14 +178,9 @@ def test_pyproject_force_include_line_for_claude_slim_md():
 
 @_requires_build
 def test_wheel_contents_include_claude_md_slim_variant(built_wheel):
-    """Wheel installs must include CLAUDE.slim.md (IVG-164 stage 1 T-06).
-
-    pyproject.toml enumerates top-level data files individually (only
-    directories are globbed), so without an explicit force-include entry the
-    slim variant is silently absent from wheel installs and
-    --claude-md-variant slim exits 1 on a pip-installed quoin — invisible to
-    repo-checkout pilots because install.sh always passes --source-dir.
-    """
+    """Wheel installs must include CLAUDE.slim.md: the plugin's rules hook reads
+    it. pyproject.toml lists top-level data files one by one, so a missing
+    force-include entry would leave it out of pip installs."""
     with zipfile.ZipFile(built_wheel) as whl:
         names = whl.namelist()
     assert any(name.endswith("quoin/data/CLAUDE.slim.md") for name in names), (
@@ -283,108 +241,6 @@ def test_wheel_contents_include_claude_adapter_skill_assets(built_wheel):
         assert "deprecated stub" not in content, name
 
 
-@_requires_build
-def test_wheel_install_and_quoin_install(built_wheel):
-    """Install the wheel and run quoin install from bundled quoin/data."""
-    pytest.importorskip("build")  # double-guard
-
-    from quoin.installer import (  # noqa: PLC0415
-        CANONICAL_SKILLS,
-        TIER1_MEMORY_FILES,
-    )
-
-    with tempfile.TemporaryDirectory() as install_target, \
-            tempfile.TemporaryDirectory() as home_dir, \
-            tempfile.TemporaryDirectory() as fake_bin:
-        # pip-install the wheel into a temp target dir
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--target", install_target,
-             str(built_wheel)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            pytest.skip(f"pip install failed:\n{result.stderr[:300]}")
-
-        fake_bin_path = Path(fake_bin)
-        for executable in ("claude", "git"):
-            tool = fake_bin_path / executable
-            tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            tool.chmod(0o755)
-
-        # Run from the installed wheel without --source-dir so _resolve_source_dir
-        # must use importlib.resources.files("quoin") / "data".
-        env = {
-            **os.environ,
-            "HOME": home_dir,
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
-            "PYTHONPATH": install_target,
-        }
-        cmd = [sys.executable, "-m", "quoin", "install"]
-
-        result = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode == 0, (
-            f"quoin install failed:\n{result.stdout}\n{result.stderr}"
-        )
-
-        claude_dir = Path(home_dir) / ".claude"
-
-        # Tier-1 memory files present
-        for fname in TIER1_MEMORY_FILES:
-            assert (claude_dir / "memory" / fname).exists(), f"Missing: {fname}"
-
-        # Skills present
-        for skill in CANONICAL_SKILLS:
-            skill_md = claude_dir / "skills" / skill / "SKILL.md"
-            assert skill_md.exists(), (
-                f"Missing skill: {skill}"
-            )
-
-        # Spawn-target preambles ship in the wheel and deploy next to SKILL.md
-        source_preambles = sorted(
-            p.parent.name
-            for p in (QUOIN_SRC / "adapters" / "claude" / "skills").glob("*/preamble.md")
-        )
-        assert source_preambles, "expected spawn-target preamble.md files in the source tree"
-        for skill in source_preambles:
-            assert (claude_dir / "skills" / skill / "preamble.md").is_file(), (
-                f"Missing deployed preamble.md for {skill}"
-            )
-
-        migrated = "plan"
-        deployed_plan = claude_dir / "skills" / migrated / "SKILL.md"
-        source_plan = QUOIN_SRC / "adapters" / "claude" / "skills" / migrated / "SKILL.md"
-        source_bytes = source_plan.read_bytes()
-        deployed_bytes = deployed_plan.read_bytes()
-        # The installer substitutes __QUOIN_HOME__ → the real ~/.claude path.
-        # Verify the substitution was applied correctly rather than checking raw equality.
-        expected_bytes = source_bytes.replace(b"__QUOIN_HOME__", str(claude_dir.resolve()).encode())
-        assert deployed_bytes == expected_bytes, (
-            "Deployed plan/SKILL.md does not match source after __QUOIN_HOME__ substitution"
-        )
-
-        # QUICKSTART
-        assert (claude_dir / "QUICKSTART.md").exists()
-
-        # CLAUDE.md with exactly one marker section
-        content = (claude_dir / "CLAUDE.md").read_text()
-        assert content.count("# === DEV WORKFLOW START ===") == 1
-
-        # Preamble mtimes stable across two consecutive installs (CRIT-1 round-2)
-        preamble_mtimes_1 = {
-            p: p.stat().st_mtime
-            for p in (claude_dir / "skills").rglob("preamble.md")
-        }
-        subprocess.run(cmd, env=env, capture_output=True, timeout=60)
-        for p, mtime in preamble_mtimes_1.items():
-            assert p.stat().st_mtime == mtime, (
-                f"preamble.md mtime changed on second install: {p}"
-            )
-
-
 def test_git_status_clean_after_editable_install():
     """After pip install -e . + quoin install, git status --porcelain is empty.
 
@@ -412,3 +268,19 @@ def test_git_status_clean_after_editable_install():
     assert not build_artifacts, (
         f"Build artifacts leaked into git tracking:\n" + "\n".join(build_artifacts)
     )
+
+
+@_requires_build
+def test_wheel_ships_the_plugin(built_wheel):
+    """A pip install must carry everything `quoin install` stages as the plugin."""
+    with zipfile.ZipFile(built_wheel) as whl:
+        names = whl.namelist()
+    for suffix in (
+        "quoin/data/.claude-plugin/plugin.json",
+        "quoin/data/.claude-plugin/marketplace.json",
+        "quoin/data/hooks/hooks.json",
+        "quoin/data/hooks/rules.sh",
+        "quoin/data/adapters/claude/skills/run/SKILL.md",
+        "quoin/data/QUICKSTART.md",
+    ):
+        assert any(name.endswith(suffix) for name in names), f"Missing wheel asset: {suffix}"

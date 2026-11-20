@@ -138,6 +138,12 @@ def check_arm_tree(arm_root: Path, expected_commit: str) -> List[str]:
         problems.append("dirty-tree: git status failed")
     elif paths:
         problems.append("dirty-tree: " + ", ".join(paths[:5]))
+    installer = gate._load_arm_installer(arm_root)
+    if installer is not None and not hasattr(installer, "CANONICAL_SKILLS"):
+        problems.append(
+            "plugin-arm: this tree installs quoin as a Claude Code plugin; the harness "
+            "installs pre-plugin trees only (pass --arm-root of a checkout of the legacy tag)"
+        )
     return problems
 
 

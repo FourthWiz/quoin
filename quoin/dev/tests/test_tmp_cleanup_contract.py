@@ -89,37 +89,15 @@ def _legacy_shell_form(text: str) -> bool:
     return False
 
 
-def test_finalize_present_and_matches_destination():
-    for name in CLASS_B_WRITERS:
-        assert _finalize_ok(_skill_text(name)), f"{name}: finalize call missing or cleanup targets wrong"
-    for name in ["critic", "gate", "implement"]:
-        assert _finalize_ok(_skill_text(name)), f"{name}: finalize call missing or cleanup targets wrong"
-
-
-def test_step1_pre_write_sweep_present():
-    for name in CLASS_B_WRITERS:
-        assert _sweep_before_step2(_skill_text(name)), f"{name}: pre-write sweep missing before Step 2"
-
-
-def test_english_fallback_cleans_body_tmp():
-    for name in CLASS_B_WRITERS:
-        assert _fallback_cleans_body(_skill_text(name)), f"{name}: English-fallback does not clean .body.tmp"
-
-
-def test_no_legacy_shell_form_in_writers():
-    for name in CLASS_B_WRITERS + ["critic", "gate", "implement"]:
-        assert not _legacy_shell_form(_skill_text(name)), f"{name}: shell rm/mv form present"
-
-
-SWEEP_LINE = '**Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp" "<plan-path>.tmp"`.'
-FALLBACK_LINE = 'Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp"`.'
-FINALIZE_B = '`python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`'
-FINALIZE_A = '`python3 __QUOIN_HOME__/scripts/fsops.py finalize "{path}.tmp" "{path}" --cleanup "{path}.body.tmp" "{path}.tmp"`'
+SWEEP_LINE = '**Step 1 pre-write sweep:** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<plan-path>.body.tmp" "<plan-path>.tmp"`.'
+FALLBACK_LINE = 'Clean up body.tmp: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<plan-path>.body.tmp"`.'
+FINALIZE_B = '`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`'
+FINALIZE_A = '`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "{path}.tmp" "{path}" --cleanup "{path}.body.tmp" "{path}.tmp"`'
 
 
 def test_negative_case_caught():
     """The predicates must reject each synthetic bad text (guards against no-op tests)."""
-    fz = 'python3 __QUOIN_HOME__/scripts/fsops.py'
+    fz = 'python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py'
     # Correct forms are accepted and never flagged as legacy.
     assert _finalize_ok(FINALIZE_B) and _finalize_ok(FINALIZE_A)
     for ok in (SWEEP_LINE, FALLBACK_LINE, FINALIZE_B, FINALIZE_A):

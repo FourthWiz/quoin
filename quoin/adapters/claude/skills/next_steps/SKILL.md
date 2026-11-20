@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -127,7 +127,7 @@ Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sent
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/next-steps` is a lightweight queue-management skill. Append to the cost ledger only when a task context is clearly active. If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `next-steps` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/next-steps` is a lightweight queue-management skill. Append to the cost ledger only when a task context is clearly active. If in doubt, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `next-steps` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -157,7 +157,7 @@ and stop. Target file: `<project-root>/next-steps.md`.
 2. Read the full content of `next-steps.md` (create empty if it doesn't exist).
 3. If `## Queue` heading is absent from any line: ensure the file ends with a single newline, then append `\n## Queue\n\n`.
 4. Append the line: `- ⏳ YYYY-MM-DD: <text>` where date is the output of `date -u +%Y-%m-%d`.
-5. Write back atomically: write full content to `<path>.tmp`, then `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"`.
+5. Write back atomically: write full content to `<path>.tmp`, then `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<path>.tmp" "<path>"`.
 6. Confirm: `Queued: ⏳ YYYY-MM-DD: <text>`
 
 ### list [--all]
@@ -197,7 +197,7 @@ print(f"match: line {matched_idx + 1}: {matched_line}")
 new_line = matched_line.replace("⏳", "✓", 1)
 lines[matched_idx] = new_line
 write '\n'.join(lines) + '\n' to <path>.tmp
-run: python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"
+run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<path>.tmp" "<path>"
 print(f"Marked done: {new_line}")
 ```
 
@@ -205,6 +205,6 @@ print(f"Marked done: {new_line}")
 
 - **Fast.** This skill completes in seconds. One read, one write.
 - **Bracket is non-negotiable.** Never edit lines above the `## Queue` heading. If the heading is absent when `done N` is called, refuse with an error — do not fall back to a global search.
-- **Atomic writes.** Always write to `<path>.tmp` then `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"` for all mutations.
+- **Atomic writes.** Always write to `<path>.tmp` then `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<path>.tmp" "<path>"` for all mutations.
 - **Show the match before editing.** For `done N`, always print the matched line before mutating the file so the user sees what will change.
 - **Reject empty text.** For `add`, reject empty or whitespace-only text with a one-line error.

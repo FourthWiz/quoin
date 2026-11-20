@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -62,7 +61,7 @@ def test_cli_help():
     assert result2.returncode == 0, result2.stderr
     assert "--dev" in result2.stdout
     assert "--runtime" in result2.stdout
-    assert "Claude installs globally to ~/.claude" in result2.stdout
+    assert "installs the quoin plugin" in result2.stdout
     assert "repo-local AGENTS.md" in result2.stdout
     assert "Scope" in result2.stdout
     assert "project:/path" in result2.stdout
@@ -365,57 +364,6 @@ def test_codex_doctor_does_not_write_global_codex_paths():
 
 # ── Installer idempotency ─────────────────────────────────────────────────────
 
-def test_installer_idempotent():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp) / ".claude"
-
-        installer.deploy_memory(QUOIN_SRC, dest)
-        installer.deploy_quickstart(QUOIN_SRC, dest)
-        installer.deploy_skills(QUOIN_SRC, dest)
-        installer.deploy_scripts(QUOIN_SRC, dest)
-
-        # Capture file content hashes after first run
-        def _hashes(root: Path) -> dict[str, bytes]:
-            return {
-                str(p.relative_to(root)): p.read_bytes()
-                for p in root.rglob("*") if p.is_file()
-            }
-
-        first = _hashes(dest)
-
-        installer.deploy_memory(QUOIN_SRC, dest)
-        installer.deploy_quickstart(QUOIN_SRC, dest)
-        installer.deploy_skills(QUOIN_SRC, dest)
-        installer.deploy_scripts(QUOIN_SRC, dest)
-
-        second = _hashes(dest)
-
-        assert first == second, "deploy functions are not idempotent"
-
-
-def test_deploy_skills_from_wheel_style_data_uses_claude_adapter():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        source = root / "data"
-        adapter_dir = source / "adapters" / "claude" / "skills" / "plan"
-        adapter_dir.mkdir(parents=True)
-
-        active = "# Plan\n\nActive Claude adapter skill.\n"
-        (adapter_dir / "SKILL.md").write_text(active, encoding="utf-8")
-        preamble = "preamble body\n"
-        (adapter_dir / "preamble.md").write_text(preamble, encoding="utf-8")
-
-        dest = root / ".claude"
-        assert installer.deploy_skills(source, dest) == 1
-
-        deployed = (dest / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
-        assert deployed == active
-        assert (dest / "skills" / "plan" / "preamble.md").read_text(encoding="utf-8") == preamble
-
 
 # ── Byte-identical transport comparison ───────────────────────────────────────
 
@@ -424,7 +372,6 @@ def test_deploy_skills_from_wheel_style_data_uses_claude_adapter():
     reason="bash transport requires claude + npx on PATH; dev-machine only",
 )
 def test_installer_byte_identical_to_install_sh():
-    from quoin import installer  # noqa: PLC0415
 
     with tempfile.TemporaryDirectory() as home_a_str, \
             tempfile.TemporaryDirectory() as home_b_str:
@@ -524,334 +471,16 @@ def _fake_source_dir(tmp: Path) -> Path:
     return tmp
 
 
-def test_deploy_hooks_stanza_placement():
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        hooks = settings.get("hooks", {})
-
-        assert len(hooks.get("UserPromptSubmit", [])) == 1
-        assert len(hooks.get("PreCompact", [])) == 1
-        assert len(hooks.get("PostCompact", [])) == 1
-        assert len(hooks.get("SessionStart", [])) == 3  # startup + resume + compact
-        assert len(hooks.get("SessionEnd", [])) == 1
-        assert len(hooks.get("WorktreeCreate", [])) == 1  # IVG-116
-        assert len(hooks.get("Stop", [])) == 1  # IVG-280
-
-        # Commands must use absolute paths, not tilde
-        cmd = hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
-        assert not cmd.startswith("~"), f"tilde path in command: {cmd}"
-        assert "userpromptsubmit.sh" in cmd
-
-
-def test_deploy_hooks_worktreecreate_stanza():
-    """IVG-116: deploy_hooks must register the WorktreeCreate stanza (matcher '*',
-    command ending in worktreecreate.sh). Locks the nested-git worktree-isolation hook."""
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        wt_stanzas = settings.get("hooks", {}).get("WorktreeCreate", [])
-        assert len(wt_stanzas) == 1, "WorktreeCreate stanza not registered"
-
-        stanza = wt_stanzas[0]
-        assert stanza.get("matcher") == "*", f"unexpected matcher: {stanza.get('matcher')}"
-        cmd = stanza["hooks"][0]["command"]
-        assert cmd.endswith("worktreecreate.sh"), f"unexpected command: {cmd}"
-        assert not cmd.startswith("~"), f"tilde path in command: {cmd}"
-
-
-def test_deploy_hooks_stop_stanza():
-    """IVG-280: deploy_hooks must register the Stop stanza (matcher '*',
-    timeout 10, command ending in stop.sh)."""
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        stop_stanzas = settings.get("hooks", {}).get("Stop", [])
-        assert len(stop_stanzas) == 1, "Stop stanza not registered"
-
-        stanza = stop_stanzas[0]
-        assert stanza.get("matcher") == "*", f"unexpected matcher: {stanza.get('matcher')}"
-        hook = stanza["hooks"][0]
-        assert hook.get("timeout") == 10, f"unexpected timeout: {hook.get('timeout')}"
-        cmd = hook["command"]
-        assert cmd.endswith("stop.sh"), f"unexpected command: {cmd}"
-        assert not cmd.startswith("~"), f"tilde path in command: {cmd}"
-
-
-def test_deploy_hooks_idempotent():
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-
-        installer.deploy_hooks(src, dest)
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        hooks = settings.get("hooks", {})
-
-        # Running twice must not accumulate duplicates
-        assert len(hooks.get("UserPromptSubmit", [])) == 1
-        assert len(hooks.get("PreCompact", [])) == 1
-        assert len(hooks.get("SessionStart", [])) == 3
-        assert len(hooks.get("SessionEnd", [])) == 1
-
-
-def test_deploy_hooks_user_hook_preserved():
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-        dest.mkdir(parents=True)
-
-        user_stanza = {
-            "matcher": "my-project",
-            "hooks": [{"type": "command", "command": "/usr/local/bin/my-hook.sh", "timeout": 5}],
-        }
-        (dest / "settings.json").write_text(
-            _json.dumps({"hooks": {"UserPromptSubmit": [user_stanza]}}) + "\n"
-        )
-
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        stanzas = settings["hooks"]["UserPromptSubmit"]
-
-        assert any(s["matcher"] == "my-project" for s in stanzas), "user stanza was removed"
-        assert any(s["matcher"] == "*" for s in stanzas), "quoin stanza is missing"
-
-
-def test_deploy_hooks_stale_path_replaced():
-    from quoin import installer  # noqa: PLC0415
-    import json as _json
-
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        src = _fake_source_dir(tmp / "src")
-        dest = tmp / ".claude"
-        dest.mkdir(parents=True)
-
-        # Simulate a stanza written with tilde path (old bug or prior install.sh format)
-        old_stanza = {
-            "matcher": "*",
-            "hooks": [{"type": "command", "command": "~/.claude/hooks/userpromptsubmit.sh", "timeout": 5}],
-        }
-        (dest / "settings.json").write_text(
-            _json.dumps({"hooks": {"UserPromptSubmit": [old_stanza]}}) + "\n"
-        )
-
-        installer.deploy_hooks(src, dest)
-
-        settings = _json.loads((dest / "settings.json").read_text())
-        stanzas = settings["hooks"]["UserPromptSubmit"]
-
-        assert len(stanzas) == 1, f"expected 1 stanza, got {len(stanzas)}: {stanzas}"
-        cmd = stanzas[0]["hooks"][0]["command"]
-        assert not cmd.startswith("~"), f"stale tilde path not replaced: {cmd}"
-
-
 # ── Cleanup obsolete scripts ──────────────────────────────────────────────────
-
-def test_cleanup_obsolete_scripts():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp) / ".claude"
-        scripts_dir = dest / "scripts"
-        tests_dir = scripts_dir / "tests"
-        scripts_dir.mkdir(parents=True)
-        tests_dir.mkdir()
-
-        # Pre-seed obsolete files
-        for fname in installer.OBSOLETE_SCRIPTS:
-            (scripts_dir / fname).write_text("obsolete")
-        for fname in installer.OBSOLETE_TESTS:
-            (tests_dir / fname).write_text("obsolete")
-
-        installer.cleanup_obsolete_scripts(dest)
-
-        for fname in installer.OBSOLETE_SCRIPTS:
-            assert not (scripts_dir / fname).exists(), f"should be removed: {fname}"
-        for fname in installer.OBSOLETE_TESTS:
-            assert not (tests_dir / fname).exists(), f"should be removed: {fname}"
 
 
 # ── CLAUDE.md merge behaviors ─────────────────────────────────────────────────
 
-def test_claude_md_merge_replaces_not_appends():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp)
-        dest_claude = dest / "CLAUDE.md"
-        dest_claude.write_text(
-            "User prelude\n"
-            "# === DEV WORKFLOW START ===\nstale content\n# === DEV WORKFLOW END ===\n"
-            "User postlude\n"
-        )
-
-        installer.merge_workflow_rules(QUOIN_SRC, dest)
-        content = dest_claude.read_text()
-
-        assert content.count("# === DEV WORKFLOW START ===") == 1, "must have exactly one pair"
-        assert "stale content" not in content, "stale content must be replaced"
-        assert "User prelude" in content
-        assert "User postlude" in content
-
-        # Second run — still exactly one pair (idempotent)
-        installer.merge_workflow_rules(QUOIN_SRC, dest)
-        assert dest_claude.read_text().count("# === DEV WORKFLOW START ===") == 1
-
-
-def test_fresh_claude_md_section_appended():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp)
-        dest_claude = dest / "CLAUDE.md"
-        dest_claude.write_text("User prelude\n")
-
-        installer.merge_workflow_rules(QUOIN_SRC, dest)
-        content = dest_claude.read_text()
-
-        assert "# === DEV WORKFLOW START ===" in content
-        assert "User prelude" in content
-
-
-def test_claude_md_merge_aborts_on_multi_marker():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp)
-        (dest / "CLAUDE.md").write_text(
-            "# === DEV WORKFLOW START ===\nfirst\n# === DEV WORKFLOW END ===\n"
-            "# === DEV WORKFLOW START ===\nsecond\n# === DEV WORKFLOW END ===\n"
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            installer.merge_workflow_rules(QUOIN_SRC, dest, force_merge=False)
-
-        assert exc_info.value.code == 2
-
-
-def test_claude_md_force_merge_keeps_first_drops_rest(capsys):
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dest = Path(tmp)
-        (dest / "CLAUDE.md").write_text(
-            "prelude\n"
-            "# === DEV WORKFLOW START ===\nfirst-body\n# === DEV WORKFLOW END ===\n"
-            "middle\n"
-            "# === DEV WORKFLOW START ===\nsecond-body\n# === DEV WORKFLOW END ===\n"
-            "# === DEV WORKFLOW START ===\nthird-body\n# === DEV WORKFLOW END ===\n"
-            "postlude\n"
-        )
-
-        installer.merge_workflow_rules(QUOIN_SRC, dest, force_merge=True)
-        content = (dest / "CLAUDE.md").read_text()
-
-        # (a) exactly one pair remains
-        assert content.count("# === DEV WORKFLOW START ===") == 1
-        # (b) stale bodies are gone
-        assert "first-body" not in content
-        assert "second-body" not in content
-        assert "third-body" not in content
-        # (c) stderr has two removal warnings
-        captured = capsys.readouterr()
-        assert captured.err.count("quoin: removed extra '# === DEV WORKFLOW' marker pair at line") == 2
-        # (d) stdout has force-merge summary
-        assert "force-merge: removed 2 extra marker pairs" in captured.out
-
 
 # ── stdout contract ───────────────────────────────────────────────────────────
 
-def test_cli_stdout_contract():
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        result = _py(
-            "-m", "quoin", "install", "--source-dir", str(QUOIN_SRC),
-            home=tmp,
-            timeout=60,
-        )
-        assert result.returncode == 0, f"install failed:\n{result.stderr}"
-        stdout = result.stdout
-        # dest_root for user-mode install with HOME=tmp
-        dest_root = Path(tmp) / ".claude"
-
-        # T-04: memory file lines (now use dest_root-relative paths per MAJ-1)
-        for fname in installer.TIER1_MEMORY_FILES:
-            assert f"Copied {fname} to {dest_root}/memory/" in stdout, (
-                f"missing stdout line for {fname}"
-            )
-
-        assert f"QUICKSTART deployed to {dest_root}/QUICKSTART.md" in stdout
-
-        # T-05: skill count (programmatic — no hardcoded literal per MAJ-6)
-        # Pattern matches absolute path (dest_root ends in .claude)
-        m = re.search(r"Copied (\d+) skills to .+/skills/", stdout)
-        assert m is not None, f"missing skill count line in stdout:\n{stdout}"
-        assert int(m.group(1)) == len(installer.CANONICAL_SKILLS), (
-            f"skill count mismatch: got {m.group(1)}, expected {len(installer.CANONICAL_SKILLS)}"
-        )
-
-        # T-05: script lines (now use dest_root-relative paths per MAJ-1)
-        for fname in ("validate_artifact.py", "path_resolve.py", "build_preambles.py"):
-            assert f"Copied {fname} to {dest_root}/scripts/" in stdout
-
-        # T-06: CLAUDE.md (now uses absolute path per MAJ-1)
-        claude_md = dest_root / "CLAUDE.md"
-        assert (
-            f"Updated quoin section in {claude_md}" in stdout
-            or f"Appended quoin rules to {claude_md}" in stdout
-        )
-
-        assert "Prerequisites OK" in stdout
-
 
 # ── Preamble regeneration ─────────────────────────────────────────────────────
-
-def test_regen_no_op_in_wheel_mode(tmp_path, capsys):
-    from quoin import installer  # noqa: PLC0415
-
-    with unittest.mock.patch("runpy.run_path") as mock_run:
-        installer.regenerate_preambles(tmp_path, allow_writes=False)
-
-    mock_run.assert_not_called()
-    assert "Skipping preamble regeneration" in capsys.readouterr().out
-
-    assert list(tmp_path.iterdir()) == []
 
 
 # ── Preamble freshness advisory (user-mode) ───────────────────────────────
@@ -886,106 +515,6 @@ def _write_fake_build_preambles(source_dir, exit_code, stderr_text=""):
     return script, sentinel
 
 
-def test_advise_preamble_freshness_clean_check_no_warn(tmp_path, capsys):
-    """case a: fake --check exits 0 -> no [warn]; regen still prints 'Skipping...'."""
-    from quoin import installer  # noqa: PLC0415
-
-    source_dir = _make_source_tree(tmp_path)
-    _write_fake_build_preambles(source_dir, 0)
-
-    installer.regenerate_preambles(source_dir, allow_writes=False)
-
-    captured = capsys.readouterr()
-    assert "Skipping preamble regeneration" in captured.out
-    assert "[warn]" not in captured.out
-    assert "[warn]" not in captured.err
-
-
-def test_advise_preamble_freshness_stale_emits_warn(tmp_path, capsys):
-    """case b: fake --check exits 7 and writes a stale detail line -> [warn]
-    names the direct-script remediation (not a bare 'bash install.sh' claim of
-    user-mode regeneration), and the child's stderr detail is echoed."""
-    from quoin import installer  # noqa: PLC0415
-
-    source_dir = _make_source_tree(tmp_path)
-    _write_fake_build_preambles(
-        source_dir,
-        7,
-        stderr_text="Preamble for critic is stale: source quoin/memory/glossary.md changed\n",
-    )
-
-    installer.regenerate_preambles(source_dir, allow_writes=False)
-
-    captured = capsys.readouterr()
-    assert "[warn]" in captured.err
-    assert "python3 quoin/scripts/build_preambles.py" in captured.err
-    assert "bash install.sh (or" not in captured.err
-    assert "Preamble for critic is stale" in captured.err
-
-
-def test_advise_preamble_freshness_skips_without_pyyaml(tmp_path, capsys, monkeypatch):
-    """case c: pyyaml missing -> soft skip note, no [warn], fake script never executed."""
-    from quoin import installer  # noqa: PLC0415
-
-    source_dir = _make_source_tree(tmp_path)
-    _, sentinel = _write_fake_build_preambles(source_dir, 7)
-    monkeypatch.setattr(installer, "_has_pyyaml", lambda: False)
-
-    installer.regenerate_preambles(source_dir, allow_writes=False)
-
-    captured = capsys.readouterr()
-    assert "[warn]" not in captured.out
-    assert "[warn]" not in captured.err
-    assert "pyyaml" in captured.out.lower()
-    assert not sentinel.exists(), "subprocess must not run when pyyaml is missing"
-
-
-def test_advise_preamble_freshness_skips_outside_source_tree(tmp_path, capsys):
-    """case d: source_dir without adapters/claude/skills/ or a source-tree marker -> silent skip."""
-    from quoin import installer  # noqa: PLC0415
-
-    bare_dir = tmp_path / "site-packages" / "quoin"
-    bare_dir.mkdir(parents=True)
-
-    installer.regenerate_preambles(bare_dir, allow_writes=False)
-
-    captured = capsys.readouterr()
-    assert captured.out.strip() == (
-        "Skipping preamble regeneration (user mode — pass --dev to regenerate from source)"
-    )
-    assert captured.err == ""
-
-
-def test_advise_preamble_freshness_inconclusive_on_unexpected_exit(tmp_path, capsys):
-    """case e: fake --check exits 1 (unexpected) -> inconclusive soft note, no [warn]."""
-    from quoin import installer  # noqa: PLC0415
-
-    source_dir = _make_source_tree(tmp_path)
-    _write_fake_build_preambles(source_dir, 1)
-
-    installer.regenerate_preambles(source_dir, allow_writes=False)
-
-    captured = capsys.readouterr()
-    assert "[warn]" not in captured.out
-    assert "[warn]" not in captured.err
-    assert "inconclusive" in captured.out.lower()
-
-
-def test_regen_refuses_to_write_into_package_dir():
-    """allow_writes must be False when --source-dir is inside the package dir."""
-    from quoin.cli import _derive_allow_writes  # noqa: PLC0415
-    import quoin as _quoin_pkg  # noqa: PLC0415
-
-    pkg_dir = Path(_quoin_pkg.__file__).resolve().parent
-    # Synthesize a fake source_dir inside the package dir
-    fake_source = pkg_dir / "data"
-    # Conjunct (e): fake_source is a descendant of pkg_dir → allow_writes must be False
-    result = _derive_allow_writes(fake_source, source_dir_explicit=True)
-    assert result is False, (
-        f"allow_writes should be False for source_dir inside package dir: {fake_source}"
-    )
-
-
 # ── Editable-install detection ────────────────────────────────────────────────
 
 def test_editable_bare_install_no_source_dir():
@@ -1005,60 +534,6 @@ def test_editable_bare_install_no_source_dir():
 
 
 # ── Wheel memory inventory ────────────────────────────────────────────────────
-
-@pytest.mark.skipif(
-    shutil.which("python3") is None,
-    reason="Requires python3 + build module",
-)
-def test_wheel_memory_inventory_matches_tier1_set():
-    """Build the wheel and verify memory contents match TIER1_MEMORY_FILES exactly."""
-    import zipfile  # noqa: PLC0415
-
-    try:
-        import build  # noqa: F401, PLC0415
-    except ImportError:
-        pytest.skip("python 'build' package not installed")
-
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as dist_dir:
-        result = subprocess.run(
-            [sys.executable, "-m", "build", "--wheel", "--outdir", dist_dir, str(REPO)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            pytest.skip(f"wheel build failed: {result.stderr[:500]}")
-
-        wheels = list(Path(dist_dir).glob("*.whl"))
-        assert wheels, "No wheel found in dist dir"
-
-        with zipfile.ZipFile(wheels[0]) as whl:
-            names = whl.namelist()
-
-        # (a) every Tier-1 file appears under quoin/data/memory/
-        for fname in installer.TIER1_MEMORY_FILES:
-            matches = [n for n in names if n.endswith(f"data/memory/{fname}")]
-            assert matches, f"Tier-1 file missing from wheel: {fname}"
-
-        # (b) project-private files must NOT appear
-        for bad in ("lessons-learned.md", "workflow-rules.md", "workflow-suggestions.md"):
-            assert not any(bad in n for n in names), (
-                f"Private file must not be in wheel: {bad}"
-            )
-
-        # (c) exactly len(TIER1_MEMORY_FILES) files under quoin/data/memory/
-        memory_entries = [n for n in names if "/data/memory/" in n and not n.endswith("/")]
-        assert len(memory_entries) == len(installer.TIER1_MEMORY_FILES), (
-            f"wheel memory entries: {memory_entries}"
-        )
-
-        # (d) quoin/dev/ is NOT in the wheel
-        assert not any("quoin/dev/" in n for n in names), "quoin/dev/ must not be in wheel"
-
-        # (e) install.sh is NOT in the wheel
-        assert not any("install.sh" in n for n in names), "install.sh must not be in wheel"
 
 
 # ── Wrapper offline path ──────────────────────────────────────────────────────
@@ -1252,19 +727,6 @@ class TestDoctorCcrParity:
 
 
 # ── CANONICAL_SKILLS filesystem parity ───────────────────────────────────────
-
-def test_canonical_skills_matches_filesystem():
-    from quoin import installer  # noqa: PLC0415
-
-    skills_dir = QUOIN_SRC / "adapters" / "claude" / "skills"
-    on_disk = {p.name for p in skills_dir.iterdir() if p.is_dir()}
-    in_constant = set(installer.CANONICAL_SKILLS)
-
-    assert in_constant == on_disk, (
-        f"CANONICAL_SKILLS mismatch.\n"
-        f"  In constant but not on disk: {in_constant - on_disk}\n"
-        f"  On disk but not in constant: {on_disk - in_constant}"
-    )
 
 
 def test_supervisor_refuses_a_light_run_task(tmp_path):

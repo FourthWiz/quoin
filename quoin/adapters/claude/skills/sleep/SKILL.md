@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -193,7 +193,7 @@ Four primary modes:
 
 **(b) Standalone** — user runs `/sleep` directly. Full default mode (Steps 0–6). Step 0 verifies today's daily briefing exists first.
 
-**(c) `--dry-run`** — scores entries and prints three-bucket decisions; **Makes NO writes**. Use during the first 30 days of production calibration. Also triggered automatically when `__QUOIN_HOME__/memory/sleep_dryrun_start.txt` exists and is less than 30 days old. To enter calibration mode: create this file with today's ISO date as its contents (`echo "$(date +%Y-%m-%d)" > __QUOIN_HOME__/memory/sleep_dryrun_start.txt`). Delete the file to exit calibration mode early.
+**(c) `--dry-run`** — scores entries and prints three-bucket decisions; **Makes NO writes**. Use during the first 30 days of production calibration. Also triggered automatically when `${CLAUDE_PLUGIN_ROOT}/memory/sleep_dryrun_start.txt` exists and is less than 30 days old. To enter calibration mode: create this file with today's ISO date as its contents (`echo "$(date +%Y-%m-%d)" > ${CLAUDE_PLUGIN_ROOT}/memory/sleep_dryrun_start.txt`). Delete the file to exit calibration mode early.
 
 **(d) `--escalate`** — after default scoring, spawns a separate Opus Agent subagent for middle-band candidates. Opus returns revised decisions; user confirms each. NOTE: `[no-redispatch]` guards the parent `/sleep` from §0 re-dispatch only; it does NOT prevent `/sleep` from spawning Opus children via `--escalate`. The Opus subagent is an explicit forward dispatch, not a tier-switch.
 
@@ -218,7 +218,7 @@ Files `/sleep` does NOT read:
 
 ## Maintenance patterns
 
-`/sleep` honors `read_only`, `archived`, and `ignore` globs from `__QUOIN_HOME__/memory/memory-maintenance.yaml` via `sleep_score.py --patterns`. Globs are matched against the **bare file name** of each source file being scored:
+`/sleep` honors `read_only`, `archived`, and `ignore` globs from `${CLAUDE_PLUGIN_ROOT}/memory/memory-maintenance.yaml` via `sleep_score.py --patterns`. Globs are matched against the **bare file name** of each source file being scored:
 
 - `ignore`-matched sources: skipped entirely — produce zero entries.
 - `archived` or `read_only`-matched sources: entries are **never soft-forgotten**. If the scorer would assign `bucket="forget"`, the bucket is demoted to `"middle"` instead. The `/sleep` NDJSON parser is unchanged — protected entries already appear as `"middle"` in the output.
@@ -227,7 +227,7 @@ The `--patterns` flag is always passed (see Step 2). The loader no-ops on a miss
 
 ## Importance scoring
 
-At session start, read sleep config: try `__QUOIN_HOME__/memory/sleep-signals.yaml` first; if missing, use hardcoded defaults (the historical CLAUDE.md-embedded fallback leg was dropped under the slim CLAUDE.md variant, IVG-164 stage 1 — sleep-signals.yaml is always deployed alongside it). Emit `[sleep: config not found; using hardcoded defaults]` only when falling back to hardcoded.
+At session start, read sleep config: try `${CLAUDE_PLUGIN_ROOT}/memory/sleep-signals.yaml` first; if missing, use hardcoded defaults (the historical CLAUDE.md-embedded fallback leg was dropped under the slim CLAUDE.md variant, IVG-164 stage 1 — sleep-signals.yaml is always deployed alongside it). Emit `[sleep: config not found; using hardcoded defaults]` only when falling back to hardcoded.
 
 For each candidate entry, compute:
 - `promote_score` — sum of matched promote signal weights
@@ -238,7 +238,7 @@ Three-bucket decision:
 - **Soft-Forget**: `forget_score >= forget_min_score` AND `promote_score <= forget_max_promote`
 - **Middle-Band**: everything else
 
-Scoring is performed by `python3 __QUOIN_HOME__/scripts/sleep_score.py`. The skill invokes this script and parses its NDJSON output.
+Scoring is performed by `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sleep_score.py`. The skill invokes this script and parses its NDJSON output.
 
 ## Process (default mode)
 
@@ -253,21 +253,21 @@ Error: /sleep requires today's daily briefing (daily/<today>.md) — run /end_of
 
 This guard fires only in standalone invocations. In the auto-chain path, `/end_of_day` writes the daily briefing (Step 3) before invoking `/sleep` (Step 6), so the file always exists in that context.
 
-Also check whether dry-run mode should be forced: read `__QUOIN_HOME__/memory/sleep_dryrun_start.txt`. If it exists and the date within is less than 30 days ago, set `forced_dry_run = true` and emit: `Dry-run mode active until <start-date + 30 days>: no writes will occur (calibration period).`
+Also check whether dry-run mode should be forced: read `${CLAUDE_PLUGIN_ROOT}/memory/sleep_dryrun_start.txt`. If it exists and the date within is less than 30 days ago, set `forced_dry_run = true` and emit: `Dry-run mode active until <start-date + 30 days>: no writes will occur (calibration period).`
 
 ### Step 1: Read config
 
-At session start, read sleep config: try `__QUOIN_HOME__/memory/sleep-signals.yaml` first; if missing, use hardcoded defaults (the historical CLAUDE.md-embedded fallback leg was dropped under the slim CLAUDE.md variant, IVG-164 stage 1 — sleep-signals.yaml is always deployed alongside it). Emit `[sleep: config not found; using hardcoded defaults]` only when falling back to hardcoded.
+At session start, read sleep config: try `${CLAUDE_PLUGIN_ROOT}/memory/sleep-signals.yaml` first; if missing, use hardcoded defaults (the historical CLAUDE.md-embedded fallback leg was dropped under the slim CLAUDE.md variant, IVG-164 stage 1 — sleep-signals.yaml is always deployed alongside it). Emit `[sleep: config not found; using hardcoded defaults]` only when falling back to hardcoded.
 
 ### Step 2: Run sleep_score.py
 
 Invoke:
 ```
-python3 __QUOIN_HOME__/scripts/sleep_score.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sleep_score.py \
   --scan-dir .workflow_artifacts/memory/daily/ \
   --scan-days 30 \
   --lessons-file .workflow_artifacts/memory/lessons-learned.md \
-  --patterns __QUOIN_HOME__/memory/memory-maintenance.yaml \
+  --patterns ${CLAUDE_PLUGIN_ROOT}/memory/memory-maintenance.yaml \
   --output json
 ```
 
@@ -294,8 +294,8 @@ On `y`: **first run the cross-project dedup guard (IVG-119)** before appending. 
 the slug with the SAME inference that builds the append heading below, then call the
 guard:
 ```
-slug="$(python3 __QUOIN_HOME__/scripts/sleep_score.py --slug-from-path "<source_path>")"
-python3 __QUOIN_HOME__/scripts/lessons_guard.py \
+slug="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sleep_score.py --slug-from-path "<source_path>")"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lessons_guard.py \
   --candidate-file <tmp-with-entry-text> \
   --lessons-file .workflow_artifacts/memory/lessons-learned.md \
   --candidate-slug "$slug"
@@ -306,7 +306,7 @@ contract yields exit 0 (fail-open). Exit 0/2/3 or script missing → proceed. Th
 COMPLEMENTS Step 3's `dedup_against_lessons` (which stays as-is): Step 3 catches
 near-duplicates (keyword overlap plus Jaccard similarity); the guard catches different-task verbatim copies.
 
-Then append to `.workflow_artifacts/memory/lessons-learned.md` in standard format, by piping the entry into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed):
+Then append to `.workflow_artifacts/memory/lessons-learned.md` in standard format, by piping the entry into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed):
 ```markdown
 ## <today> — <source task name, inferred from source_path>
 **What happened:** <entry text>
@@ -335,7 +335,7 @@ Soft-forget this entry? (moves to forgotten/ archive; recoverable via /sleep --r
 [y / n]
 ```
 
-On `y`: append to `.workflow_artifacts/memory/forgotten/<today>.md` in the required format, by piping the block into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/forgotten/<today>.md"` (creates the file and folder when missing):
+On `y`: append to `.workflow_artifacts/memory/forgotten/<today>.md` in the required format, by piping the block into `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/forgotten/<today>.md"` (creates the file and folder when missing):
 ```
 > Source: <absolute-path-to-source-file>:<source_start_line>..<source_end_line>
 > Forgotten: <ISO timestamp>
@@ -350,7 +350,7 @@ If `forced_dry_run == true`: print decisions but make NO writes.
 
 ### Step 5b: Refresh the search index
 
-Skip when `forced_dry_run == true` (dry-run makes no writes). Otherwise always run `python3 __QUOIN_HOME__/scripts/memory_select.py --build-index --file .workflow_artifacts/memory/lessons-learned.md`, even if nothing was promoted here: lessons appended by other skills get indexed too. It updates the local search index under `memory/index/` (only new or changed entries are embedded; an unchanged index is not rewritten). Ignore a failure: lessons bootstrap falls back to lexical selection without it.
+Skip when `forced_dry_run == true` (dry-run makes no writes). Otherwise always run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/memory_select.py --build-index --file .workflow_artifacts/memory/lessons-learned.md`, even if nothing was promoted here: lessons appended by other skills get indexed too. It updates the local search index under `memory/index/` (only new or changed entries are embedded; an unchanged index is not rewritten). Ignore a failure: lessons bootstrap falls back to lexical selection without it.
 
 ### Step 6: Print summary
 
@@ -381,7 +381,7 @@ MIDDLE-BAND (K):
 
 ## --restore <pattern>
 
-Find candidates with `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --source forgotten --task-text "<pattern>" --json`: blocks whose text contains `<pattern>` (substring match, case-insensitive), plus similar blocks when the search index exists. Each hit gives `source` (the archive file), `lineno` (block start) and `anchor` (the original location, the `> Source:` line step 1 reads). A hit with `score: 0` matched only by similarity: label it "similar, not exact" when asking the user to confirm. Process hits in descending `lineno` within each file, so removing one block does not shift the next. If the script is absent or errors, search all `forgotten/<date>.md` files for the substring yourself. For each match:
+Find candidates with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/memory_select.py --semantic --source forgotten --task-text "<pattern>" --json`: blocks whose text contains `<pattern>` (substring match, case-insensitive), plus similar blocks when the search index exists. Each hit gives `source` (the archive file), `lineno` (block start) and `anchor` (the original location, the `> Source:` line step 1 reads). A hit with `score: 0` matched only by similarity: label it "similar, not exact" when asking the user to confirm. Process hits in descending `lineno` within each file, so removing one block does not shift the next. If the script is absent or errors, search all `forgotten/<date>.md` files for the substring yourself. For each match:
 
 1. Read the `> Source:` anchor line to get the original file path and line range.
 2. Restore target precedence:
@@ -442,7 +442,7 @@ This deletes only the sentinel pointer; the underlying checkpoint file (if any) 
 [y / n]
 ```
 
-On `y`: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>"`; emit "deleted <path>". On `n`: emit "skipped <path>".
+On `y`: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>"`; emit "deleted <path>". On `n`: emit "skipped <path>".
 
 At end: emit "Done. <deleted_count> deleted, <skipped_count> skipped."
 
@@ -479,7 +479,7 @@ Prohibited write targets (non-exhaustive):
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`
+format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`
 
 At session start (after Step 0 passes), append a row to the task cost ledger:
 
@@ -487,7 +487,7 @@ At session start (after Step 0 passes), append a row to the task cost ledger:
 
 ```bash
 LEDGER=".workflow_artifacts/<task-name>/cost-ledger.md"
-uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "sleep" 2>/dev/null || echo "unknown-sleep-$(date -u +%Y%m%dT%H%M%SZ)") && printf '%s | %s | %s | %s | task | %s | %s\n' \
+uuid=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "sleep" 2>/dev/null || echo "unknown-sleep-$(date -u +%Y%m%dT%H%M%SZ)") && printf '%s | %s | %s | %s | task | %s | %s\n' \
   "$uuid" "$(date -u +%Y-%m-%d)" "sleep" "sonnet" "sleep-session" "0" \
   >> "$LEDGER"
 ```

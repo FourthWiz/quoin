@@ -4,14 +4,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 from quoin.benchmarks.harness import arm_identity as ai
 from quoin.benchmarks.harness import arm_sandbox as sb
-from quoin.benchmarks.scripts import run_three_arm_gate as gate
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AUTH = ("CLAUDE_CODE_OAUTH_TOKEN", "tok")
@@ -207,20 +205,9 @@ def test_install_refuses_bad_tree_without_running(tmp_path):
     assert dirty["ok"] is False and "dirty-tree" in dirty["reason"]
 
 
-def test_real_install_into_sandbox(tmp_path, monkeypatch):
-    real_claude = Path.home() / ".claude"
-    watched = [real_claude / "settings.json", real_claude / "CLAUDE.md"]
-    before = [p.read_bytes() if p.exists() else None for p in watched]
-    monkeypatch.setattr(sb, "check_arm_tree", lambda *a, **k: [])
-    box = sb.create_sandbox("quoin", parent=tmp_path)
-    result = sb.install_quoin(box, REPO_ROOT, "stub", python=sys.executable)
-    assert result["ok"], result
-    assert ai.check_quoin_sandbox(box.home, REPO_ROOT) == []
-    assert ai.check_plain_sandbox(box.home) != []
-    assert [p.read_bytes() if p.exists() else None for p in watched] == before
-    settings = json.loads((box.claude_dir / "settings.json").read_text())
-    assert set(sb.SANDBOX_BASE_PERMISSIONS["allow"]) <= set(settings["permissions"]["allow"])
-    assert set(sb.SANDBOX_BASE_PERMISSIONS["deny"]) <= set(settings["permissions"]["deny"])
+def test_plugin_shaped_tree_is_refused():
+    problems = sb.check_arm_tree(REPO_ROOT, "stub")
+    assert any(p.startswith("plugin-arm:") for p in problems), problems
 
 
 def test_remove_sandbox(tmp_path):

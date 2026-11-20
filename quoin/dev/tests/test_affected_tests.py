@@ -305,38 +305,6 @@ class TestIvg92SpecialCaseMapping:
     special-case block guards on test_path.exists() against the real filesystem.
     """
 
-    def test_claude_md_triggers_size_ceiling(self):
-        """quoin/CLAUDE.md -> test_claude_md_size_ceiling.py is in selectors."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/CLAUDE.md"], _REPO_ROOT
-        )
-        assert any("test_claude_md_size_ceiling.py" in s for s in selectors), (
-            f"expected test_claude_md_size_ceiling.py in selectors, got {selectors}"
-        )
-        assert not ignored, f"ignored should be empty for a mapped file, got {ignored}"
-        assert not unmatched
-
-    def test_glossary_triggers_preamble_freshness(self):
-        """quoin/memory/glossary.md -> test_preamble_freshness.py is in selectors."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/memory/glossary.md"], _REPO_ROOT
-        )
-        assert any("test_preamble_freshness.py" in s for s in selectors), (
-            f"expected test_preamble_freshness.py in selectors, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_format_kit_triggers_preamble_freshness(self):
-        """quoin/memory/format-kit.md -> test_preamble_freshness.py is in selectors."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/memory/format-kit.md"], _REPO_ROOT
-        )
-        assert any("test_preamble_freshness.py" in s for s in selectors), (
-            f"expected test_preamble_freshness.py in selectors, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
 
     def test_unrelated_skill_md_still_ignored(self):
         """Non-special non-.py file (SKILL.md) still lands in ignored (regression guard)."""
@@ -363,45 +331,6 @@ class TestIvg92SpecialCaseMapping:
         assert "CLAUDE.md" in ignored, f"bare CLAUDE.md should be in ignored, got {ignored}"
         assert not unmatched
 
-    def test_claude_md_triggers_build_claude_slim(self):
-        """quoin/CLAUDE.md -> test_build_claude_slim.py is ALSO in selectors (IVG-164 T-05).
-
-        Duplicate-key-safe: this ADDS to the existing size-ceiling selector
-        for quoin/CLAUDE.md rather than displacing it.
-        """
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/CLAUDE.md"], _REPO_ROOT
-        )
-        assert any("test_build_claude_slim.py" in s for s in selectors), (
-            f"expected test_build_claude_slim.py in selectors, got {selectors}"
-        )
-        assert any("test_claude_md_size_ceiling.py" in s for s in selectors), (
-            f"quoin/CLAUDE.md row should still also select test_claude_md_size_ceiling.py, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_claude_slim_md_triggers_build_claude_slim(self):
-        """quoin/CLAUDE.slim.md -> test_build_claude_slim.py is in selectors (IVG-164 T-05)."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/CLAUDE.slim.md"], _REPO_ROOT
-        )
-        assert any("test_build_claude_slim.py" in s for s in selectors), (
-            f"expected test_build_claude_slim.py in selectors, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_workflow_catalog_triggers_build_claude_slim(self):
-        """quoin/memory/workflow-catalog.md -> test_build_claude_slim.py is in selectors (IVG-164 T-05)."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/memory/workflow-catalog.md"], _REPO_ROOT
-        )
-        assert any("test_build_claude_slim.py" in s for s in selectors), (
-            f"expected test_build_claude_slim.py in selectors, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
 
     def test_bare_claude_slim_md_does_not_match(self):
         """Bare 'CLAUDE.slim.md' (no quoin/ parent) must NOT trigger any selector.
@@ -420,97 +349,6 @@ class TestIvg92SpecialCaseMapping:
 
     # -- review-1.md MAJOR 2: citation sweep selectable under affected-area gating --
 
-    def test_claude_md_triggers_citation_sweep(self):
-        """quoin/CLAUDE.md -> test_claude_md_citations.py is ALSO in selectors.
-
-        Duplicate-key-safe: ADDS to the existing size-ceiling + build-slim
-        selectors for quoin/CLAUDE.md rather than displacing them.
-        """
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/CLAUDE.md"], _REPO_ROOT
-        )
-        assert any("test_claude_md_citations.py" in s for s in selectors), (
-            f"expected test_claude_md_citations.py in selectors, got {selectors}"
-        )
-        assert any("test_build_claude_slim.py" in s for s in selectors), (
-            f"quoin/CLAUDE.md row should still also select test_build_claude_slim.py, got {selectors}"
-        )
-        assert any("test_claude_md_size_ceiling.py" in s for s in selectors), (
-            f"quoin/CLAUDE.md row should still also select test_claude_md_size_ceiling.py, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_workflow_catalog_triggers_citation_sweep(self):
-        """quoin/memory/workflow-catalog.md -> test_claude_md_citations.py is ALSO
-        in selectors, in addition to test_build_claude_slim.py."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/memory/workflow-catalog.md"], _REPO_ROOT
-        )
-        assert any("test_claude_md_citations.py" in s for s in selectors), (
-            f"expected test_claude_md_citations.py in selectors, got {selectors}"
-        )
-        assert any("test_build_claude_slim.py" in s for s in selectors), (
-            f"workflow-catalog.md row should still also select test_build_claude_slim.py, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_citation_fixture_triggers_citation_sweep(self):
-        """The citation-disposition fixture .json -> test_claude_md_citations.py
-        is in selectors (a fixture edit alone must re-run the sweep)."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/dev/tests/fixtures/claude_md_citation_dispositions.json"], _REPO_ROOT
-        )
-        assert any("test_claude_md_citations.py" in s for s in selectors), (
-            f"expected test_claude_md_citations.py in selectors, got {selectors}"
-        )
-        assert not ignored
-        assert not unmatched
-
-    def test_skill_md_still_not_selectable_documented_residual_gap(self):
-        """Regression guard for the documented residual gap (review-1.md MAJOR 2):
-        an adapter SKILL.md edit — one of the citation sweep's three in-scope
-        corpora — still has no test_claude_md_citations.py row.
-
-        Two independent assertions (IVG-249 S-03 T-07 split, round-2 MIN-4;
-        first clause rotated off gate/SKILL.md at IVG-248 stage 2 T-14):
-        (1) no test_claude_md_citations.py selector for review/SKILL.md — the
-            citation-sweep-gap claim this test is named for. gate/SKILL.md
-            stopped being the exemplar once T-14 gave it a
-            test_claude_md_citations.py row (it embeds the deploy-drift
-            coverage qualifier verbatim, including the literal "CLAUDE.md"
-            in its "not covered" clause — the durable half of the C-03
-            critical). review/SKILL.md carries an authored-content row (so
-            it is not wholly ignored — see clause 2's own file for that) but
-            no citation-sweep row, so it remains a genuine residual.
-        (2) a SKILL.md still lands wholly in `ignored` — gate/SKILL.md no
-            longer qualifies for this half once the end-of-task resilience
-            rows made it selectable, and review/SKILL.md stopped qualifying
-            once the clean-authored-content rule gave it a
-            test_authored_content_rule_pointers.py row, so this assertion
-            moved to critic/SKILL.md, which carries no _DOCS_TO_TESTS row at
-            all (verified by grep).
-
-        Rotation check: re-ran this test before and after adding the
-        implement/end_of_task -> test_decision_gate_census.py selector rows.
-        Both clauses' exemplars are unaffected by that edit class — clause 1's
-        exemplar (review/SKILL.md) still carries no citation-sweep row, clause
-        2's exemplar (critic/SKILL.md) still carries no _DOCS_TO_TESTS row at
-        all — neither needed rotating."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/adapters/claude/skills/review/SKILL.md"], _REPO_ROOT
-        )
-        assert not any("test_claude_md_citations.py" in s for s in selectors), (
-            f"SKILL.md is a documented residual gap for the citation sweep; got {selectors}"
-        )
-
-        selectors2, unmatched2, ignored2 = _at.map_changed_to_tests(
-            ["quoin/adapters/claude/skills/critic/SKILL.md"], _REPO_ROOT
-        )
-        assert not selectors2, f"expected no selectors for critic/SKILL.md, got {selectors2}"
-        assert "quoin/adapters/claude/skills/critic/SKILL.md" in ignored2
-        assert not unmatched2
 
     def test_cost_ledger_format_triggers_agent_transcript_cost(self):
         """IVG-249 T-11 (D-05/MAJ-3): quoin/memory/cost-ledger-format.md ->
@@ -559,50 +397,6 @@ class TestIvg92SpecialCaseMapping:
         assert any(
             "test_authored_content_rule_pointers.py" in s for s in selectors
         ), f"expected test_authored_content_rule_pointers.py in selectors for {changed_file}, got {selectors}"
-
-
-# Import SPAWN_TARGETS from the generator (drift guard) — same idiom as
-# test_preamble_freshness.py:27-28. A future 10th spawn target with no
-# matching _DOCS_TO_TESTS row fails TestIvg123PreambleMapping below rather
-# than silently reopening the lesson-2026-07-04 blind spot.
-sys.path.insert(0, str(_REPO_ROOT / "quoin" / "scripts"))
-from build_preambles import SPAWN_TARGETS  # noqa: E402
-
-
-class TestIvg123PreambleMapping:
-    """Verify each spawn-target preamble.md maps to test_preamble_freshness.py."""
-
-    @pytest.mark.parametrize("skill", sorted(SPAWN_TARGETS.keys()))
-    def test_spawn_target_preamble_triggers_freshness_test(self, skill):
-        """quoin/adapters/claude/skills/<skill>/preamble.md -> test_preamble_freshness.py, cleanly."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            [f"quoin/adapters/claude/skills/{skill}/preamble.md"], _REPO_ROOT
-        )
-        assert any("test_preamble_freshness.py" in s for s in selectors), (
-            f"expected test_preamble_freshness.py in selectors for {skill}, got {selectors}"
-        )
-        assert not ignored, f"ignored should be empty for a mapped file, got {ignored}"
-        assert not unmatched
-
-    def test_bare_preamble_md_does_not_match(self):
-        """Bare 'preamble.md' (no quoin/adapters/claude/skills/<skill>/ parent) must NOT match —
-        anchored-suffix guard, mirrors test_bare_claude_md_does_not_match."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["preamble.md"], _REPO_ROOT
-        )
-        assert not selectors, f"expected no selectors for bare preamble.md, got {selectors}"
-        assert not unmatched
-        assert "preamble.md" in ignored
-
-    def test_non_spawn_target_preamble_md_still_ignored(self):
-        """A preamble.md under a skill NOT in SPAWN_TARGETS still lands in
-        ignored — proves per-file enumeration, not a directory-prefix rule."""
-        selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/adapters/claude/skills/implement/preamble.md"], _REPO_ROOT
-        )
-        assert not selectors, f"expected no selectors, got {selectors}"
-        assert not unmatched
-        assert "quoin/adapters/claude/skills/implement/preamble.md" in ignored
 
 
 # ---------------------------------------------------------------------------
@@ -2438,7 +2232,6 @@ class TestNewDocRows:
         ("quoin/adapters/claude/skills/gate/SKILL.md", "test_fullsuite_recipe_interpreter.py"),
         ("quoin/memory/autonomous-mode.md", "test_fullsuite_recipe_interpreter.py"),
         ("quoin/memory/autonomous-mode.md", "test_pytest_bound_matches_wait_budget.py"),
-        ("quoin/adapters/claude/skills/review/SKILL.md", "test_review_fanout_ledger.py"),
         ("quoin/adapters/claude/skills/end_of_task/SKILL.md", "test_cost_ledger_summary_wiring.py"),
         ("quoin/adapters/claude/skills/run/SKILL.md", "test_cost_ledger_summary_wiring.py"),
         ("quoin/memory/cost-ledger-format.md", "test_cost_ledger_summary_wiring.py"),

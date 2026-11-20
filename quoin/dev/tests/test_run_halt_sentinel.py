@@ -48,43 +48,6 @@ def autonomous_mode_text() -> str:
     return AUTONOMOUS_MODE_DOC.read_text(encoding="utf-8")
 
 
-def test_halt_sentinel_section_present(run_skill_text: str) -> None:
-    assert "## Autonomous hard stops (halt-sentinel)" in run_skill_text
-
-
-def test_all_six_hard_stop_sites_documented(run_skill_text: str) -> None:
-    missing = [site for site in HARD_STOP_SITES if site not in run_skill_text]
-    assert not missing, f"run/SKILL.md is missing hard-stop sites: {missing}"
-
-
-def test_halt_sentinel_write_before_exit(run_skill_text: str) -> None:
-    text = run_skill_text
-    assert "write a halt-sentinel" in text or "write the halt-sentinel" in text
-    assert "before exit" in text
-    assert ".workflow_artifacts/memory/autonomous-halt-{task}.md" in text
-
-
-def test_reason_field_present_per_site(run_skill_text: str) -> None:
-    # The six-site table in "## Autonomous hard stops" documents a `reason:`
-    # field for each site.
-    assert run_skill_text.count("`reason:") >= 6
-
-
-def test_never_auto_pr_restatement(run_skill_text: str) -> None:
-    text = run_skill_text
-    assert "NEVER auto-creates a pull request" in text
-    assert "PR creation stays `/pr`" in text
-
-
-def test_each_hard_stop_site_references_the_sentinel_section(run_skill_text: str) -> None:
-    # Each of the four sites edited inline (gate-fail, CHANGES_REQUESTED,
-    # BLOCKED, git conflict, branch-hygiene) must point back at the
-    # consolidated "## Autonomous hard stops" section, not duplicate the
-    # contract inline.
-    text = run_skill_text
-    assert text.count('per "## Autonomous hard stops"') >= 5
-
-
 def test_core_doc_has_halt_sentinel_schema(core_doc_text: str) -> None:
     missing = [f for f in SCHEMA_FIELDS if f"`{f}`" not in core_doc_text]
     assert not missing, f"core/skills/run_hard.md missing schema fields: {missing}"

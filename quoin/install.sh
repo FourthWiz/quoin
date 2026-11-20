@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Quoin installer — offline-first thin wrapper that delegates to `quoin install`.
 #
-# Usage: bash install.sh [--dev] [--upgrade] [--use-pip] [--force-merge]
-#                        [--scope user|project[:DIR]] [--claude-md-variant full|slim]
-#                        [--allow-hook-merge] [--autocompact-pct N]
+# Usage: bash install.sh [--dev] [--upgrade] [--use-pip]
+#                        [--scope user|project[:DIR]] [--autocompact-pct N]
 #                        [--autocompact-window TOKENS] [--clear-autocompact-env]
 #                        [--with-workflow-tasks] [--remove-workflow-tasks]
 #                        [--print-python] [-h]
@@ -23,11 +22,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 DEV_FLAG=""
-FORCE_MERGE_FLAG=""
-NO_PRUNE_FLAG=""
 SCOPE_FLAG=""
-CLAUDE_MD_VARIANT_FLAG=""
-ALLOW_HOOK_MERGE_FLAG=""
 AUTOCOMPACT_PCT_FLAG=""
 AUTOCOMPACT_WINDOW_FLAG=""
 CLEAR_AUTOCOMPACT_ENV_FLAG=""
@@ -50,9 +45,6 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
     --upgrade)      USE_PIP=1; PIP_UPGRADE_FLAG="--upgrade" ;;
     --use-pip)      USE_PIP=1 ;;
     --print-python) PRINT_PYTHON=1 ;;
-    --force-merge)  FORCE_MERGE_FLAG="--force-merge" ;;
-    --no-prune)     NO_PRUNE_FLAG="--no-prune" ;;
-    --allow-hook-merge) ALLOW_HOOK_MERGE_FLAG="--allow-hook-merge" ;;
     --clear-autocompact-env) CLEAR_AUTOCOMPACT_ENV_FLAG="--clear-autocompact-env" ;;
     --with-workflow-tasks) WITH_WORKFLOW_TASKS_FLAG="--with-workflow-tasks" ;;
     --remove-workflow-tasks) REMOVE_WORKFLOW_TASKS_FLAG="--remove-workflow-tasks" ;;
@@ -107,27 +99,9 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
         exit 2
       fi
       ;;
-    --claude-md-variant=*)
-      if [[ -n "${arg#--claude-md-variant=}" ]]; then
-        CLAUDE_MD_VARIANT_FLAG="--claude-md-variant ${arg#--claude-md-variant=}"
-      else
-        echo "quoin: --claude-md-variant requires a value (full or slim)" >&2
-        exit 2
-      fi
-      ;;
-    --claude-md-variant)
-      i=$(( i + 1 ))
-      if [[ $i -lt ${#ARGS[@]} ]]; then
-        CLAUDE_MD_VARIANT_FLAG="--claude-md-variant ${ARGS[$i]}"
-      else
-        echo "quoin: --claude-md-variant requires a value (full or slim)" >&2
-        exit 2
-      fi
-      ;;
     -h|--help)
-      echo "Usage: bash install.sh [--dev] [--upgrade] [--use-pip] [--force-merge] [--no-prune]"
-      echo "                       [--scope user|project[:DIR]] [--claude-md-variant full|slim]"
-      echo "                       [--allow-hook-merge] [--autocompact-pct N]"
+      echo "Usage: bash install.sh [--dev] [--upgrade] [--use-pip]"
+      echo "                       [--scope user|project[:DIR]] [--autocompact-pct N]"
       echo "                       [--autocompact-window TOKENS] [--clear-autocompact-env]"
       echo "                       [--with-workflow-tasks] [--remove-workflow-tasks]"
       echo "                       [--print-python]"
@@ -138,21 +112,10 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "  --use-pip            Same as --upgrade"
       echo "  --print-python       Print the Python interpreter the installer would use, then exit."
       echo "                       Set QUOIN_PYTHON=/path/to/python to choose one explicitly."
-      echo "  --force-merge        Keep first DEV WORKFLOW marker pair; remove extras"
-      echo "  --no-prune           Keep files an earlier install deployed that this version no"
-      echo "                       longer ships (by default they are removed unless edited)"
-      echo "  --scope user         Install globally under ~/.claude/"
-      echo "  --scope project      Install under <CWD>/.claude/ instead of ~/.claude/."
-      echo "                       All skills, scripts, hooks, and CLAUDE.md will be"
-      echo "                       project-scoped. Hooks register in <project>/.claude/settings.json"
-      echo "                       only. Note: for skills, Claude Code personal scope overrides"
-      echo "                       project scope — a prior home install shadows project skills."
-      echo "                       Run 'quoin doctor --scope project' to detect conflicts."
-      echo "  --scope project:/path Install under /path/.claude/ (explicit project root)"
-      echo "  --claude-md-variant full|slim  CLAUDE.md variant to merge (default: slim; an explicit"
-      echo "                       choice is remembered per scope for later installs)."
-      echo "  --allow-hook-merge   Proceed even if home ~/.claude/settings.json has quoin"
-      echo "                       hook stanzas (default: fail-fast to avoid double-fire)"
+      echo "  --scope user         Install the quoin plugin at user scope (every session)"
+      echo "  --scope project      Install the plugin at project scope for <CWD>; it then loads"
+      echo "                       only in sessions started in that folder."
+      echo "  --scope project:/path Same, for /path"
       echo "  --autocompact-pct N  Opt-in: write CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=N (1..100) to"
       echo "                       settings.json's env block, delegating the auto-compaction"
       echo "                       trigger to the platform. Off by default."
@@ -472,8 +435,8 @@ if [[ -z "$SCOPE_FLAG" ]]; then
   if [[ -t 0 ]]; then
     echo ""
     echo "Where should quoin install?"
-    echo "  g) Global  — ~/.claude/  (all Claude Code sessions on this machine)"
-    echo "  p) Project — ./.claude/  (this project only)"
+    echo "  g) Global  — user scope: every Claude Code session on this machine"
+    echo "  p) Project — project scope: only sessions started in this folder"
     echo ""
     while true; do
       read -rp "Choose [g/p] (default: g): " _scope_answer
@@ -484,7 +447,7 @@ if [[ -z "$SCOPE_FLAG" ]]; then
       esac
     done
   else
-    echo "quoin: non-interactive mode — defaulting to --scope user (global ~/.claude/)" >&2
+    echo "quoin: non-interactive mode — defaulting to --scope user" >&2
     SCOPE_FLAG="--scope user"
   fi
 fi
@@ -492,19 +455,12 @@ fi
 # Build forwarded args for `quoin install` (array preserves paths with spaces)
 INSTALL_ARGS=("install" "--source-dir" "$SCRIPT_DIR")
 [[ -n "$DEV_FLAG" ]]              && INSTALL_ARGS+=("$DEV_FLAG")
-[[ -n "$FORCE_MERGE_FLAG" ]]      && INSTALL_ARGS+=("$FORCE_MERGE_FLAG")
-[[ -n "$NO_PRUNE_FLAG" ]]         && INSTALL_ARGS+=("$NO_PRUNE_FLAG")
 # Forward --scope flag (stored as "--scope value" string; split into two tokens)
 if [[ -n "$SCOPE_FLAG" ]]; then
   # Split "--scope value" into separate array elements (handles project:/path with colon)
   read -r _scope_key _scope_val <<< "$SCOPE_FLAG"
   INSTALL_ARGS+=("$_scope_key" "$_scope_val")
 fi
-if [[ -n "$CLAUDE_MD_VARIANT_FLAG" ]]; then
-  read -r _variant_key _variant_val <<< "$CLAUDE_MD_VARIANT_FLAG"
-  INSTALL_ARGS+=("$_variant_key" "$_variant_val")
-fi
-[[ -n "$ALLOW_HOOK_MERGE_FLAG" ]] && INSTALL_ARGS+=("$ALLOW_HOOK_MERGE_FLAG")
 if [[ -n "$AUTOCOMPACT_PCT_FLAG" ]]; then
   read -r _pct_key _pct_val <<< "$AUTOCOMPACT_PCT_FLAG"
   INSTALL_ARGS+=("$_pct_key" "$_pct_val")

@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -98,7 +98,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A0 — Consult the worktree-isolation decider FIRST (default is skip):
      Run via Bash:
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --decide
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --decide
      Isolation is opt-in (D-04): the decider prints `skip` unless
      QUOIN_WORKTREE_ISOLATION=on, the dispatch.json config opts in, or a prior probe
      wrote a `works` sentinel. If the output is `skip`, DO NOT write the sidecar and
@@ -109,8 +109,8 @@ Fail-graceful path with error-class triage (per architecture I-01):
 
   STEP A — Write the dispatch sidecar BEFORE calling the Agent tool:
      Run via Bash:
-       PROJECT_ROOT="$(python3 __QUOIN_HOME__/scripts/path_resolve.py --print-project-root)"
-       python3 __QUOIN_HOME__/scripts/dispatch_sidecar.py \
+       PROJECT_ROOT="$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --print-project-root)"
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_sidecar.py \
            --skill <skill-name> \
            --project-root "$PROJECT_ROOT" \
            --plan "<resolved-plan-path-or-empty>"
@@ -119,14 +119,14 @@ Fail-graceful path with error-class triage (per architecture I-01):
   STEP B — Phase 1: Agent dispatch WITH isolation: "worktree" (normal path):
      Call the Agent tool with isolation: "worktree" at the declared cheap-tier
      model (sonnet for this skill). The deployed WorktreeCreate hook at
-     __QUOIN_HOME__/hooks/worktreecreate.sh reads the sidecar, runs
+     ${CLAUDE_PLUGIN_ROOT}/hooks/worktreecreate.sh reads the sidecar, runs
      git_root_for_dispatch.py, and (when a single nested repo resolves)
      creates a worktree IN the nested git root and returns its path.
      One-time probe (opt-in path only): when the probe sentinel is still unknown,
      instruct the child to record its working directory to a marker; after the Agent
      returns, compare it to the created worktree path and persist the result exactly
      once via
-       python3 __QUOIN_HOME__/scripts/worktree_isolation.py --write-probe --result works|broken
+       python3 ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_isolation.py --write-probe --result works|broken
 
   STEP C — Phase 2 retry WITHOUT isolation (on Worktree-class error):
      If Phase 1 fails with a Worktree-class error (regex above), the hook
@@ -221,9 +221,9 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 ## Session bootstrap
 
 On start:
-0. Parse the `[no-interactive]` sentinel from the incoming prompt (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`). `/rollback` has no `[autonomous]` arm; when `_INTERACTIVE` is false the destructive-undo confirm (Step 4) FAILS CLOSED instead of proceeding. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
-1. Read `<task_dir>/current-plan.md` to understand task structure. Resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 2 below — NOT edited per D-03). If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
-2. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `rollback` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
+0. Parse the `[no-interactive]` sentinel from the incoming prompt (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`). `/rollback` has no `[autonomous]` arm; when `_INTERACTIVE` is false the destructive-undo confirm (Step 4) FAILS CLOSED instead of proceeding. See `${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
+1. Read `<task_dir>/current-plan.md` to understand task structure. Resolve `<task_dir>` via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md` (line 2 below — NOT edited per D-03). If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
+2. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `rollback` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
 
@@ -236,7 +236,7 @@ On start:
 ### Step 1: Understand the state
 
 Read:
-1. **The plan** — `<task_dir>/current-plan.md` to understand task structure (where `<task_dir>` is resolved per Session bootstrap step 1 via `python3 __QUOIN_HOME__/scripts/path_resolve.py`)
+1. **The plan** — `<task_dir>/current-plan.md` to understand task structure (where `<task_dir>` is resolved per Session bootstrap step 1 via `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py`)
 2. **Git log** — map recent commits to plan tasks (by commit message, branch, or scope)
 3. **Current diff** — any uncommitted changes that would be affected
 4. **Session state** — what phase we're in and what's been completed
@@ -339,9 +339,9 @@ source-mutating and user-invoked, so it never auto-confirms a destructive undo):
 or `AskUserQuestion` is unavailable — e.g. an Agent subagent, where it is not provisioned),
 a human cannot confirm this destructive operation: FAIL CLOSED — do NOT execute the rollback
 and do NOT default to "Confirm". Run
-`python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill rollback --site destructive-undo --reason "destructive rollback confirmation could not be surfaced" --resume-hint "re-run /rollback interactively"`,
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill rollback --site destructive-undo --reason "destructive rollback confirmation could not be surfaced" --resume-hint "re-run /rollback interactively"`,
 echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP. Rule doc:
-`__QUOIN_HOME__/memory/decision-gate-guard.md`.
+`${CLAUDE_PLUGIN_ROOT}/memory/decision-gate-guard.md`.
 
 If the user selects "Cancel": STOP. Tell the user: "Rollback cancelled. No changes were made."
 
@@ -383,7 +383,7 @@ git revert HEAD --no-edit
 ### Step 5: Update session state
 
 After rollback:
-- Update the session file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`) to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`: Current stage `rollback`, Next command `/implement`, rolled-back tasks back in Unfinished work
+- Update the session file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`) to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md`: Current stage `rollback`, Next command `/implement`, rolled-back tasks back in Unfinished work
 - Note the rollback as a Decisions made item
 - Update `.workflow_artifacts/memory/git-log.md` with the revert commits
 

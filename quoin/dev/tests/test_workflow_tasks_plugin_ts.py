@@ -29,14 +29,20 @@ TEST_CALL_RE = re.compile(r"^\s*test\(", re.MULTILINE)
 PASS_LINE_RE = re.compile(r"^\s*(\d+) pass\s*$", re.MULTILINE)
 
 
+
+def _claude():
+    # conftest puts a stub claude first on PATH; this test only runs the mod's
+    # own tests, so it uses the real CLI.
+    return os.environ.get("QUOIN_REAL_CLAUDE") or shutil.which("claude")
+
 def _skip_reason() -> Optional[str]:
     if os.environ.get("QUOIN_SKIP_PLUGIN_TS_TESTS") == "1":
         return "QUOIN_SKIP_PLUGIN_TS_TESTS=1"
-    if shutil.which("claude") is None:
+    if _claude() is None:
         return "claude CLI not found on PATH"
     try:
         probe = subprocess.run(
-            ["claude", "plugin", "test", "--help"],
+            [_claude(), "plugin", "test", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -69,6 +75,7 @@ def _statement_level_tests() -> int:
 
 def test_skip_reason_when_claude_absent(monkeypatch):
     monkeypatch.delenv("QUOIN_SKIP_PLUGIN_TS_TESTS", raising=False)
+    monkeypatch.delenv("QUOIN_REAL_CLAUDE", raising=False)
     monkeypatch.setattr(shutil, "which", lambda *_a, **_k: None)
     assert _skip_reason() is not None
 
@@ -98,7 +105,7 @@ def test_register_and_tasks_ts_pass(tmp_path):
     before = _snapshot(target)
     try:
         result = subprocess.run(
-            ["claude", "plugin", "test", str(target)],
+            [_claude(), "plugin", "test", str(target)],
             capture_output=True,
             text=True,
             timeout=120,

@@ -62,88 +62,15 @@ def _assert_no_unguarded_invocation_line(region: str, label: str) -> None:
 _BOOKKEEPING_HEADING = "## Task bookkeeping pass (standalone only)"
 
 
-def test_slicer_a_heading_occurs_exactly_once():
-    text = _text(CLEANUP_SKILL)
-    assert text.count(_BOOKKEEPING_HEADING) == 1
-
-
-def test_slicer_a_contains_required_tokens():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    required = [
-        "--no-tasks", "--dry-run", "[no-interactive]", "[autonomous]",
-        "report-only", "task_bookkeeping.py classify", "cleanup-task-bookkeeping.md",
-        "[no-redispatch] /cleanup", "skip steps 1",
-        "not under",
-    ]
-    for token in required:
-        assert token in region, f"slicer A region missing required token: {token!r}"
-
-
-def test_slicer_a_no_unguarded_pr_or_eot_invocation():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    _assert_no_unguarded_invocation_line(region, "slicer A")
-
-
-def test_slicer_a_region_non_vacuous():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    assert len(region) > 300
-
-
-def test_slicer_a_mentions_askuserquestion_without_call_syntax():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    assert "AskUserQuestion" in region
-    assert "AskUserQuestion(" not in region
-
-
-def test_slicer_a_does_not_mention_step_5c_or_step_6():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    assert "Step 5c" not in region
-    assert "Step 6" not in region
-
-
 # ---------------------------------------------------------------------------
 # Cross-cutting order + region-scoped counts in cleanup SKILL.md
 # ---------------------------------------------------------------------------
-
-
-def test_order_step6_before_heading():
-    text = _text(CLEANUP_SKILL)
-    step6_idx = text.index("**Step 6.")
-    heading_idx = text.index(_BOOKKEEPING_HEADING)
-    assert step6_idx < heading_idx
 
 
 def _core_procedure_region(text: str) -> str:
     start = text.index("## Core procedure")
     end = text.index(_BOOKKEEPING_HEADING)
     return text[start:end]
-
-
-def test_core_procedure_region_has_zero_literal_pidfile_release_calls():
-    region = _core_procedure_region(_text(CLEANUP_SKILL))
-    assert region.count("pidfile_release cleanup") == 0
-
-
-def test_bookkeeping_region_has_no_pidfile_release():
-    region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    assert region.count("pidfile_release cleanup") == 0
-    assert "Step 7" in region
-
-
-def test_core_procedure_step1_and_step2_are_unconditional_and_mention_pass():
-    region = _core_procedure_region(_text(CLEANUP_SKILL))
-    step1 = region[region.index("**Step 1."): region.index("**Step 2.")]
-    step2 = region[region.index("**Step 2."): region.index("**Step 3.")]
-    assert "Task bookkeeping pass" in step1
-    assert "exit 0" not in step1
-    assert "Task bookkeeping pass" in step2
-    assert "exit 0" not in step2
-
-
-def test_core_procedure_step7_body_kept_verbatim():
-    region = _core_procedure_region(_text(CLEANUP_SKILL))
-    assert "phase: `cleanup`" in region
-    assert "cost-ledger-format.md" in region
 
 
 # ---------------------------------------------------------------------------

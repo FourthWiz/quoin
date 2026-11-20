@@ -95,5 +95,5 @@ To stop automated refreshes:
 
 ## Deployment
 
-This file is deployed by `install.sh` to `__QUOIN_HOME__/memory/discovery-refresh-routine.md`.
+This file is deployed by `install.sh` to `${CLAUDE_PLUGIN_ROOT}/memory/discovery-refresh-routine.md`.
 It is registered in `TIER1_MEMORY_FILES` in `src/quoin/installer.py`.

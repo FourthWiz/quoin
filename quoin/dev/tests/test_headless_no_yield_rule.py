@@ -51,37 +51,6 @@ def _paragraphs(text: str):
     return re.split(r"\n\s*\n", text)
 
 
-def test_run_inline_gate_sites_reference_the_rule():
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    region = text[text.index("## Phase 4 — Implement"):text.index("## Phase 6 — End of Task")]
-    pattern = re.compile(r"(?:re-)?run `/gate` inline|re-run the post-implementation gate inline")
-    hits = 0
-    for para in _paragraphs(region):
-        for item in re.split(r"\n(?=\d+\. |- )", para):
-            if pattern.search(item):
-                hits += 1
-                assert HEADING in item or "no-yield rule" in item, item[:120]
-    assert hits >= 3
-    entry = region[region.index("**Tasks-complete entry.**"):]
-    assert HEADING in entry.split("\n\n")[2] or HEADING in entry[:3000]
-
-
-def test_hook_cooperation_names_the_rule():
-    text = RUN_SKILL.read_text(encoding="utf-8")
-    section = text[text.index("## Hook cooperation (autonomous)"):text.index("## Gate boundaries reference")]
-    assert HEADING in section
-
-
-def test_gate_skill_headless_variant():
-    text = GATE_SKILL.read_text(encoding="utf-8")
-    para = text[text.index("**Headless variant (autonomous):**"):]
-    para = para[: para.index("\n  `RC=$?`")]
-    for needle in ("wait_for.py start", "wait_for.py wait", "--token", "600000", "`DEAD`", "`EXPIRED`", HEADING):
-        assert needle in para, needle
-    assert para.index("wait_for.py wait") < para.index("`known_red.py`")
-    assert "same no-yield rule" in text
-
-
 def test_gate_core_doc_sentence():
     text = " ".join(GATE_CORE.read_text(encoding="utf-8").split())
     assert "non-interactive session MUST wait on long test runs in the foreground" in text

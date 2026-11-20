@@ -20,6 +20,7 @@ from fakes.fake_arm import fake_install_quoin
 from verified_standin import build_upstream, configure_env, git
 
 REPO = Path(__file__).resolve().parents[3]
+LEGACY_ARM = Path(__file__).parent / "fixtures" / "legacy_arm"
 BENCH = REPO / "quoin" / "benchmarks"
 PAIR = "simple-claude,quoin-claude"
 
@@ -44,11 +45,11 @@ def sandbox_parent(tmp_path, monkeypatch):
 
 @pytest.fixture
 def arm_repo(tmp_path):
-    """A throwaway git repository holding the installer and hook scripts of this checkout."""
+    """A throwaway git repository holding a pre-plugin arm's installer and hook scripts."""
     root = tmp_path / "arm"
     (root / "src" / "quoin").mkdir(parents=True)
-    shutil.copy(REPO / "src" / "quoin" / "installer.py", root / "src" / "quoin" / "installer.py")
-    shutil.copytree(REPO / "quoin" / "hooks", root / "quoin" / "hooks")
+    shutil.copy(LEGACY_ARM / "src" / "quoin" / "installer.py", root / "src" / "quoin" / "installer.py")
+    shutil.copytree(LEGACY_ARM / "quoin" / "hooks", root / "quoin" / "hooks")
     git(["init", "-q", "-b", "main"], root)
     git(["add", "-A"], root)
     git(["commit", "-q", "-m", "arm"], root)

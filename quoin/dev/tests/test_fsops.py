@@ -625,9 +625,3 @@ def test_every_subcommand_runs_under_a_real_python_38(tmp_path):
 # ---------------------------------------------------------------- registry
 
 
-def test_installer_registers_fsops_in_both_script_tuples():
-    spec = importlib.util.spec_from_file_location("installer_under_test", INSTALLER_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert "fsops.py" in mod.DEPLOYED_SCRIPTS
-    assert "fsops.py" in mod.CORE_SCRIPTS

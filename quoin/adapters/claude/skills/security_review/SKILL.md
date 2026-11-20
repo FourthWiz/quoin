@@ -10,126 +10,11 @@ model: opus
 
 You are a senior application-security reviewer using the strongest available model. Your job is a focused OWASP-style pass over the current branch's diff — injection, secrets exposure, authorization gaps, and dependency risk. You never edit source code, never push, and never invoke a downstream workflow phase. You can run standalone (invoked directly by a user) or as the dedicated security dimension of a Large-profile `/review` fan-out (invoked via the Fan-out contract below).
 
-## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
-
-This skill runs in the user's current session. If the session is polluted (high context from
-prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
-
-Detection:
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
-    It scores the current session transcript; threshold POLLUTION_THRESHOLD
-    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
-  - Output starting `OVER|`: session is polluted.
-  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
-
-Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
-  Determine dispatch contract fields:
-    - Locate `current-plan.md` in the task directory if resolvable (resolve via path_resolve.py); else target the standalone `.workflow_artifacts/security-review/` dir (D-07).
-    - Get the current git branch (`git rev-parse --abbrev-ref HEAD`) -- the OWASP-style security pass reviews this branch's diff.
-
-  If task description cannot be determined:
-    Emit: `[quoin-S-1: cannot extract per-skill dispatch contract; running in main]`
-    Proceed with skill body.
-
-  Otherwise spawn an Agent subagent:
-    model: "opus"
-    description: "security_review — pollution-isolated dispatch"
-    prompt: "[no-redispatch]\n/security_review\nBranch: <current git branch>\nOWASP security review -- Plan path: <absolute path to current-plan.md, if resolvable>"
-
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path:
-  Full AskUserQuestion Question/Header/description wording for every branch below:
-  memory/dispatch-guide.md §0' verbose reference ("Verbatim AskUserQuestion wording").
-  If Agent tool unavailable or errors — classify the error first:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0' dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-autonomous: §0' dispatch failed; proceeding fail-OPEN at current tier]` and proceed
-    with skill body (treat as bare [no-redispatch]).
-  - 1M-credit-class: if the error text contains the substring
-      `Usage credits required for 1M context`:
-      The §0' opus dispatch hit a 1M-context credit mismatch (IVG-89). Detection via
-      model-name is impossible; this post-dispatch error string is the only reliable signal.
-      Issue an `AskUserQuestion` — Option 1 label "Abort — I'll switch with /model first";
-      Option 2 label "Proceed in-session at parent tier".
-      On Option 1: print `[quoin: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /security_review]` and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin: 1M-context credit mismatch; proceeding in-session at
-      parent tier — run /model to switch to standard context for a permanent fix]` and
-      proceed with skill body.
-  - Any other error (non-1M): Issue an `AskUserQuestion` (generic wording; Option 1 = abort,
-      Option 2 = proceed in the current polluted session).
-      On Option 1: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and proceed with skill body.
-
-Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
-proceed to skill body.
-
-## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
-This skill is declared model: "opus". If the executing agent is running on a model
-strictly CHEAPER than opus, it silently up-dispatches to an Opus subagent (mirrors §0 down-dispatch).
-
-<!-- §0doubleprime-begin -->
-Detection:
-  - Read your current model from system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus. declared_tier = opus.
-  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
-    (silent skip — no advisory; this is explicit opt-out behavior by design).
-  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
-  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
-
-On fire (happy path — silent up-dispatch):
-  spawn an Agent subagent:
-    model: "opus"
-    description: "security_review — min-tier up-dispatch"
-    prompt: "[no-redispatch]\n<original user input verbatim>"
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
-description wording for every branch below: memory/dispatch-guide.md §0″ verbose reference
-("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0″ dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-mintier-autonomous: §0″ dispatch failed; proceeding fail-OPEN at current tier]` and
-    proceed to skill body (treat as bare [no-redispatch]).
-
-  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
-      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
-      §0″ verbose reference):
-        Option 1:
-          label: "Abort — I'll switch with /model first"
-        Option 2:
-          label: "Proceed in-session at parent tier"
-      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /security_review]` and STOP.
-      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on opus up-dispatch;
-      proceeding in-session at parent tier — run /model to switch to standard context]`
-      and proceed to skill body (treat as bare [no-redispatch]).
-
-  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
-        Option 1:
-          label: "Abort — run from an Opus session"
-        Option 2:
-          label: "Proceed at current tier (under-powered)"
-      On Option 1: print `[quoin-mintier: aborted; re-invoke /security_review from an Opus session]` and STOP.
-      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
-<!-- §0doubleprime-end -->
-
 ## Session bootstrap
 
 This skill tolerates a missing task context — a resolvable task is a bonus, not a requirement. On start:
 1. Get the current git branch: `git rev-parse --abbrev-ref HEAD`. This is the branch under review.
-2. Try to resolve a task directory: `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. If a task name/description is not determinable from the invocation context, this step is a no-op — proceed standalone.
+2. Try to resolve a task directory: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. If a task name/description is not determinable from the invocation context, this step is a no-op — proceed standalone.
 3. If a task dir resolved: read `<task_dir>/current-plan.md` (apply the §5.7.1 v3-format detection rule below) and `<task-root>/architecture.md` if present, for context only. Absence of either is a normal, non-blocking outcome.
 
 # v3-format detection (architecture.md §5.7.1 — copy verbatim)
@@ -144,10 +29,10 @@ This skill tolerates a missing task context — a resolvable task is a bonus, no
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-4. **Ledger rule (D-07):** if a task dir resolved, append your session to that task's own `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `review` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If no task is resolvable, create `.workflow_artifacts/security-review/` on demand and append to `.workflow_artifacts/security-review/cost-ledger.md` instead — same phase, same format, just rooted at the standalone dir.
+4. **Ledger rule (D-07):** if a task dir resolved, append your session to that task's own `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `review` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`. If no task is resolvable, create `.workflow_artifacts/security-review/` on demand and append to `.workflow_artifacts/security-review/cost-ledger.md` instead — same phase, same format, just rooted at the standalone dir.
 
 <!-- quoin:ledger-self-write -->
-5. Read deployed v3 references at session start: `__QUOIN_HOME__/memory/format-kit.md` and `__QUOIN_HOME__/memory/glossary.md`.
+5. Read deployed v3 references at session start: `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` and `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md`.
 6. Then proceed with the OWASP checklist below.
 
 ## Model requirement
@@ -181,11 +66,11 @@ Save the review to `security-review-<round>.md` in the resolved task dir (or `.w
 `security-review-<round>.md` is a Class B artifact per artifact-format-architecture v3 §4.1. Write it using the §5.3 5-step Class B mechanism:
 
 **Step 1: Body generation.**
-Read `__QUOIN_HOME__/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
+Read `${CLAUDE_PLUGIN_ROOT}/memory/format-kit-pitfalls.md` first — three pre-write reminders for V-04 (XML-shaped placeholders), V-05 (file-local IDs), V-06 (## For human ≤12 lines, Class B only). Apply the action-at-write-time bullet for each before composing the body.
 Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit.md §1; this is the only place these references apply, per lesson 2026-04-23):
-- `__QUOIN_HOME__/memory/format-kit.md` — primitives + standard sections per artifact type
-- `__QUOIN_HOME__/memory/glossary.md` — abbreviation whitelist + status glyphs
-- `__QUOIN_HOME__/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
+- `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` — primitives + standard sections per artifact type
+- `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` — abbreviation whitelist + status glyphs
+- `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` — prose discipline (compose with format-kit per §5)
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
@@ -197,11 +82,11 @@ Compose the format-aware body per the `security-review` artifact-type sections i
 - `## Recommendations` — terse list: what to do next.
 - `## Scope` — one line: branch name + diff basis used.
 
-Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
+Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
-Read the frozen prompt template from `__QUOIN_HOME__/memory/summary-prompt.md` using
+Read the frozen prompt template from `${CLAUDE_PLUGIN_ROOT}/memory/summary-prompt.md` using
 the Read tool. Read the artifact body from `<path>.body.tmp` using the Read tool.
 Compose the prompt as: <prompt-template-with-`<<<BODY>>>`-replaced-by-body-text>.
 
@@ -234,7 +119,7 @@ lesson 2026-04-24.)
 This guarantees exactly one `## For human` line regardless of Haiku output shape.
 
 **Step 4: Structural validation.**
-  `python3 __QUOIN_HOME__/scripts/validate_artifact.py <path>.tmp`
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py <path>.tmp`
 Filename auto-detection identifies type as `security-review` (matches `^security-review-` regex in `detect_type()`). Exit code 0 = PASS; non-zero = invariant failure.
 
 **Step 5: Retry / English-fallback (failure-class-aware).**
@@ -244,9 +129,9 @@ Filename auto-detection identifies type as `security-review` (matches `^security
   - **Step 4 V-06/V-07 failures:** Re-run Steps 2-4 once.
   - **Step 4 V-02/V-03/V-05 failures:** Re-run Steps 1-4 once with body-discipline instruction prepended.
   - **Step 4 V-01/V-04 failures:** Treat as body issues; re-run Steps 1-4.
-  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp"`.
+  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm "<path>.body.tmp"`.
 
-**Step 6: Atomic rename.** `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. Do NOT write a `.original.md` side-file.
+**Step 6: Atomic rename.** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. Do NOT write a `.original.md` side-file.
 
 ## After the review
 
@@ -265,7 +150,7 @@ Write session-state files in v3 format per the §5.4 Class A writer mechanism (m
 If a task dir resolved, at this skill's exit:
 
 At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
-to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+to the fixed schema in `${CLAUDE_PLUGIN_ROOT}/memory/session-schema.md` (rewrite the whole
 file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
 - Status: `completed`
 - Current stage: `security_review`

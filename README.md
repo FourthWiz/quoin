@@ -13,8 +13,8 @@ under `.workflow_artifacts/`.
 
 Quoin now has two runtime paths:
 
-- **Claude Code:** an installable global adapter that deploys skills, scripts,
-  hooks, memory files, and workflow rules to `~/.claude`.
+- **Claude Code:** a Claude Code plugin (`quoin@quoin`) carrying the skills,
+  scripts, hooks, memory files and workflow rules, installed by `quoin install`.
 - **Codex:** a repo-local scaffold that generates `AGENTS.md` and points Codex
   at portable workflow contracts. It uses native Codex planning, approvals,
   sandboxing, repo-scoped instructions, and model/reasoning controls.
@@ -49,16 +49,30 @@ Install the package:
 pip install quoin
 ```
 
-Install or update the Claude Code adapter:
+Install or update the Claude Code plugin:
 
 ```bash
 quoin install --runtime claude
 quoin doctor --runtime claude
 ```
 
-When `--scope` is not specified, the installer **prompts interactively** to ask
-whether to install globally (`~/.claude/`) or project-level (`./.claude/`). In
-non-interactive environments (CI, pipes), it defaults to global without prompting.
+Quoin ships as a Claude Code plugin. `quoin install` stages the plugin from the
+installed package (or from your checkout, for an editable install) under
+`~/.local/share/quoin/plugin`, registers that folder as the `quoin`
+marketplace, and installs or updates `quoin@quoin` through the `claude` CLI.
+Skills are then named `/quoin:<skill>`, and the short workflow rules reach every
+session through the plugin's SessionStart hook instead of `~/.claude/CLAUDE.md`.
+Restart Claude Code after an install or update.
+
+An earlier file-by-file install is removed on the way: every file its manifest
+lists goes unless you edited it, quoin's hook stanzas leave `settings.json`
+(other hooks stay), and the marked rules block leaves `~/.claude/CLAUDE.md`
+(your own lines stay). The last pre-plugin version stays installable from the
+`legacy` tag.
+
+When `--scope` is not specified, the installer **prompts interactively** for
+user or project scope. In non-interactive environments (CI, pipes), it defaults
+to user scope without prompting.
 
 `quoin install` and bare `quoin` remain backward-compatible aliases for the
 Claude install path.
@@ -79,7 +93,7 @@ local interpreter. The affected-area test runner reports such a venv by name.
 ### Auto-resume and the install record
 
 `quoin install` records the interpreter and source tree it ran from
-(`quoin-runtime.json`, next to the installed `.claude/` tree), so an
+(`quoin-runtime.json`, in the staged plugin folder), so an
 autonomous run's detached hand-off can relaunch the exact CLI you meant to
 run instead of guessing via `PATH`. Run `quoin install` with whichever
 interpreter or tool you actually use day to day — for a `uv tool install`
@@ -91,18 +105,17 @@ checks the record and names the exact fix when it's missing or stale.
 
 ### Claude install scope: user vs project
 
-The Claude adapter can be installed at two scopes:
-
-**User scope (global)** — installs to `~/.claude/`. Skills, hooks, and workflow
-rules are available in every Claude Code session on the machine.
+**User scope (default)** — the plugin loads in every Claude Code session on the
+machine, including sessions started inside a repository below a multi-repo
+project folder.
 
 ```bash
-quoin install --runtime claude --scope user   # explicit global, no prompt
+quoin install --runtime claude --scope user   # explicit user scope, no prompt
 ```
 
-**Project scope** — installs to `<project>/.claude/`. Skills and hooks activate
-only when Claude Code is opened in that directory. Hooks register in
-`<project>/.claude/settings.json` instead of your personal settings file.
+**Project scope** — the plugin is enabled in `<project>/.claude/settings.json`
+and loads only in sessions started in that folder, not in sessions started
+inside a repository below it.
 
 ```bash
 quoin install --runtime claude --scope project          # explicit project, no prompt
@@ -110,10 +123,6 @@ quoin install --runtime claude --scope project:/path    # explicit project root
 ```
 
 Pass `--scope` explicitly to skip the interactive prompt (useful in scripts and CI).
-
-> **Note:** Claude Code resolves personal scope (`~/.claude/skills/`) before
-> project scope. If you have a user-scope install, it will shadow a project-scope
-> install for skills. Run `quoin doctor --scope project` to detect conflicts.
 
 Generate the Codex repo-local scaffold:
 
@@ -135,13 +144,13 @@ quoin codex init --project-root .
 quoin codex init --project-root . --check
 ```
 
-Legacy source install for Claude remains supported (prompts for scope interactively):
+From a source checkout (prompts for scope interactively):
 
 ```bash
 git clone https://github.com/FourthWiz/quoin
 cd quoin
-bash quoin/install.sh                        # prompts: global or project?
-bash quoin/install.sh --scope user           # global, no prompt
+bash quoin/install.sh                        # prompts: user or project scope?
+bash quoin/install.sh --scope user           # user scope, no prompt
 bash quoin/install.sh --scope project        # project, no prompt
 ```
 
@@ -151,13 +160,13 @@ GitHub redirects the old `FourthWiz/claude_dev_workflow` URL to this repository.
 
 | Runtime | Setup command | Scope | Implemented behavior |
 |---------|---------------|-------|----------------------|
-| Claude Code | `quoin install --runtime claude` | Global adapter under `~/.claude` | Skills, scripts, hooks, memory files, short `CLAUDE.md` core rules (full rules in `memory/workflow-catalog.md`), slash-command workflow |
+| Claude Code | `quoin install --runtime claude` | Claude Code plugin, user scope | Skills, scripts, hooks, memory files, short `CLAUDE.md` core rules (full rules in `memory/workflow-catalog.md`), slash-command workflow |
 | Codex | `quoin install --runtime codex --project-root .` | Repo-local `AGENTS.md` | Portable artifact workflow, generated root instructions, readiness/smoke checks, handoff validation, cost event writer |
 
 The portable core is shared. Runtime-specific mechanics are adapter-owned:
 
-- Claude adapter files live under `quoin/adapters/claude/` and install to
-  `~/.claude`.
+- Claude adapter files live under `quoin/adapters/claude/`; `quoin/` is the
+  plugin root (`quoin/.claude-plugin/plugin.json`).
 - Codex adapter files live under `quoin/adapters/codex/` and are used from the
   repository. They are documentation, generated instructions, and validation
   scripts, not Codex command packages.
@@ -236,7 +245,7 @@ After installing the Claude adapter:
 chain instead; use it only for work that really needs that rigor.
 
 Claude-specific command behavior, model assignments, hook behavior, and
-cost-capture plumbing are documented in `quoin/CLAUDE.md`; the installed `~/.claude/CLAUDE.md` carries only the short core rules, with every section kept in `~/.claude/memory/workflow-catalog.md`.
+cost-capture plumbing are documented in `quoin/CLAUDE.md`; the plugin's SessionStart hook adds only the short core rules (`quoin/CLAUDE.slim.md`), with every section kept in the plugin's `memory/workflow-catalog.md`.
 
 ## Claude Skills
 

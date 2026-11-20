@@ -27,7 +27,7 @@ Detection:
       Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
+  - Run: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
     where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
     as shown in the dispatched-tier line immediately above).
   - If the command returns "safe-path" on line 1:
@@ -46,7 +46,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
       Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Return its output as your final response. STOP.
@@ -86,7 +86,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
 <!-- §0-1m-cachewrite-begin -->
       Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
+        python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
       (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
 <!-- §0-1m-cachewrite-end -->
       Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
@@ -159,11 +159,11 @@ Compose this advisory into the unified Step 1 banner; do NOT add a separate AskU
 
 Fail-silent if `.workflow_artifacts/memory/` is absent or unreadable — never error on missing dir.
 
-Note: the count operates on the project-local `.workflow_artifacts/memory/` path only; it needs no `__QUOIN_HOME__` reference.
+Note: the count operates on the project-local `.workflow_artifacts/memory/` path only; it needs no `${CLAUDE_PLUGIN_ROOT}` reference.
 
 ### Step 1c: Discovery & Serena staleness check
 
-Run `python3 __QUOIN_HOME__/scripts/discovery_staleness.py <project-root> --json` (fail-open if script absent — missing script = no advisory, not an error). Parse the JSON output to check:
+Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/discovery_staleness.py <project-root> --json` (fail-open if script absent — missing script = no advisory, not an error). Parse the JSON output to check:
 - `verdict`: `"stale"` or `"absent"` → discovery needs refresh
 - `serena.present_marker`: `true` AND `serena.stale`: `true` → Serena re-onboarding may be needed
 - `serena.present_marker`: `false` → absent marker (may need first-time onboarding — Step 6b will probe via ToolSearch)
@@ -183,7 +183,7 @@ Note: `QUOIN_DISCOVERY_AUTOREFRESH=1` allows /start_of_day to invoke `/discover`
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/start_of_day` is a lightweight daily-orientation skill. Append to the cost ledger only if a specific task context is clearly active (the user mentioned a task name or there's a clear active task from session state). If in doubt, skip cost recording — don't guess a task name. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `start-of-day` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/start_of_day` is a lightweight daily-orientation skill. Append to the cost ledger only if a specific task context is clearly active (the user mentioned a task name or there's a clear active task from session state). If in doubt, skip cost recording — don't guess a task name. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `start-of-day` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -269,7 +269,7 @@ Report each check result in the briefing's "## Since last session" section (matc
 Before Step 5 (Present the briefing), reconcile trusted state — never on a hardcoded line
 number, always immediately before this skill's own final report step.
 
-Run `python3 __QUOIN_HOME__/scripts/verify_claims.py --reconcile-tasks --project-root
+Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_claims.py --reconcile-tasks --project-root
 <project-root>` (live gh; this subsumes the existing Step 4 `gh pr list` call — derive any
 PR/task-status line you present in the briefing from THIS reconcile table, never from a
 daily-cache narrative alone).

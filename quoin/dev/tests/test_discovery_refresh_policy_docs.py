@@ -40,28 +40,12 @@ def test_claude_md_serena_block_has_refresh_pointer() -> None:
     )
 
 
-def test_adapter_discover_has_clock_reset_clause() -> None:
-    text = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
-    assert "Updated" in text, "Adapter discover SKILL.md must mention Updated column"
-    has_clock_reset = "all repos" in text.lower() or "including" in text.lower() or "skipped" in text.lower()
-    assert has_clock_reset, (
-        "Adapter discover SKILL.md must state Updated column is written for ALL repos including skipped"
-    )
-
-
 def test_core_discover_has_clock_reset_clause() -> None:
     text = _CORE_DISCOVER.read_text(encoding="utf-8")
     assert "Updated" in text, "Core discover.md must mention Updated column"
     has_clock_reset = "all repos" in text.lower() or "including" in text.lower()
     assert has_clock_reset, (
         "Core discover.md must state Updated column is written for ALL repos including skipped"
-    )
-
-
-def test_adapter_discover_mentions_staleness_trigger() -> None:
-    text = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
-    assert "S-5" in text or "staleness" in text.lower() or "session-start" in text.lower(), (
-        "Adapter discover SKILL.md must mention the session-start staleness trigger"
     )
 
 
@@ -87,36 +71,3 @@ def test_build_preambles_check_exits_0() -> None:
     )
 
 
-def test_discovery_dirty_marker_contract() -> None:
-    """/run writes and reads the marker, guards lessons, and /discover clears it."""
-    run_dir = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run"
-    run = (run_dir / "SKILL.md").read_text(encoding="utf-8")
-    # Step 2 is a light-route step, kept in the reference file /run reads on that route.
-    light = (run_dir / "light-pipeline.md").read_text(encoding="utf-8")
-    step2 = light.split("## Step 2 — Discover", 1)[1].split("## Step 3", 1)[0]
-    step8 = run.split("## Step 8 — Commit", 1)[1].split("## Escalation", 1)[0]
-    # Step 8 points at reference.md for the lessons procedure.
-    ref = (run_dir / "reference.md").read_text(encoding="utf-8")
-    lessons = ref.split("## Lessons", 1)[1].split("## Reclassify to r2", 1)[0]
-    assert "discovery-dirty" in step2
-    # The decision is scripted, not left to the model: Step 8's record call
-    # runs it, and the reference names the marker and the rules script.
-    assert "scripts/run_record.py" in step8 and "marks discovery stale" in step8
-    assert "discovery-dirty" in ref and "discovery_dirty.py" in ref
-    assert '"Lessons"' in step8
-    assert "lessons_guard.py" in lessons and "--no-strict-attrib" in lessons
-    discover = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
-    assert "fsops.py rm" in discover and "discovery-dirty" in discover
-
-
-def test_plain_route_runs_no_session_ceremony() -> None:
-    """r0/r1 write no session state, checkpoints, cost rows or run-state records."""
-    run_dir = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run"
-    run = (run_dir / "SKILL.md").read_text(encoding="utf-8")
-    plain = run.split("## Plain route (r0)", 1)[1].split("## Implementer tier guard", 1)[0]
-    record = run.split("## Step 5 — Implement", 1)[1].split("## Escalation", 1)[0]
-    r1 = (run_dir / "routes.md").read_text(encoding="utf-8").split("## r1 —", 1)[1]
-    for text in (plain, record, r1):
-        for token in ("cost-ledger", "run_state.py", "run-state-", "checkpoint",
-                      "memory/sessions/", "session_age_guard"):
-            assert token not in text, token

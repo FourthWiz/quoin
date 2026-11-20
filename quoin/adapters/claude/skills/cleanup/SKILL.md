@@ -2,6 +2,7 @@
 name: cleanup
 description: "Moves stale sentinels and old checkpoints to a recoverable trash folder. Use for: /cleanup [--dry-run] [--no-tasks]. Restore by manual mv, NOT /sleep --restore."
 model: sonnet
+context: fork
 ---
 
 # Cleanup
@@ -9,166 +10,6 @@ model: sonnet
 *Portable intent doc: `quoin/core/skills/cleanup.md`*
 
 You are the `/cleanup` skill. You trash-move stale workflow sentinels (all sessions except the freshest/current) and old checkpoint files into a recoverable `trash/<date>/` archive. You auto-fire from `/end_of_day` after its report.
-
-## §0 Model dispatch (FIRST STEP — execute before anything else)
-
-This skill is declared `model: sonnet`. If the executing agent is running on a model
-strictly more expensive than the declared tier, you MUST self-dispatch before doing the
-skill's actual work.
-
-Detection:
-  - Read your current model from the system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus.
-  - Sentinel parsing: the user's prompt is checked for the `[no-redispatch]` family.
-      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §1 at the current tier.
-      * Counter form `[no-redispatch:N]` where N is a positive integer ≥ 2: ABORT (see "Abort rule" below).
-      * Counter form `[no-redispatch:1]` is reserved and treated as bare `[no-redispatch]` for forward-compatibility; do not emit it.
-  - If current_tier > declared_tier AND prompt does NOT start with any `[no-redispatch]` form:
-      Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
-<!-- §0-1m-decide-begin -->
-Pre-dispatch 1M check (IVG-90 Layer 1+2):
-  - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
-    where <declared_tier> is the tier declared for this skill (e.g. "sonnet" or "haiku",
-    as shown in the dispatched-tier line immediately above).
-  - If the command returns "safe-path" on line 1:
-      Read the reason token from line 2 (config|cache|probe).
-      Emit the one-line advisory (verbatim, substituting <reason> with the line-2 token):
-        `[quoin: 1M-unsafe declared-tier per <reason>; running SAFE PATH without dispatch]`
-      Then proceed to §1/§0c at the current tier (treat as if [no-redispatch] were present).
-      Do NOT call the Agent dispatch. Do NOT call AskUserQuestion.
-  - If the command returns "dispatch" on line 1, OR if the script is missing / errors:
-      Continue to the Agent dispatch call below (today's path — fail-OPEN).
-<!-- §0-1m-decide-end -->
-      Spawn an Agent subagent with the following arguments:
-        model: "sonnet"
-        description: "cleanup dispatched at sonnet tier"
-        prompt: "[no-redispatch]\n<original user input verbatim>"
-      Wait for the subagent.
-<!-- §0-1m-cachewrite-begin -->
-      Cache the safe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result safe
-      (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
-<!-- §0-1m-cachewrite-end -->
-      Return its output as your final response. STOP.
-      (Return the subagent's output as your final response.)
-
-Abort rule (recursion guard):
-  - If the prompt starts with `[no-redispatch:N]` AND N ≥ 2: ABORT before any tool calls.
-  - Print the one-line error: `Quoin self-dispatch hard-cap reached at N=<N> in cleanup. This indicates a recursion bug; aborting before any tool calls. Re-invoke with [no-redispatch] (bare) to override.`
-  - Then stop. Do NOT proceed to §1.
-
-Manual kill switch:
-  - The user can prefix any user-typed slash invocation with bare `[no-redispatch]` to skip dispatch entirely (e.g., `[no-redispatch] /cleanup`).
-  - Why this is safe to share syntax with the parent-emit form: memory/dispatch-guide.md §0 verbose reference ("Why the bare [no-redispatch] sentinel is dual-source by design").
-  - Use this only when intentionally overriding the cost guardrail (e.g., for one-off debugging on a different tier).
-
-<!-- §0-worktree-fallback-begin -->
-Fail-graceful path with error-class triage (per architecture I-01):
-  - If the Agent tool returns an error during dispatch, classify the error
-    message text BEFORE proceeding:
-
-  - Error classification:
-      * Worktree-class: the error text contains the substring
-        `Cannot create agent worktree`, OR (the substring `worktree` AND
-        the substring `not in a git repository`). This is recoverable —
-        the harness tried to create a git worktree for isolation and the
-        project root is not a git repo. Continue to Worktree-class branch.
-      * Other-class: any other tool error, exception, or harness rejection
-        — skip to Other-class path below (existing fail-OPEN behavior).
-
-  - 1M-credit-class: if the error text contains the substring
-      `Usage credits required for 1M context`:
-      This is the 1M-context credit mismatch (IVG-89). The parent session carries
-      the `context-1m-2025-08-07` beta header which propagates to all subagent calls;
-      the declared-tier model lacks 1M credits. Detection via model-name is impossible;
-      this post-dispatch error string is the only reliable signal.
-      Emit (verbatim):
-        `[quoin: 1M-context credit mismatch on <tier> subagent dispatch; proceeding in-session at parent tier — run /model to switch this session to standard context for a permanent fix]`
-<!-- §0-1m-cachewrite-begin -->
-      Cache the unsafe result (best-effort):
-        python3 __QUOIN_HOME__/scripts/dispatch_config.py --write-cache --tier <declared_tier> --result unsafe
-      (Fail-OPEN: if the script errors or is missing, silently skip and continue.)
-<!-- §0-1m-cachewrite-end -->
-      Then proceed to §1 at the current tier (treat as if `[no-redispatch]` were present).
-      Do NOT retry the Agent dispatch. Do NOT call AskUserQuestion.
-
-
-  - Worktree-class branch:
-      Worktree creation is hook-driven and cannot be skipped by omitting a
-      parameter. Use the AskUserQuestion tool to present the user with one
-      option:
-        (c) `proceed-current-tier` — Skip dispatch, proceed at the current
-            (more expensive) tier. This is the only available recovery path.
-      Question header: `Subagent dispatch failed (worktree creation). Proceeding at current tier.`
-      Note for the user: "Worktree dispatch failed and no retry mechanism
-      is available — worktree creation is unconditional in this harness.
-      Proceeding at current tier."
-
-  - Other-class path (also: worktree-class after user acknowledges c):
-      Do NOT abort the user's invocation.
-      Emit the bare warning (verbatim):
-        `[quoin-stage-1: subagent dispatch unavailable; proceeding at current tier]`
-      If this path was reached via a worktree-class error, ALSO emit the
-      classification line (second, separate):
-        `[quoin-stage-1: error-class=worktree; user-choice=c; proceeding at current tier]`
-      Then proceed to §1 at the current tier (fail-OPEN per I-01).
-<!-- §0-worktree-fallback-end -->
-Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §1 (skill body).
-<!-- §0-end -->
-
-## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)
-This skill is declared model: "sonnet". If the executing agent is running on a model
-strictly CHEAPER than sonnet, it silently up-dispatches to a Sonnet subagent (mirrors §0 down-dispatch).
-
-<!-- §0tripleprime-begin -->
-Detection:
-  - Read your current model from system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus. declared_tier = sonnet.
-  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
-    (silent skip — no advisory; this is explicit opt-out behavior by design).
-  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
-  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
-  - Recursion: counter form `[no-redispatch:N]` (N≥2) never reaches this block — §0 (earlier in this file) aborts on N≥2 before any §0‴ tool call.
-
-On fire (happy path — silent up-dispatch):
-  spawn an Agent subagent:
-    model: "sonnet"
-    description: "cleanup — min-tier up-dispatch"
-    prompt: "[no-redispatch]\n<original user input verbatim>"
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
-description wording for every branch below: memory/dispatch-guide.md §0‴ verbose reference
-("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0‴ dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-mintier-autonomous: §0‴ dispatch failed; proceeding fail-OPEN at current tier]` and
-    proceed to skill body (treat as bare [no-redispatch]).
-
-  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
-      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
-      §0‴ verbose reference):
-        Option 1:
-          label: "Abort — I'll switch with /model first"
-        Option 2:
-          label: "Proceed in-session at parent tier"
-      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /cleanup]` and STOP.
-      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on sonnet up-dispatch;
-      proceeding in-session at parent tier — run /model to switch to standard context]`
-      and proceed to skill body (treat as bare [no-redispatch]).
-
-  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
-        Option 1:
-          label: "Abort — run from a Sonnet session"
-        Option 2:
-          label: "Proceed at current tier (under-powered)"
-      On Option 1: print `[quoin-mintier: aborted; re-invoke /cleanup from a Sonnet session]` and STOP.
-      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
-<!-- §0tripleprime-end -->
 
 ## When to use
 
@@ -186,11 +27,11 @@ Use `--dry-run` first to preview what would be trashed without making any moves.
 
 **Step 1. Resolve MEMORY_DIR:** `<cwd>/.workflow_artifacts/memory`. If the directory does not exist, emit `[cleanup] no memory dir; nothing to do` and skip to `## Task bookkeeping pass`.
 
-**Step 2. Source helpers:** `. __QUOIN_HOME__/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — skipping sentinel sweeps` and skip to `## Task bookkeeping pass` (fail-OPEN).
+**Step 2. Source helpers:** `. ${CLAUDE_PLUGIN_ROOT}/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — skipping sentinel sweeps` and skip to `## Task bookkeeping pass` (fail-OPEN).
 
 **Step 3. Acquire current/freshest session UUID:**
 - Priority 1: harness-provided system-context UUID.
-- Priority 2: stem of the most-recently-modified `__QUOIN_HOME__/projects/<project-hash>/<uuid>.jsonl` file. `<project-hash>` = project absolute path with `/` replaced by `-`.
+- Priority 2: stem of the most-recently-modified `${CLAUDE_PLUGIN_ROOT}/projects/<project-hash>/<uuid>.jsonl` file. `<project-hash>` = project absolute path with `/` replaced by `-`.
 - If UUID cannot be obtained: emit `[cleanup] current-session UUID unavailable; skipping sentinel sweep (fail-safe)` and **skip step 4 entirely**. Proceed directly to step 5 (checkpoint sweep). The age-only 30d checkpoint sweep is safe without UUID. NEVER fall back to age-only with any shorter floor for sentinels — if the current session cannot be identified, trash nothing from sentinel families.
 
 **Step 4. Sentinel sweep:** For each of the 2 hardcoded families listed in `## Hardcoded sentinel allow-list`, find candidates under `MEMORY_DIR` at depth 1:
@@ -238,7 +79,7 @@ For each candidate: `trash_move "<path>" "$MEMORY_DIR"`. Age-only — no UUID pr
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-**Step 7. Cost tracking (conditional, runs from `## Task bookkeeping pass`'s final step; not under `--dry-run`):** append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cleanup` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md` — IF task context is active (a `.workflow_artifacts/<task>/cost-ledger.md` exists at cwd). Skip if no task context (per Q-02: no ledger write when no task).
+**Step 7. Cost tracking (conditional, runs from `## Task bookkeeping pass`'s final step; not under `--dry-run`):** append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cleanup` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md` — IF task context is active (a `.workflow_artifacts/<task>/cost-ledger.md` exists at cwd). Skip if no task context (per Q-02: no ledger write when no task).
 
 <!-- quoin:ledger-self-write -->
 
@@ -246,9 +87,9 @@ If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-
 
 Runs after Core procedure Step 7 on a standalone `/cleanup`. The `/end_of_day` auto-fire passes `--no-tasks`, so no folder is ever moved from an automatic hook point. `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
 
-1. `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
+1. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
 2. `--dry-run`, `[no-interactive]`, `[autonomous]`, or no `AskUserQuestion`: print `[cleanup] task bookkeeping: report-only (<reason>); no folders moved`; when `<reason>` is the no-`AskUserQuestion` case (dispatched subagent), also print `to act on these rows, run: [no-redispatch] /cleanup`. Go to step 4.
-3. Else follow `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` (report-only if missing): per-task confirmation, moves only via its `apply` command, print `/pr` or `/end_of_task …` for the user — never invoke them.
+3. Else follow `${CLAUDE_PLUGIN_ROOT}/memory/cleanup-task-bookkeeping.md` (report-only if missing): per-task confirmation, moves only via its `apply` command, print `/pr` or `/end_of_task …` for the user — never invoke them.
 4. Step 7 (not under `--dry-run`; skip any folder moved above).
 
 ## --dry-run

@@ -9,7 +9,6 @@ manifest) as a substitute for this registration check.
 """
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
@@ -68,30 +67,7 @@ def test_routine_doc_states_end_of_task_is_primary() -> None:
 def test_routine_doc_has_no_literal_home_claude() -> None:
     text = _ROUTINE_DOC.read_text(encoding="utf-8")
     assert "~/.claude/" not in text, (
-        "eod-refresh-routine.md must use __QUOIN_HOME__ token, not literal ~/.claude/"
+        "eod-refresh-routine.md must use ${CLAUDE_PLUGIN_ROOT} token, not literal ~/.claude/"
     )
 
 
-def test_routine_doc_registered_in_tier1_memory_files() -> None:
-    """eod-refresh-routine.md must be in TIER1_MEMORY_FILES in installer.py.
-
-    TIER1_MEMORY_FILES is an allow-list, not a glob — both deploy_memory() and
-    compute_drift() iterate this SAME tuple (installer.py :15-46), and a new
-    memory/ file omitted from it silently never deploys (Round 2 MAJ-2).
-    """
-    source = _INSTALLER.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    tier1: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "TIER1_MEMORY_FILES":
-                    if isinstance(node.value, ast.Tuple):
-                        tier1 = [
-                            elt.value
-                            for elt in node.value.elts
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                        ]
-    assert "eod-refresh-routine.md" in tier1, (
-        "'eod-refresh-routine.md' not found in TIER1_MEMORY_FILES in installer.py"
-    )

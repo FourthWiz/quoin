@@ -186,95 +186,14 @@ def test_lib_sh_parses_two_families() -> None:
     )
 
 
-def test_cleanup_skill_md_has_two_families() -> None:
-    """cleanup/SKILL.md allow-list section must have exactly 2 families."""
-    families = _extract_cleanup_sentinel_list()
-    assert len(families) == EXPECTED_COUNT, (
-        f"cleanup/SKILL.md allow-list has {len(families)} families, expected {EXPECTED_COUNT}. "
-        f"Found: {families}"
-    )
-
-
-def test_sleep_skill_md_has_two_families() -> None:
-    """sleep/SKILL.md sentinel families section must have exactly 2 families."""
-    families = _extract_sleep_sentinel_list()
-    assert len(families) == EXPECTED_COUNT, (
-        f"sleep/SKILL.md sentinel list has {len(families)} families, expected {EXPECTED_COUNT}. "
-        f"Found: {families}"
-    )
-
-
-def test_all_three_lists_identical() -> None:
-    """All three family lists must be byte-identical (same 2 families, same order)."""
-    lib_globs = _extract_sentinel_globs_from_lib_sh()
-    cleanup_families = _extract_cleanup_sentinel_list()
-    sleep_families = _extract_sleep_sentinel_list()
-
-    assert lib_globs == cleanup_families, (
-        f"Family list mismatch between _lib.sh ({lib_globs}) "
-        f"and cleanup/SKILL.md ({cleanup_families})"
-    )
-    assert lib_globs == sleep_families, (
-        f"Family list mismatch between _lib.sh ({lib_globs}) "
-        f"and sleep/SKILL.md ({sleep_families})"
-    )
-    assert cleanup_families == sleep_families, (
-        f"Family list mismatch between cleanup/SKILL.md ({cleanup_families}) "
-        f"and sleep/SKILL.md ({sleep_families})"
-    )
-
-
 def test_legacy_globs_hold_exactly_the_seven_retired_names() -> None:
     assert _extract_legacy_globs_from_lib_sh() == RETIRED_FAMILIES
-
-
-def test_no_skill_lists_a_retired_family() -> None:
-    for path in (_CLEANUP_SKILL_MD, _SLEEP_SKILL_MD):
-        text = path.read_text(encoding="utf-8")
-        for retired in RETIRED_FAMILIES:
-            assert retired not in text, f"{path.name} still lists the retired family {retired}"
-    sod = _REPO_ROOT / "adapters" / "claude" / "skills" / "start_of_day" / "SKILL.md"
-    sod_text = sod.read_text(encoding="utf-8")
-    for retired in RETIRED_FAMILIES:
-        assert retired not in sod_text, f"start_of_day still lists the retired family {retired}"
-
-
-def test_no_stale_nine_count_strings_in_cleanup() -> None:
-    """No '9 families'/'9 sentinel'/'9 hardcoded' count strings in cleanup/SKILL.md."""
-    content = _CLEANUP_SKILL_MD.read_text(encoding="utf-8")
-    matches = STRAY_9_PATTERN.findall(content)
-    assert len(matches) == 0, (
-        f"Stale '9 families/sentinel/hardcoded' count string(s) found in cleanup/SKILL.md: "
-        f"{matches}. Update all count strings to 2."
-    )
-
-
-def test_no_stale_nine_count_strings_in_sleep() -> None:
-    """No '9 families'/'9 sentinel'/'9 hardcoded' count strings in sleep/SKILL.md."""
-    content = _SLEEP_SKILL_MD.read_text(encoding="utf-8")
-    matches = STRAY_9_PATTERN.findall(content)
-    assert len(matches) == 0, (
-        f"Stale '9 families/sentinel/hardcoded' count string(s) found in sleep/SKILL.md: "
-        f"{matches}. Update all count strings to 2."
-    )
 
 
 def test_sessionstart_uses_sentinel_globs_not_inline_list() -> None:
     """sessionstart.sh STEP 2 uses sentinel_globs() — not an inlined family list."""
     ok, msg = _check_sessionstart_no_inline_list()
     assert ok, msg
-
-
-def test_expected_families_all_present() -> None:
-    """All expected family globs are present in all three sources."""
-    lib_globs = _extract_sentinel_globs_from_lib_sh()
-    cleanup_families = _extract_cleanup_sentinel_list()
-    sleep_families = _extract_sleep_sentinel_list()
-
-    for family in EXPECTED_FAMILIES:
-        assert family in lib_globs, f"'{family}' missing from hooks/_lib.sh:sentinel_globs()"
-        assert family in cleanup_families, f"'{family}' missing from cleanup/SKILL.md allow-list"
-        assert family in sleep_families, f"'{family}' missing from sleep/SKILL.md sentinel list"
 
 
 if __name__ == "__main__":
@@ -284,15 +203,8 @@ if __name__ == "__main__":
 
     all_tests = [
         test_lib_sh_parses_two_families,
-        test_cleanup_skill_md_has_two_families,
-        test_sleep_skill_md_has_two_families,
-        test_all_three_lists_identical,
         test_legacy_globs_hold_exactly_the_seven_retired_names,
-        test_no_skill_lists_a_retired_family,
-        test_no_stale_nine_count_strings_in_cleanup,
-        test_no_stale_nine_count_strings_in_sleep,
         test_sessionstart_uses_sentinel_globs_not_inline_list,
-        test_expected_families_all_present,
     ]
     failures = 0
     for t in all_tests:

@@ -6,124 +6,9 @@ model: opus
 
 # Discover
 
-
 *Portable intent doc: `quoin/core/skills/discover.md`*
 
 You scan all repositories in the project folder and produce a structured inventory that gets saved to memory. This is the "onboarding" step — run it once when you set up the workflow, and again whenever the repo landscape changes.
-
-## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
-
-This skill runs in the user's current session. If the session is polluted (high context from
-prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
-
-Detection:
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
-  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
-    It scores the current session transcript; threshold POLLUTION_THRESHOLD
-    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
-  - Output starting `OVER|`: session is polluted.
-  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
-
-Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
-  Determine dispatch contract fields:
-    - Use the current working directory as the project root absolute path.
-
-  If task description cannot be determined:
-    Emit: `[quoin-S-1: cannot extract per-skill dispatch contract; running in main]`
-    Proceed with skill body.
-
-  Otherwise spawn an Agent subagent:
-    model: "opus"
-    description: "discover — pollution-isolated dispatch"
-    prompt: "[no-redispatch]\n/discover <project root absolute path>"
-
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path:
-  Full AskUserQuestion Question/Header/description wording for every branch below:
-  memory/dispatch-guide.md §0' verbose reference ("Verbatim AskUserQuestion wording").
-  If Agent tool unavailable or errors — classify the error first:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0' dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-autonomous: §0' dispatch failed; proceeding fail-OPEN at current tier]` and proceed
-    with skill body (treat as bare [no-redispatch]).
-  - 1M-credit-class: if the error text contains the substring
-      `Usage credits required for 1M context`:
-      The §0' opus dispatch hit a 1M-context credit mismatch (IVG-89). Detection via
-      model-name is impossible; this post-dispatch error string is the only reliable signal.
-      Issue an `AskUserQuestion` — Option 1 label "Abort — I'll switch with /model first";
-      Option 2 label "Proceed in-session at parent tier".
-      On Option 1: print `[quoin: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /discover]` and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin: 1M-context credit mismatch; proceeding in-session at
-      parent tier — run /model to switch to standard context for a permanent fix]` and
-      proceed with skill body.
-  - Any other error (non-1M): Issue an `AskUserQuestion` (generic wording; Option 1 = abort,
-      Option 2 = proceed in the current polluted session).
-      On Option 1: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and STOP. Do NOT proceed to skill body.
-      On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
-      and proceed with skill body.
-
-Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
-proceed to skill body.
-
-## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
-This skill is declared model: "opus". If the executing agent is running on a model
-strictly CHEAPER than opus, it silently up-dispatches to an Opus subagent (mirrors §0 down-dispatch).
-
-<!-- §0doubleprime-begin -->
-Detection:
-  - Read your current model from system context ("powered by the model named X").
-  - Tier order: haiku < sonnet < opus. declared_tier = opus.
-  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
-    (silent skip — no advisory; this is explicit opt-out behavior by design).
-  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
-  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
-
-On fire (happy path — silent up-dispatch):
-  spawn an Agent subagent:
-    model: "opus"
-    description: "discover — min-tier up-dispatch"
-    prompt: "[no-redispatch]\n<original user input verbatim>"
-  Wait for the subagent. Return its output as your final response. STOP.
-
-Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
-description wording for every branch below: memory/dispatch-guide.md §0″ verbose reference
-("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
-
-  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
-    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0″ dispatch-failure or
-    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
-    — skip the 1M-credit-class and generic branches below entirely. Print
-    `[quoin-mintier-autonomous: §0″ dispatch failed; proceeding fail-OPEN at current tier]` and
-    proceed to skill body (treat as bare [no-redispatch]).
-
-  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
-      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
-      §0″ verbose reference):
-        Option 1:
-          label: "Abort — I'll switch with /model first"
-        Option 2:
-          label: "Proceed in-session at parent tier"
-      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
-      switch with /model and re-invoke /discover]` and STOP.
-      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on opus up-dispatch;
-      proceeding in-session at parent tier — run /model to switch to standard context]`
-      and proceed to skill body (treat as bare [no-redispatch]).
-
-  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
-        Option 1:
-          label: "Abort — run from an Opus session"
-        Option 2:
-          label: "Proceed at current tier (under-powered)"
-      On Option 1: print `[quoin-mintier: aborted; re-invoke /discover from an Opus session]` and STOP.
-      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
-<!-- §0doubleprime-end -->
 
 ## Autonomous mode bootstrap
 
@@ -132,8 +17,7 @@ e.g. `[no-redispatch] [autonomous]`, since `run_hard` prefixes it onto this skil
 If present, set internal state `_AUTONOMOUS=true` for the remainder of this skill's execution;
 strip the sentinel before further parsing. Default `_AUTONOMOUS=false` (opt-in only).
 `_AUTONOMOUS` gates ONLY the repo main spec offer below (see "Repo main spec (optional offer)").
-It does not change §0'/§0″ dispatch behavior above (those are generated separately) or any
-other part of the scan.
+It does not change any other part of the scan.
 
 ## Model requirement
 
@@ -143,7 +27,7 @@ Uses the strongest model (Opus) because understanding how services relate requir
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-Cost tracking (conditional): `/discover` can run standalone (no task context) or as part of a task via `/run`. Only append to the cost ledger if a task name was explicitly provided or is determinable from the invocation context. If running standalone, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `discover` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`.
+Cost tracking (conditional): `/discover` can run standalone (no task context) or as part of a task via `/run`. Only append to the cost ledger if a task name was explicitly provided or is determinable from the invocation context. If running standalone, skip cost recording. If the condition holds: append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `discover` — format/rules: `${CLAUDE_PLUGIN_ROOT}/memory/cost-ledger-format.md`.
 
 <!-- quoin:ledger-self-write -->
 
@@ -158,7 +42,7 @@ Before scanning each repo, check if a previous scan recorded the repo's HEAD com
 3. **If `.workflow_artifacts/memory/discovery-dirty` exists, skip this check and fully scan every repo.** `/run` leaves that marker after a commit that changed the project's structure, which can change how other, unchanged repos depend on it.
    **Otherwise, if HEAD matches the stored value: skip the full scan for that repo.** Its inventory, dependencies, and API surface have not changed. Report to the user: "Skipping <repo-name> — unchanged since last scan (HEAD: <short-hash>)."
 4. **If HEAD differs or no stored value exists: perform the full scan** as described below.
-5. After completing all scans, write `.workflow_artifacts/cache/_staleness.md` with the current HEAD values for all repos (including unchanged ones). **Clock-reset invariant (D-06): always write the current run timestamp to the `Updated` column for ALL repos on every run, including repos whose HEAD was unchanged and whose scan was skipped.** This resets the staleness clock even when no content changes — so a near-free incremental scan does not leave the discovery memory appearing stale. Without this invariant, a project whose repos never change would trigger the session-start staleness banner (`S-5`) on every session. Create the `.workflow_artifacts/cache/` directory if it does not exist. Also write `.workflow_artifacts/memory/repo-heads.md` with the same data (backward compatibility — `/architect` and `/run` may still read it until they are updated in later stages). Then, if every repo scan succeeded, delete the discovery-dirty marker with `python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/memory/discovery-dirty"`; if any scan failed, leave it so the next run retries.
+5. After completing all scans, write `.workflow_artifacts/cache/_staleness.md` with the current HEAD values for all repos (including unchanged ones). **Clock-reset invariant (D-06): always write the current run timestamp to the `Updated` column for ALL repos on every run, including repos whose HEAD was unchanged and whose scan was skipped.** This resets the staleness clock even when no content changes — so a near-free incremental scan does not leave the discovery memory appearing stale. Without this invariant, a project whose repos never change would trigger the session-start staleness banner (`S-5`) on every session. Create the `.workflow_artifacts/cache/` directory if it does not exist. Also write `.workflow_artifacts/memory/repo-heads.md` with the same data (backward compatibility — `/architect` and `/run` may still read it until they are updated in later stages). Then, if every repo scan succeeded, delete the discovery-dirty marker with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm ".workflow_artifacts/memory/discovery-dirty"`; if any scan failed, leave it so the next run retries.
 
 **Session-start staleness trigger:** the `S-5` sessionstart.sh hook and `/start_of_day` Step 1c read this `Updated` timestamp to determine whether discovery memory is stale. Run `/discover` when the session-start banner fires, or when repos have changed significantly.
 
@@ -186,7 +70,7 @@ Before the per-repo inventory, run one project-wide check for accidental nested/
 
 ```
 PROJECT_ROOT="$(pwd)"
-python3 __QUOIN_HOME__/scripts/nested_root_check.py --project-root "$PROJECT_ROOT" --format text
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/nested_root_check.py --project-root "$PROJECT_ROOT" --format text
 ```
 
 Non-blocking — NEVER fails `/discover` (fail-OPEN). Exit 1 lists offending nested roots; fold those paths into the final user-facing summary (below). Exit 0 → single canonical root, nothing to report. Exit 2/3 or script missing → skip silently.
@@ -252,7 +136,7 @@ Use subagents to scan repos in parallel when possible.
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write `repos-inventory.md`, `architecture-overview.md`, `dependencies-map.md`, and `git-log.md` in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives — markdown table for the per-repo inventory rows; caveman prose for architecture-overview narrative; markdown table for dependencies-map rows; terse numbered list with date-prefixes for git-log entries), `__QUOIN_HOME__/memory/glossary.md` (abbreviation whitelist), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline inside narrative sections of architecture-overview). Per-file primitive picks: `repos-inventory.md` → markdown table for the per-repo rows; `architecture-overview.md` → caveman prose + ASCII diagram; `dependencies-map.md` → markdown table for cross-service deps + terse list for shared resources; `git-log.md` → terse numbered list grouped by repo+branch. After composing each file's body to `{path}.body.tmp`, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {path}.tmp` (filename auto-detection — each file matches its named type per T-15 format-kit.sections.json additions). On V-failure: retry-once with primitive-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename per the standard Step 6 graceful pattern. Write all cache entries (`_index.md`, `_deps.md`, file-stem entries) per the CLAUDE.md "Knowledge cache" schema (frontmatter with path/hash/updated/updated_by/tokens, then sections: Purpose, Key Exports, Dependencies, Patterns, Integration Points, Notes) — the cache schema pre-dates format-kit and has its own enforced shape; do NOT apply format-kit primitives to cache entries.
+Write `repos-inventory.md`, `architecture-overview.md`, `dependencies-map.md`, and `git-log.md` in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` (primitives — markdown table for the per-repo inventory rows; caveman prose for architecture-overview narrative; markdown table for dependencies-map rows; terse numbered list with date-prefixes for git-log entries), `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` (abbreviation whitelist), `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` (prose discipline inside narrative sections of architecture-overview). Per-file primitive picks: `repos-inventory.md` → markdown table for the per-repo rows; `architecture-overview.md` → caveman prose + ASCII diagram; `dependencies-map.md` → markdown table for cross-service deps + terse list for shared resources; `git-log.md` → terse numbered list grouped by repo+branch. After composing each file's body to `{path}.body.tmp`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py {path}.tmp` (filename auto-detection — each file matches its named type per T-15 format-kit.sections.json additions). On V-failure: retry-once with primitive-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename per the standard Step 6 graceful pattern. Write all cache entries (`_index.md`, `_deps.md`, file-stem entries) per the CLAUDE.md "Knowledge cache" schema (frontmatter with path/hash/updated/updated_by/tokens, then sections: Purpose, Key Exports, Dependencies, Patterns, Integration Points, Notes) — the cache schema pre-dates format-kit and has its own enforced shape; do NOT apply format-kit primitives to cache entries.
 
 Save all findings to `<project-folder>/.workflow_artifacts/memory/`:
 
@@ -509,7 +393,7 @@ Report the warning counts in the "After scanning" summary (see below).
 For each repo that was scanned (not skipped), generate a token-budgeted, reference-ranked symbol map. It needs no Serena; it uses tree-sitter grammars when installed and a standard-library parser otherwise:
 
 ```
-python3 __QUOIN_HOME__/scripts/repo_map.py --repo "<repo path>" --name "<repo-name>" --out ".workflow_artifacts/cache/<repo-name>/repo-map.md"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/repo_map.py --repo "<repo path>" --name "<repo-name>" --out ".workflow_artifacts/cache/<repo-name>/repo-map.md"
 ```
 
 Budget: `QUOIN_REPOMAP_TOKENS` (default 1000). Non-blocking, fail-OPEN: a non-zero exit or a missing script means skip silently and leave any previous map in place. Skipped repos keep their existing map; it is refreshed on the next scan of that repo.
@@ -529,7 +413,7 @@ After writing the four markdown files (`repos-inventory.md`, `architecture-overv
 `dependencies-map.md`, `git-log.md`) and verifying cache writes, invoke:
 
 ```
-python3 __QUOIN_HOME__/scripts/generate_discovery_map.py "$PROJECT_ROOT" --quiet
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_discovery_map.py "$PROJECT_ROOT" --quiet
 ```
 
 This emits a structured `discovery-map.json` index at
@@ -542,7 +426,7 @@ the authoritative source.
 
 **Suppression guard FIRST (self-clear-on-honor):** check for the bootstrap marker file `.workflow_artifacts/.init-bootstrap-active`. If it EXISTS:
 1. Suppress this entire offer.
-2. Immediately DELETE the marker as part of this same step: `python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`.
+2. Immediately DELETE the marker as part of this same step: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`.
 
 This self-clear IS the stale-recovery mechanism — it bounds the marker's lifetime to exactly one `/discover` invocation, so even if a prior `/init_workflow` aborted before its Step-6.7 cleanup (e.g. the Step-6.5 Serena "Install Serena" session-restart path), the NEXT `/discover` consumes-and-clears the marker instead of suppressing the offer forever. After clearing, print one advisory line that does NOT assert an active bootstrap (accurate whether the marker came from a live bootstrap or was consumed as stale):
 
@@ -558,10 +442,10 @@ Only when the marker is ABSENT does the offer proceed:
 
 - If `.workflow_artifacts/spec.md` is ABSENT: `AskUserQuestion` offering to DRAFT a repo main spec from the freshly discovered structure plus a short user prompt ("what is this repo about?").
   - Decline → one-line advisory, no file, no error.
-  - Accept → compose the five repo-spec headings (`## Context`, `## Goals`, `## Capabilities`, `## Acceptance criteria`, `## Non-goals`) grounded in the just-written inventory files, write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0.
+  - Accept → compose the five repo-spec headings (`## Context`, `## Goals`, `## Capabilities`, `## Acceptance criteria`, `## Non-goals`) grounded in the just-written inventory files, write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0.
 - If `.workflow_artifacts/spec.md` EXISTS: `AskUserQuestion` offering to REFRESH it from the current structure.
   - On accept, draft the updated spec, surface a DIFF against the existing file, and require explicit confirmation before writing — never overwrite silently.
-  - On confirm, write `<path>.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"`, then `validate_artifact.py` exit 0.
+  - On confirm, write `<path>.tmp` with the Write tool, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fsops.py mv "<path>.tmp" "<path>"`, then `validate_artifact.py` exit 0.
   - Decline → one-line advisory, no write, no error.
 
 Tell the user:

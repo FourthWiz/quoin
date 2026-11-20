@@ -10,7 +10,6 @@ The guard excludes the '## Claude-Specific Capture' section of cost-ledger.md
 import re
 from pathlib import Path
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -192,21 +191,3 @@ def test_spend_monitor_py_no_new_adapter_import_beyond_documented_sibling():
 _COST_ATTRIBUTION_TERMS = ["agent_transcript_cost", "cost_ledger_summary"]
 
 
-def test_core_scripts_directory_never_imports_cost_attribution_adapter_modules():
-    assert CORE_SCRIPTS_DIR.exists(), f"expected core scripts dir at {CORE_SCRIPTS_DIR}"
-    offenses = []
-    for py_file in sorted(CORE_SCRIPTS_DIR.glob("*.py")):
-        source = py_file.read_text(encoding="utf-8")
-        import_lines = [
-            line for line in source.splitlines()
-            if re.match(r"^\s*(from|import)\s+", line)
-        ]
-        for term in _COST_ATTRIBUTION_TERMS:
-            for line in import_lines:
-                if term in line:
-                    offenses.append((py_file.name, term, line.strip()))
-    assert offenses == [], (
-        "quoin/core/scripts/ must never import the Claude-adapter-owned "
-        "cost-attribution resolver/pricer/backfill modules (D-04/R-05):\n"
-        + "\n".join(f"  {f}: {term!r} in {ln!r}" for f, term, ln in offenses)
-    )
