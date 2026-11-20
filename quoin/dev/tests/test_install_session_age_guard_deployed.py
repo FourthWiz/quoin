@@ -54,12 +54,10 @@ def test_install_deploys_session_age_guard(tmp_path):
         f"install.sh did not deploy session_age_guard.py — expected at {deployed}"
     )
 
-    # Byte-identical to source
     assert deployed.read_bytes() == SCRIPT_SRC.read_bytes(), (
         "Deployed session_age_guard.py is not byte-identical to quoin/scripts/session_age_guard.py"
     )
 
-    # Executable
     assert os.access(str(deployed), os.X_OK), (
         f"Deployed session_age_guard.py is not executable at {deployed}"
     )
@@ -73,7 +71,6 @@ def test_install_is_deterministic(tmp_path):
 
     first_content = deployed.read_bytes()
 
-    # Run a second time
     _run_install(tmp_path)
     second_content = deployed.read_bytes()
 

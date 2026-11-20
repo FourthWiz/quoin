@@ -43,7 +43,6 @@ def _extract_section(text: str, heading: str) -> str:
     The original text (with code fences) is returned so sentinel phrases inside
     prose blocks are still found.
     """
-    # Locate the heading in the original text
     pattern = re.compile(
         rf"^{re.escape(heading)}\s*$",
         re.MULTILINE | re.IGNORECASE,

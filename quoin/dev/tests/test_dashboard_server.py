@@ -300,7 +300,6 @@ class TestPortAndStartup:
                     break
             assert url_line is not None, "No URL= line printed within 5 seconds"
             assert url_line.startswith("URL=http://127.0.0.1:")
-            # Verify the port is real (>0)
             port_str = url_line.split(":")[-1]
             assert int(port_str) > 0
         finally:
@@ -458,7 +457,6 @@ class TestUrlFileAndSighup:
             stderr=subprocess.PIPE,
         )
         try:
-            # Poll url-file for up to 5 seconds
             deadline = time.time() + 5
             url_content = None
             while time.time() < deadline:
@@ -515,7 +513,6 @@ class TestUrlFileAndSighup:
                     break
             assert url_line is not None, "Server did not print URL= line within 5s"
 
-            # Send SIGHUP to the process.
             proc.send_signal(signal_mod.SIGHUP)
 
             # Assert the process shuts down within 5 seconds.
@@ -620,7 +617,6 @@ class TestETag304Tasks:
 
         server, _ = _start_server(proj)
         try:
-            # Patch scan_tasks on the module
             _DS.scan_tasks = counting_scan  # type: ignore[attr-defined]
 
             # First request — populates ETag; scan_tasks called once

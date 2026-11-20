@@ -81,11 +81,8 @@ def test_run_injects_no_interactive_non_autonomous_only():
     run = (ADAPTER_SKILLS_DIR / "run_hard" / "SKILL.md").read_text(encoding="utf-8")
     assert "[no-interactive]" in run
     assert "Non-interactive fail-closed propagation" in run
-    # thorough_plan explicitly excluded
     assert "thorough_plan" in run and "excluded" in run.lower()
-    # inline gates excluded
     assert "INLINE-GATE EXCLUSION" in run
-    # mutual exclusivity with [autonomous]
     assert "mutually exclusive" in run.lower()
 
 

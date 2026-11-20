@@ -42,7 +42,6 @@ def test_pitfalls_has_exactly_three_vnn_sections():
 
 def test_pitfalls_each_section_has_action_bullet():
     content = PITFALLS_FILE.read_text(encoding="utf-8")
-    # Find all "Before composing" occurrences (case-insensitive)
     bullets = re.findall(r"^Before composing", content, re.MULTILINE | re.IGNORECASE)
     assert len(bullets) == 3, (
         f"Expected 3 'Before composing' action bullets (one per V-NN), found {len(bullets)}"

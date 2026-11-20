@@ -42,7 +42,6 @@ from typing import Optional
 from ..config import BudgetSpec
 from .simple_codex import _get_codex_model, _build_codex_prompt, PINNED_CODEX_MODEL
 
-# Path to AGENTS.md source within the quoin repo
 _AGENTS_MD_RELATIVE = "AGENTS.md"
 
 
@@ -165,7 +164,6 @@ def invoke(
     model = _get_codex_model()
     base_prompt = _build_codex_prompt(task_spec)
 
-    # Prepend a brief quoin guidance reference to the prompt
     prompt = (
         "Please review QUOIN_WORKFLOW.md and AGENTS.md (if present in this "
         "repository) for workflow guidance before starting. Then:\n\n"
@@ -189,7 +187,6 @@ def invoke(
         "verdict": None,
     }
 
-    # Bootstrap quoin-codex environment in worktree
     _bootstrap_quoin_codex_environment(workdir, quoin_repo_root)
 
     prompt_file = workdir / ".bench_prompt.txt"

@@ -82,7 +82,6 @@ def _update_session_state(
         skip_next = False
         for line in lines:
             if skip_next:
-                # Replace the old stage value line
                 out.append(f"{stage}\n")
                 skip_next = False
                 continue

@@ -28,17 +28,14 @@ END_OF_TASK_SKILL   = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "
 def test_cost_snapshot_has_fallback_wiring():
     text = COST_SNAPSHOT_SKILL.read_text()
 
-    # Per-UUID mode must be referenced
     assert "cost_from_jsonl.py session -i" in text, (
         "cost_snapshot SKILL.md missing per-UUID fallback: "
         "'cost_from_jsonl.py session -i'"
     )
-    # Bulk mode must be referenced
     assert "cost_from_jsonl.py session --json --since" in text, (
         "cost_snapshot SKILL.md missing bulk fallback: "
         "'cost_from_jsonl.py session --json --since'"
     )
-    # Fallback notice template must appear
     assert "[fallback: cost_from_jsonl.py — prices as of" in text, (
         "cost_snapshot SKILL.md missing fallback notice template"
     )
@@ -58,17 +55,14 @@ def test_cost_snapshot_has_fallback_wiring():
 def test_end_of_task_has_fallback_wiring():
     text = END_OF_TASK_SKILL.read_text()
 
-    # Per-UUID mode must be referenced
     assert "cost_from_jsonl.py session -i" in text, (
         "end_of_task SKILL.md missing per-UUID fallback: "
         "'cost_from_jsonl.py session -i'"
     )
-    # Bulk mode must be referenced
     assert "cost_from_jsonl.py session --json --since" in text, (
         "end_of_task SKILL.md missing bulk fallback: "
         "'cost_from_jsonl.py session --json --since'"
     )
-    # Fallback notice template must appear
     assert "[fallback: cost_from_jsonl.py — prices as of" in text, (
         "end_of_task SKILL.md missing fallback notice template"
     )
@@ -122,7 +116,6 @@ def test_install_sh_deploys_cost_from_jsonl():
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from quoin import installer  # noqa: PLC0415
 
-    # cost_from_jsonl.py must be in DEPLOYED_SCRIPTS constant
     assert "cost_from_jsonl.py" in installer.DEPLOYED_SCRIPTS, (
         "installer.DEPLOYED_SCRIPTS does not include 'cost_from_jsonl.py'. "
         "The Python installer must deploy all scripts that install.sh used to deploy."

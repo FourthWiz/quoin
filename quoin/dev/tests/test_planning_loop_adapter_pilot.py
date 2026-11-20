@@ -164,12 +164,10 @@ def test_revise_revise_fast_portable_doc_lines_byte_equal():
 
     def _extract_portable_lines(text: str) -> list:
         """Extract the portable-doc and see-also lines from between H1 and first H2."""
-        # Find H1
         h1_match = re.search(r"^# Revise\s*$", text, re.MULTILINE)
         if not h1_match:
             return []
         after_h1 = text[h1_match.end():]
-        # Find first H2
         h2_match = re.search(r"^## ", after_h1, re.MULTILINE)
         between = after_h1[:h2_match.start()] if h2_match else after_h1
         lines = [ln for ln in between.splitlines() if portable_doc_marker in ln or see_also_marker in ln]

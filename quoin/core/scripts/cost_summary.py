@@ -104,7 +104,6 @@ def normalize_total(data: dict) -> Tuple[Optional[float], bool]:
         is_partial = True
     if data.get("fallback_note"):
         is_partial = True
-    # Any top-level *_partial key that is True
     for k, v in data.items():
         if k.endswith("_partial") and v is True:
             is_partial = True

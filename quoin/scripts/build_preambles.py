@@ -246,7 +246,6 @@ def run_check() -> int:
             stale.append(f"{skill}: preamble.md missing")
             continue
         content = preamble_path.read_text(encoding="utf-8")
-        # Parse frontmatter
         if not content.startswith("---\n"):
             stale.append(f"{skill}: malformed frontmatter (no opening ---)")
             continue

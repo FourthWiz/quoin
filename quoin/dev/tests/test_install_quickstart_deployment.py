@@ -77,7 +77,6 @@ def test_install_sh_deploys_quickstart():
             f"QUICKSTART.md was incorrectly deployed under ~/.claude/memory/ (should be at root)"
         )
 
-        # Byte-identical to source
         source_bytes = QUICKSTART_SRC.read_bytes()
         deployed_bytes = deployed.read_bytes()
         assert source_bytes == deployed_bytes, (

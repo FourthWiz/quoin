@@ -56,7 +56,6 @@ def _extract_sentinel_globs_from_lib_sh() -> list[str]:
     Parse the function body, collect *-*.txt tokens in order.
     """
     content = _LIB_SH.read_text(encoding="utf-8")
-    # Find the sentinel_globs() function body
     match = re.search(
         r"sentinel_globs\(\)\s*\{(.*?)\n\}", content, re.DOTALL
     )

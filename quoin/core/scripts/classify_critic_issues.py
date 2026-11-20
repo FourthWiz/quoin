@@ -278,7 +278,6 @@ def parse_critic_response(path: str) -> List[Issue]:
     current_issue: Optional[Issue] = None
 
     for idx, line in enumerate(lines, start=1):
-        # Track ## Issues H2 block
         if re.match(r'^##\s+Issues\s*$', line):
             in_issues_h2 = True
             in_severity_h3 = False
@@ -295,7 +294,6 @@ def parse_critic_response(path: str) -> List[Issue]:
         if not in_issues_h2:
             continue
 
-        # Track severity H3 sub-sections
         if _ANY_H3.match(line):
             sev = _parse_severity_h3(line)
             in_severity_h3 = sev is not None
@@ -306,7 +304,6 @@ def parse_critic_response(path: str) -> List[Issue]:
         if not in_severity_h3:
             continue
 
-        # Top-level issue bullet
         if _TOP_BULLET.match(line):
             parsed = _parse_bullet(line, current_severity)
             if parsed is None:
@@ -321,7 +318,6 @@ def parse_critic_response(path: str) -> List[Issue]:
             issues.append(current_issue)
             continue
 
-        # Sub-bullet: body text or Class: field
         if current_issue is not None and line.strip().startswith('-'):
             class_m = _CLASS_LINE.match(line)
             if class_m:
@@ -331,7 +327,6 @@ def parse_critic_response(path: str) -> List[Issue]:
         elif current_issue is not None and line.strip():
             current_issue.body += ' ' + line.strip()
 
-    # Infer surface family and classify each issue
     for issue in issues:
         issue.surface_family, issue.surface_source = _infer_surface_family(issue)
 
@@ -349,7 +344,6 @@ def canary_precondition(plan_text: str, mechanical_issues: List[Issue]) -> bool:
     surface_source == 'default-structural' is treated as structural (blocks
     bailout), not matched against any canary.
     """
-    # Extract the ## Tasks section from the plan
     tasks_match = re.search(
         r'^##\s+Tasks\s*$(.+?)(?=^##\s+\S|\Z)',
         plan_text,
@@ -369,7 +363,6 @@ def canary_precondition(plan_text: str, mechanical_issues: List[Issue]) -> bool:
         family = issue.surface_family
         pattern = _CANARY_PATTERNS.get(family, _CANARY_FALLBACK)
 
-        # Look for a canary task whose acceptance bullet matches the pattern
         if not pattern.search(tasks_text):
             return False
 
@@ -425,7 +418,6 @@ def main():
 
     crit_maj = [i for i in issues if i.severity in ('CRITICAL', 'MAJOR')]
 
-    # Classify each CRIT/MAJ as mechanical or structural
     structural = []
     mechanical = []
     for issue in crit_maj:
@@ -434,7 +426,6 @@ def main():
         else:
             structural.append(issue)
 
-    # Determine verdict
     verdict = 'CONTINUE-LOOP'
     if args.enable_bailout and len(structural) == 0 and len(mechanical) >= 1:
         plan_text = ''
@@ -447,10 +438,8 @@ def main():
         if canary_precondition(plan_text, mechanical):
             verdict = 'BAIL-TO-IMPLEMENT'
 
-    # Emit verdict on line 1
     print(verdict)
 
-    # Emit JSON sidecar
     structural_count = len(structural)
     mechanical_count = len(mechanical)
     issues_json = []

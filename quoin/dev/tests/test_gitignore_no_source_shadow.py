@@ -70,12 +70,10 @@ def find_shadowed_sources(git_root: Path, subtree: str = "quoin/dev") -> list[st
         path = line.strip()
         if not path:
             continue
-        # Drop bytecode and cache paths
         if any(sub in path for sub in _IGNORE_SUBSTRINGS):
             continue
         if any(path.endswith(suf) for suf in _IGNORE_SUFFIXES):
             continue
-        # Only flag source-like extensions
         if Path(path).suffix in _SOURCE_EXTS:
             violations.append(path)
     return sorted(violations)

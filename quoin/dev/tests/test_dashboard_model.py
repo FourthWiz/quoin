@@ -47,7 +47,6 @@ def make_task(root: Path, name: str, files: list[str] = None) -> Path:
         f = task_dir / fname
         f.parent.mkdir(parents=True, exist_ok=True)
         if fname == "cost-ledger.md":
-            # Create a dummy ledger
             f.write_text("# Cost Ledger\n")
         else:
             f.write_text(f"# {fname} placeholder\n")
@@ -105,7 +104,6 @@ def make_fixture_tree(tmp_path: Path) -> tuple:
 """
     (beta_dir / "architecture.md").write_text(arch_text)
 
-    # Create stage-1 subfolder
     stage1_dir = beta_dir / "stage-1"
     stage1_dir.mkdir(parents=True, exist_ok=True)
     (stage1_dir / "current-plan.md").write_text("# Plan\n")
@@ -412,7 +410,6 @@ def test_scan_tasks_basic(tmp_path):
     assert "tasks" in result
     assert len(result["tasks"]) == 2  # alpha and beta (not finalized)
 
-    # Check task names
     task_names = {t["name"] for t in result["tasks"]}
     assert "alpha" in task_names
     assert "beta" in task_names
@@ -464,7 +461,6 @@ def test_scan_tasks_active_task_is_string(tmp_path):
     if result["active_task"] is not None:
         assert isinstance(result["active_task"], str)
 
-    # Must be JSON-serializable
     json_str = json.dumps(result)
     assert json_str is not None
 
@@ -739,7 +735,6 @@ def test_regression_active_task_str_not_path(tmp_path):
 
     if result["active_task"] is not None:
         assert isinstance(result["active_task"], str)
-        # Verify JSON-serializable
         json_str = json.dumps(result)
         reparsed = json.loads(json_str)
         assert isinstance(reparsed["active_task"], str)
@@ -806,7 +801,6 @@ def test_compute_version_token_stability(tmp_path):
     """Token stability: two calls with same root/scope and no FS change → identical token."""
     root = tmp_path / "project"
     root.mkdir()
-    # Create a .workflow_artifacts/ dir with one file
     art = root / ".workflow_artifacts" / "my-task"
     art.mkdir(parents=True)
     (art / "current-plan.md").write_text("# plan\n")
@@ -834,7 +828,6 @@ def test_compute_version_token_changes_on_new_file(tmp_path):
     scope = "tasks:fin=False|cj=0"
     token_before = compute_version_token(root, scope)
 
-    # Create a new file
     (art / "review-1.md").write_text("# review\n")
     token_after = compute_version_token(root, scope)
 
@@ -891,7 +884,6 @@ def test_compute_version_token_same_second_different_size(tmp_path):
 
     scope = "tasks:fin=False|cj=0"
 
-    # Create first file
     f1 = art / "file_small.md"
     f1.write_text("x")
     token1 = compute_version_token(root, scope)

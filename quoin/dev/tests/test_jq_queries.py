@@ -103,7 +103,6 @@ class TestJqMergeAdd:
         cmd = f"{HOOKS_DIR}/userpromptsubmit.sh"
         result = _run_jq(UPS_FILTER, input_json, cmd=cmd, matcher="*", scriptname="userpromptsubmit.sh")
         assert len(result["hooks"]["UserPromptSubmit"]) == 1
-        # Existing PreCompact preserved
         assert "PreCompact" in result["hooks"]
 
     def test_precompact_add_to_empty(self):
@@ -198,11 +197,8 @@ class TestJqMergeUpdate:
         result = _run_jq(SS_FILTER, input_json, cmd=new_quoin_cmd, matcher="startup", scriptname="sessionstart.sh")
         stanzas = result["hooks"]["SessionStart"]
         commands = [h["command"] for s in stanzas for h in s.get("hooks", [])]
-        # User hook preserved
         assert user_cmd in commands, f"User hook {user_cmd} was removed. Commands: {commands}"
-        # New quoin hook present
         assert new_quoin_cmd in commands, f"New quoin hook missing. Commands: {commands}"
-        # Old quoin hook gone
         assert old_quoin_cmd not in commands, f"Stale quoin hook not removed. Commands: {commands}"
 
 
@@ -263,11 +259,7 @@ class TestJqMergeIdempotent:
         round1 = run_full_install({})
         round2 = run_full_install(round1)
 
-        # Exactly 1 UPS/* stanza
         assert len([s for s in round2["hooks"]["UserPromptSubmit"] if s["matcher"] == "*"]) == 1
-        # Exactly 1 PC/auto stanza
         assert len([s for s in round2["hooks"]["PreCompact"] if s["matcher"] == "auto"]) == 1
-        # Exactly 1 SS/startup stanza
         assert len([s for s in round2["hooks"]["SessionStart"] if s["matcher"] == "startup"]) == 1
-        # Exactly 1 SS/resume stanza
         assert len([s for s in round2["hooks"]["SessionStart"] if s["matcher"] == "resume"]) == 1

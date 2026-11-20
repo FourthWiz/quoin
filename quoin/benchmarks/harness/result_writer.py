@@ -60,7 +60,6 @@ class RunResult:
     # Written to diff.patch
     diff_patch: str = ""
 
-    # Extra metadata
     extra: dict[str, Any] = field(default_factory=dict)
 
     # Verified path: source label for judge.json, extra judge.json keys, and the
@@ -123,7 +122,6 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
     out_dir = task_result_dir(run_dir, result.run_id, result.cell, result.task_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # prompt.txt
     (out_dir / "prompt.txt").write_text(result.prompt, encoding="utf-8")
 
     # transcript.jsonl — when the cell already streamed every event to
@@ -141,13 +139,11 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
             encoding="utf-8",
         )
 
-    # diff.patch
     if result.diff_patch_bytes is not None:
         (out_dir / "diff.patch").write_bytes(result.diff_patch_bytes)
     else:
         (out_dir / "diff.patch").write_text(result.diff_patch, encoding="utf-8")
 
-    # judge.json
     write_judge_json(
         out_dir,
         result.task_id,
@@ -158,7 +154,6 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
         result.judge_extra,
     )
 
-    # metrics.json
     metrics_data: dict[str, Any] = {
         "task_id": result.task_id,
         "cell": result.cell,
@@ -192,7 +187,6 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
         encoding="utf-8",
     )
 
-    # cost.json
     if result.cost_available and result.cost_runtime_usd is not None:
         cost_data: dict[str, Any] = {
             "cost_available": True,

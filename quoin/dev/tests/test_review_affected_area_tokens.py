@@ -135,7 +135,6 @@ def test_ran_pytest_in_step_6b():
     assert m_header is not None, "Step 6b heading not found"
     start = m_header.start()
     after = text[start + len("### Step 6b:"):]
-    # Find the next ### heading at line start
     m_next = re.search(r"^### ", after, re.MULTILINE)
     block = after[: m_next.start()] if m_next else after[:3000]
 

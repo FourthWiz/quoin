@@ -514,7 +514,6 @@ def fixture_with_ledger(tmp_path: Path):
     project_root = tmp_path / "project"
     proj_hash_str = sm.project_hash(str(project_root))
 
-    # Set up JSONL
     proj_dir = home / ".claude" / "projects" / proj_hash_str
     proj_dir.mkdir(parents=True)
     test_uuid = "11111111-2222-3333-4444-555555555555"
@@ -634,7 +633,6 @@ def test_memo_cache_no_reparse(sm, fixture_home):
         parse_count[0] += 1
         return original_parse(path, start, end)
 
-    # Patch parse_session_today
     sm.parse_session_today = counting_parse
     try:
         cache: dict = {}

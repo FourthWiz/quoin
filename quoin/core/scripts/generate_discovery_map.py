@@ -258,7 +258,6 @@ def _enumerate_repos(project_root: Path) -> List[Dict[str, Any]]:
                 if _has_git(grandchild):
                     _add_repo(grandchild)
 
-    # Sort by name ascending
     repos.sort(key=lambda r: r["name"])
     return repos
 
@@ -432,7 +431,6 @@ def generate_map(
     if now_iso is None:
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # project
     if project_name is None:
         project_name = project_root.name
     if runtime_adapters is None:
@@ -448,7 +446,6 @@ def generate_map(
     if project_description is not None:
         project_obj["description"] = project_description
 
-    # artifact_roots
     artifact_roots: Dict[str, Any] = {
         "finalized_path": ".workflow_artifacts/finalized",
         "memory_path": ".workflow_artifacts/memory",
@@ -459,7 +456,6 @@ def generate_map(
     if cache_dir.is_dir():
         artifact_roots["cache_path"] = ".workflow_artifacts/cache"
 
-    # memory
     memory: Dict[str, Any] = {
         "daily_dir": ".workflow_artifacts/memory/daily",
         "lessons_learned": ".workflow_artifacts/memory/lessons-learned.md",
@@ -479,10 +475,8 @@ def generate_map(
     if repo_heads.exists():
         memory["repo_heads_path"] = ".workflow_artifacts/memory/repo-heads.md"
 
-    # tasks
     tasks = _enumerate_tasks(project_root)
 
-    # repos
     repos = _enumerate_repos(project_root)
 
     # freshness — per repo, rooted at project_root cache (MAJ-3 fix)
@@ -634,7 +628,6 @@ Exit codes:
     else:
         out_path = project_root / ".workflow_artifacts" / "discovery-map.json"
 
-    # Generate
     try:
         map_obj = generate_map(
             project_root,
@@ -667,7 +660,6 @@ Exit codes:
                 print(err, file=sys.stderr)
             return 1
 
-    # Output
     if args.stdout:
         content = json.dumps(map_obj, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
         sys.stdout.write(content)

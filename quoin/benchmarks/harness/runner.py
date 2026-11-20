@@ -260,7 +260,6 @@ def run_one_task(
     # Check if already complete (--resume mode)
     t_dir = task_result_dir(run_dir, run_id, cell, task_id)
     if is_result_complete(t_dir):
-        # Load existing result and return it as a RunResult stub
         judge_data = json.loads((t_dir / "judge.json").read_text(encoding="utf-8"))
         metrics_data = json.loads((t_dir / "metrics.json").read_text(encoding="utf-8"))
         return RunResult(
@@ -359,7 +358,6 @@ def run_one_task(
             write_run_result(result, run_dir)
             return result
 
-        # Run judge
         judge_result = judge_task(
             task_id=task_id,
             task_dir=worktree_path or Path("."),
@@ -367,7 +365,6 @@ def run_one_task(
             invocation_extra=invocation_extra,
         )
 
-        # Build RunResult
         result = RunResult(
             cell=cell,
             task_id=task_id,
@@ -414,7 +411,6 @@ def run_one_task(
         elif worktree_path:
             cleanup_task_worktree(worktree_path)
 
-    # Write all six output files
     write_run_result(result, run_dir)
     return result
 
@@ -858,7 +854,6 @@ def run_cell(
         if resume:
             t_dir = task_result_dir(config.run_dir, run_id, cell, task_id)
             if is_result_complete(t_dir):
-                # Load stub result
                 judge_data = json.loads(
                     (t_dir / "judge.json").read_text(encoding="utf-8")
                 )

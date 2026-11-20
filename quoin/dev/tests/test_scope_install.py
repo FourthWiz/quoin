@@ -212,7 +212,6 @@ def test_deploy_hooks_project_mode_does_not_touch_home(tmp_path, monkeypatch):
     dest = project / ".claude"
     deploy_hooks(src, dest, is_project_mode=True)
 
-    # dest settings.json must exist
     assert (dest / "settings.json").exists()
     # ~/.claude/ must NOT have been created by this call (we aren't monkeypatching
     # home, but deploy_hooks writes only to dest_root/settings.json by design)
@@ -264,9 +263,7 @@ def test_merge_workflow_rules_project_mode_places_at_project_root(tmp_path):
 
     merge_workflow_rules(src, dest_root, claude_md_path=claude_md_path)
 
-    # CLAUDE.md must exist at project root
     assert claude_md_path.exists()
-    # CLAUDE.md must NOT exist at project/.claude/CLAUDE.md
     wrong_location = dest_root / "CLAUDE.md"
     assert not wrong_location.exists(), (
         "CLAUDE.md must not be created at <project>/.claude/CLAUDE.md"
@@ -557,7 +554,6 @@ def test_merge_workflow_rules_idempotent(tmp_path):
     dest_root.mkdir()
     claude_md = dest_root / "CLAUDE.md"
 
-    # First install
     installer.merge_workflow_rules(source_dir, dest_root)
     after_first = claude_md.read_text(encoding="utf-8")
     assert after_first.count(installer._MARKER_START) == 1
@@ -588,12 +584,10 @@ def test_merge_workflow_rules_project_mode_idempotent(tmp_path):
     dest_root.mkdir()
     claude_md_path = project_dir / "CLAUDE.md"
 
-    # First install
     installer.merge_workflow_rules(source_dir, dest_root, claude_md_path=claude_md_path)
     after_first = claude_md_path.read_text(encoding="utf-8")
     assert after_first.count(installer._MARKER_START) == 1
 
-    # Second install
     installer.merge_workflow_rules(source_dir, dest_root, claude_md_path=claude_md_path)
     after_second = claude_md_path.read_text(encoding="utf-8")
     assert after_second.count(installer._MARKER_START) == 1, (
@@ -622,7 +616,6 @@ def test_deploy_hooks_settings_idempotent(tmp_path):
         if src_file.exists():
             shutil.copy(src_file, dst_hooks / hook)
 
-    # First deploy
     installer.deploy_hooks(source_dir, dest_root, is_project_mode=True)
     settings_path = dest_root / "settings.json"
     assert settings_path.exists(), "settings.json not created by deploy_hooks"

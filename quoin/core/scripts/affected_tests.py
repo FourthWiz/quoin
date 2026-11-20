@@ -3213,7 +3213,6 @@ def map_changed_to_tests(
                         mapped_any = True
             if mapped_any:
                 continue
-            # Generic non-.py file → ignored
             ignored.append(changed_file)
             continue
 
@@ -3695,7 +3694,6 @@ def main(argv: list[str] | None = None) -> int:
         changed = files
 
     elif args.files_from is not None:
-        # --files-from mode
         if args.files_from == "-":
             raw = sys.stdin.read()
         else:
@@ -3707,7 +3705,6 @@ def main(argv: list[str] | None = None) -> int:
         changed = [l.strip() for l in raw.splitlines() if l.strip()]
 
     else:
-        # --files mode
         changed = list(args.files)
 
     # ------------------------------------------------------------------

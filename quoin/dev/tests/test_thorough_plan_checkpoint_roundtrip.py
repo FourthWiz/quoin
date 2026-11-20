@@ -61,7 +61,6 @@ def _call(tmp_path: Path, round_n: int, phase: str, sid: str = SID, **kwargs):
         "--plan-path", str(tmp_path / ".workflow_artifacts" / TASK / "current-plan.md"),
         "--session-state", str(ss_path),
     ]
-    # Allow callers to append extra args
     for k, v in kwargs.items():
         argv += [f"--{k.replace('_', '-')}", str(v)]
 
@@ -144,7 +143,6 @@ class TestThoroughPlanCheckpointRoundtrip:
         task_name_found = None
         for i, line in enumerate(lines):
             if line.strip() == "## Active task":
-                # next non-empty line
                 for j in range(i + 1, len(lines)):
                     if lines[j].strip():
                         task_name_found = lines[j].strip()

@@ -52,7 +52,6 @@ def test_note_appends_exactly_one_block(tmp_path):
 
 def test_note_does_not_touch_run_state_record(tmp_path):
     memory_dir = tmp_path / ".workflow_artifacts" / "memory"
-    # Create a run-state record first via --write.
     write_result = _run([
         "--write",
         "--project-root", str(tmp_path),

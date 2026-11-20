@@ -79,7 +79,6 @@ def _build_trees(installer, tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "CORE_SCRIPTS", ("c1.py",))
     monkeypatch.setattr(installer, "CORE_WORKFLOW_FILES", ("w1.md",))
 
-    # Deploy each file: write expected_deployed_content to the dest path.
     def _deploy(src_path: Path, dest_path: Path):
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(installer.expected_deployed_content(src_path, dest))

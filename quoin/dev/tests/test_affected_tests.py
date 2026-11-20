@@ -807,7 +807,6 @@ class TestCLIExitCodes:
             with mock.patch("subprocess.run") as mock_run:
                 rc = _cli(["--files", "gate/SKILL.md", "notes.md",
                             "--repo-root", str(fake_repo)])
-                # Assert pytest was NOT spawned
                 for call in mock_run.call_args_list:
                     call_args = call[0][0] if call[0] else call.args[0]
                     assert "pytest" not in str(call_args), (

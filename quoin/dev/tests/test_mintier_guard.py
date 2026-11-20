@@ -215,15 +215,12 @@ def test_mintier_injection_idempotent(skill):
     original_text = skill_md.read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Write a copy to a tmp path
         tmp_skill = Path(tmpdir) / "SKILL.md"
         tmp_skill.write_text(original_text, encoding="utf-8")
 
-        # First injection
         _ipd.inject_mintier_block_into_file(skill, tmp_skill)
         after_first = tmp_skill.read_text(encoding="utf-8")
 
-        # Second injection
         _ipd.inject_mintier_block_into_file(skill, tmp_skill)
         after_second = tmp_skill.read_text(encoding="utf-8")
 

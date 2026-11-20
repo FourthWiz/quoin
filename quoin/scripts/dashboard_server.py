@@ -215,7 +215,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = parsed.path
 
-            # API routing
             if path == "/api/tasks" or path == "/api/tasks/":
                 qs = parse_qs(parsed.query)
                 include_fin_str = qs.get("include_finalized", ["false"])[0].lower()

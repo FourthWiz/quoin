@@ -329,7 +329,6 @@ class TestCostEstimation:
     def test_estimate_cost_claude_model(self, tmp_path):
         from quoin.benchmarks.harness.cost import estimate_cost, load_pricing
 
-        # Create a minimal pricing.json for testing
         pricing_data = {
             "models": {
                 "claude-opus-4-7-20261001": {

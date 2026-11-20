@@ -174,7 +174,6 @@ class TestDetectPhase:
         stage1 = artifacts / "stage-1"
         stage1.mkdir()
         (stage1 / "current-plan.md").write_text("# plan\n")
-        # Detect from the stage-1 dir directly
         r = detect_phase(stage1)
         assert r.phase == "planning"
 

@@ -94,7 +94,6 @@ def test_no_standalone_git_reset_hard_fenced():
     """
     text = RECIPE_FILE.read_text(encoding="utf-8")
 
-    # Extract fenced code block contents
     fenced_blocks = re.findall(r"```[a-zA-Z]*\n(.*?)```", text, re.DOTALL)
 
     for block in fenced_blocks:

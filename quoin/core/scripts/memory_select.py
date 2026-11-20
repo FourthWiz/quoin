@@ -89,7 +89,6 @@ _STOPWORDS: frozenset[str] = frozenset({
     "by", "if", "or", "so", "do", "be", "we", "no", "up", "out",
 })
 
-# Applies-to line pattern
 _APPLIES_TO_RE = re.compile(r"\*\*Applies to:\*\*\s*(.*)")
 
 # Default path for lessons-learned.md, resolved relative to CWD.
@@ -159,14 +158,12 @@ def parse_entries(text: str) -> list[Entry]:
     lines = text.splitlines(keepends=True)
     total_lines = len(lines)
 
-    # Find all ## header positions
     positions: list[int] = []  # 0-based line indices of ## headers
     for i, line in enumerate(lines):
         if line.startswith("## "):
             positions.append(i)
 
     for idx, pos in enumerate(positions):
-        # Determine end of this entry
         end_pos = positions[idx + 1] if idx + 1 < len(positions) else total_lines
 
         header_line = lines[pos].rstrip("\n").rstrip("\r")
@@ -176,10 +173,8 @@ def parse_entries(text: str) -> list[Entry]:
         if "<date>" in header_line:
             continue
 
-        # Reconstruct the entry body
         body = "".join(lines[pos:end_pos])
 
-        # Extract Applies-to text
         applies_to = ""
         match = _APPLIES_TO_RE.search(body)
         if match:
@@ -260,10 +255,8 @@ def select(
         result.selected_count = 0
         return result
 
-    # Tokenize the task description
     task_tokens = tokenize(task_text) if task_text.strip() else set()
 
-    # Score each entry and apply always-include rules
     selected: list[Entry] = []
     for entry in entries:
         s = score(task_tokens, entry)
@@ -742,7 +735,6 @@ def main(argv: list[str] | None = None) -> int:
     if not args.build_index and args.task_text is None:
         parser.error("the following arguments are required: --task-text")
 
-    # Resolve file path
     if args.file:
         lessons_path = Path(args.file).resolve()
     else:
@@ -823,7 +815,6 @@ def main(argv: list[str] | None = None) -> int:
         result = select(text, args.task_text, threshold=args.threshold)
 
     if args.as_json:
-        # Include score in each entry's JSON output
         task_tokens = tokenize(args.task_text) if args.task_text.strip() else set()
         selected_json = []
         for e in result.selected:

@@ -155,7 +155,6 @@ def load_config(claude_md_path: Optional[str] = None, *, signals_yaml_path: Opti
         except (OSError, IOError):
             return DEFAULT_CONFIG
 
-        # Find the heading
         heading_pattern = r"### /sleep importance signals"
         heading_match = re.search(heading_pattern, text)
         if not heading_match:
@@ -408,7 +407,6 @@ def _parse_separator_based(lines: List[str], abs_path: str) -> List[RawEntry]:
     """Pass 2: split on ^---\\s*$ lines (fallback for files with no entry headings)."""
     entries: List[RawEntry] = []
 
-    # Find separator line indices
     sep_indices = [i for i, line in enumerate(lines) if re.match(r"^---\s*$", line)]
 
     if not sep_indices:
@@ -438,7 +436,6 @@ def _parse_separator_based(lines: List[str], abs_path: str) -> List[RawEntry]:
 
         block_lines = lines[seg_start:seg_end]
 
-        # Strip surrounding blank lines
         while block_lines and not block_lines[0].strip():
             block_lines = block_lines[1:]
             seg_start += 1
@@ -710,7 +707,6 @@ def dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str,
     def _kws(text: str) -> set:
         return set(w.lower() for w in re.findall(r"\b[a-zA-Z_-]{4,}\b", text))
 
-    # Split lessons into paragraphs
     paragraphs = re.split(r"\n{2,}", lessons_text)
     lessons_kw_sets = [_kws(p) for p in paragraphs if len(p.strip()) >= 10]
 
@@ -831,13 +827,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(_task_name_from_path(args.slug_from_path))
         return 0
 
-    # Load config
     config = load_config(args.claude_md, signals_yaml_path=args.signals_yaml)
 
     # S-3: load maintenance patterns (always-pass; no-op when absent)
     maintenance_patterns = _load_maintenance_patterns(args.patterns)
 
-    # Collect entries
     entries = collect_entries(args.scan_dir, args.scan_days, patterns=maintenance_patterns)
 
     # Corpus-size guard
@@ -851,7 +845,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not entries:
         return 0
 
-    # Score entries
     scored = score_entries(entries, config)
 
     # Dedup promote candidates against lessons-learned
@@ -859,12 +852,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if lessons_text:
         scored = dedup_against_lessons(scored, lessons_text)
 
-    # Output
     if args.output == "json":
         for entry in scored:
             print(json.dumps(_entry_to_dict(entry)))
     else:
-        # Text summary
         promote = [e for e in scored if e.bucket == "promote"]
         forget = [e for e in scored if e.bucket == "forget"]
         middle = [e for e in scored if e.bucket == "middle"]

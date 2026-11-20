@@ -199,7 +199,6 @@ def main(argv=None):
         print(json.dumps(payload))
         return 1 if findings else 0
 
-    # text format
     if ancestor is not None:
         print(
             f"nested_root_check: NOTE — project root {project_root} is itself nested "

@@ -82,17 +82,14 @@ def parse_row(
     """
     stripped = line.strip()
 
-    # Skip blank lines and comment lines
     if not stripped or stripped.startswith("#"):
         return None
 
     parts = stripped.split("|")
 
-    # Too few columns to be a valid row
     if len(parts) < 6:
         return None
 
-    # Extract the first 6 mandatory fields (strip each)
     uuid = parts[0].strip()
     date = parts[1].strip()
     phase = parts[2].strip()

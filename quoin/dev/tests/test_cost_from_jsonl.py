@@ -92,7 +92,6 @@ def test_parity_against_ccusage(uuid):
         # 10-char hash prefix (environment-coupling, not a real hash-function bug).
         pytest.skip(f"UUID jsonl not found locally: {jsonl_path}")
 
-    # Run our script
     local_result = subprocess.run(
         [sys.executable, str(SCRIPT), "session", "-i", uuid, "--json",
          "--project-path", PROJECT_PATH],
@@ -104,7 +103,6 @@ def test_parity_against_ccusage(uuid):
     local_data = json.loads(local_result.stdout)
     local_cost = local_data["totalCost"]
 
-    # Run ccusage
     ccusage_result = subprocess.run(
         ["npx", "ccusage", "session", "-i", uuid, "--json"],
         capture_output=True, text=True, timeout=30,

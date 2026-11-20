@@ -56,7 +56,6 @@ def _load_sibling(name: str):
 
 _cfj = _load_sibling("cost_from_jsonl")
 
-# Bind the three functions we need from cost_from_jsonl
 project_hash = _cfj.project_hash
 jsonl_path_for = _cfj.jsonl_path_for
 parse_session = _cfj.parse_session

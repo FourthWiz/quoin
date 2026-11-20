@@ -173,7 +173,6 @@ class TestMergeRouterKeys:
         assert not warnings  # no foreign keys on fresh config
 
     def test_no_keyerror_on_empty(self) -> None:
-        # MAJ-2 coverage
         cfg, changes, _ = merge_router_keys({}, ROUTER_MAP)
         assert cfg["Router"]["background"] == ROUTER_MAP["background"]
 
@@ -291,7 +290,6 @@ class TestCmdRouterSetup:
         dry_run: bool = False,
         existing_cfg: dict | None = None,
     ) -> int:
-        # Patch injectable seams
         monkeypatch.setenv("OPENROUTER_API_KEY", api_key)
         monkeypatch.setattr("quoin.router._node_present", lambda: node_present)
         monkeypatch.setattr("quoin.router._node_major", lambda: node_major)
@@ -317,7 +315,6 @@ class TestCmdRouterSetup:
         )
         monkeypatch.setattr("quoin.router._install_ccr", lambda: install_rc)
 
-        # Optionally pre-seed a config
         config_path = ccr_config_path(home=tmp_path)
         if existing_cfg is not None:
             config_path.parent.mkdir(parents=True, exist_ok=True)

@@ -905,7 +905,6 @@ def inject_blocks_into_file(skill: str, skill_md: pathlib.Path) -> str:
 
     insert_text = pollution_block
 
-    # Insert immediately before the anchor line
     lines.insert(anchor_idx, insert_text)
     return "".join(lines)
 
@@ -1205,7 +1204,6 @@ def run_check() -> int:
 
         text = skill_md.read_text(encoding="utf-8")
 
-        # Check §0' heading present
         if POLLUTION_HEADING not in text:
             drifted.append(f"{skill}: §0' heading missing")
             continue
@@ -1221,12 +1219,10 @@ def run_check() -> int:
             continue
         block = block_match.group(0)
 
-        # Check required tokens inside block
         for token in required_tokens:
             if token not in block:
                 drifted.append(f"{skill}: missing required token {token!r} in §0' block")
 
-        # Check score-extraction strings inside block
         for s in score_extraction_strings:
             if s not in block:
                 drifted.append(f"{skill}: missing score-extraction string {s!r} in §0' block")

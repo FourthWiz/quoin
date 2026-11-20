@@ -66,14 +66,12 @@ _FOR_HUMAN_RE = re.compile(r"^## For human\s*$", re.MULTILINE)
 
 def _is_v3_format(text: str) -> bool:
     """Detect v3 format per rule 5.7.1 (string comparison only — no LLM)."""
-    # Find closing '---' of frontmatter
     if not text.startswith("---"):
         return False
     close = text.find("\n---", 3)
     if close == -1:
         return False
     after = text[close + 4:]  # text after the closing '---\n'
-    # Check the first 50 lines
     lines = after.split("\n", 50)[:50]
     for line in lines:
         if _FOR_HUMAN_RE.match(line):
@@ -115,10 +113,8 @@ def _extract_candidate_paths(text: str) -> list[str]:
     candidates = []
     for m in _BACKTICK_RE.finditer(text):
         token = m.group(1).strip()
-        # Must contain at least one /
         if "/" not in token:
             continue
-        # Skip absolute paths
         if token.startswith("/"):
             continue
         # Skip workflow-artifacts paths
@@ -127,7 +123,6 @@ def _extract_candidate_paths(text: str) -> list[str]:
         # Skip __QUOIN_HOME__ and ~ references
         if token.startswith("~") or token.startswith("__QUOIN_HOME__"):
             continue
-        # Must have a recognized code extension
         suffix = Path(token).suffix.lower()
         if suffix not in _CODE_EXT:
             continue

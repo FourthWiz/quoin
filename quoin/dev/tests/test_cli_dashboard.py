@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-# Import the CLI main function directly
 from quoin.cli import main as _cli_main
 
 # Repo paths used in startup test

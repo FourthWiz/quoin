@@ -59,7 +59,6 @@ class TestClaudeMdHookSections:
           **Phase values:** `discover`, `architect`, ..., `checkpoint`, `ad-hoc`
         """
         content = _read_claude_md()
-        # Find the Phase values line
         phase_line = None
         for line in content.splitlines():
             if "**Phase values:**" in line:
@@ -132,10 +131,8 @@ class TestClaudeMdHookSections:
     def test_checkpoint_phase_value_is_backtick_quoted(self):
         """The `checkpoint` phase value must be quoted with backticks (style consistency)."""
         content = _read_claude_md()
-        # Find the Phase values line and check backtick form
         for line in content.splitlines():
             if "**Phase values:**" in line:
-                # Should contain `checkpoint` (with backticks)
                 assert "`checkpoint`" in line, (
                     f"Phase values line found but `checkpoint` not backtick-quoted:\n  {line}"
                 )

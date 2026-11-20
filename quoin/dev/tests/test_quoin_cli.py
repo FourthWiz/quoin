@@ -820,7 +820,6 @@ def test_cli_stdout_contract():
                 f"missing stdout line for {fname}"
             )
 
-        # T-04: quickstart
         assert f"QUICKSTART deployed to {dest_root}/QUICKSTART.md" in stdout
 
         # T-05: skill count (programmatic — no hardcoded literal per MAJ-6)
@@ -842,7 +841,6 @@ def test_cli_stdout_contract():
             or f"Appended quoin rules to {claude_md}" in stdout
         )
 
-        # T-07: prerequisites
         assert "Prerequisites OK" in stdout
 
 
@@ -857,7 +855,6 @@ def test_regen_no_op_in_wheel_mode(tmp_path, capsys):
     mock_run.assert_not_called()
     assert "Skipping preamble regeneration" in capsys.readouterr().out
 
-    # No files were touched
     assert list(tmp_path.iterdir()) == []
 
 

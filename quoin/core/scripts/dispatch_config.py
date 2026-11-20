@@ -88,7 +88,6 @@ def config_verdict(tier: str, cfg: dict) -> str:
     if val == "off":
         return "unsafe"
 
-    # Try tier-csv: comma-split, strip, lower-case
     candidates = [t.strip().lower() for t in val.split(",") if t.strip()]
     if candidates:
         tier_norm = tier.strip().lower()
