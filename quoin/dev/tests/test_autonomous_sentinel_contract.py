@@ -51,10 +51,6 @@ def _text(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_supervisor_module_exists() -> None:
-    assert _SUPERVISOR_MODULE.is_file(), f"missing: {_SUPERVISOR_MODULE}"
-
-
 def test_run_core_doc_exists() -> None:
     assert _RUN_CORE_DOC.is_file(), f"missing: {_RUN_CORE_DOC}"
 
@@ -104,28 +100,6 @@ def test_templates_resolve_under_memory_root_never_task_folder() -> None:
 # ---------------------------------------------------------------------------
 # supervisor.py path constants byte-match the documented templates
 # ---------------------------------------------------------------------------
-
-
-def test_supervisor_constants_bytematch_documented_templates() -> None:
-    import importlib
-
-    supervisor = importlib.import_module("quoin.supervisor")
-
-    assert supervisor.SENTINEL_ROOT == _SENTINEL_ROOT
-    assert supervisor.MARKER_TEMPLATE == _MARKER_TEMPLATE
-    assert supervisor.PROGRESS_DIR_TEMPLATE == _PROGRESS_DIR_TEMPLATE
-    assert supervisor.DONE_TEMPLATE == _DONE_TEMPLATE
-    assert supervisor.HALT_TEMPLATE == _HALT_TEMPLATE
-    assert supervisor.COMPLETION_GLOB_TEMPLATE == _COMPLETION_GLOB
-
-
-# ---------------------------------------------------------------------------
-# Counting glob appears verbatim everywhere
-# ---------------------------------------------------------------------------
-
-
-def test_completion_glob_appears_verbatim_in_supervisor_module() -> None:
-    assert _COMPLETION_GLOB in _text(_SUPERVISOR_MODULE)
 
 
 def test_completion_glob_appears_verbatim_in_run_core_doc() -> None:

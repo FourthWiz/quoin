@@ -200,22 +200,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
     (
-        "quoin/memory/autonomous-mode.md",
-        "quoin/dev/tests/test_supervisor_progress_docs.py",
-    ),
-    (
-        "quoin/memory/autonomous-mode.md",
-        "quoin/dev/tests/test_child_watch_contract.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_child_watch_contract.py",
-    ),
-    (
-        "quoin/core/skills/run.md",
-        "quoin/dev/tests/test_child_watch_contract.py",
-    ),
-    (
         "quoin/memory/cost-ledger-format.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
@@ -704,32 +688,16 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # .py, so the generic mtime rule never selected their behavioral
     # fixtures or the token-clean guard on a hooks-only diff.
     (
-        "quoin/hooks/stop.sh",
-        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
-    ),
-    (
-        "quoin/hooks/stop.sh",
-        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
+        "quoin/hooks/sessionstart.sh",
+        "quoin/dev/tests/test_hook_shell_suite.py",
     ),
     (
         "quoin/hooks/sessionstart.sh",
-        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
-    ),
-    (
-        "quoin/hooks/sessionstart.sh",
-        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
-    ),
-    (
-        "quoin/hooks/userpromptsubmit.sh",
-        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
-    ),
-    (
-        "quoin/hooks/userpromptsubmit.sh",
         "quoin/dev/tests/test_autonomous_hooks_untouched.py",
     ),
     (
         "quoin/hooks/sessionend.sh",
-        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
+        "quoin/dev/tests/test_hook_shell_suite.py",
     ),
     (
         "quoin/hooks/sessionend.sh",
@@ -737,14 +705,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     # run/SKILL.md and autonomous-mode.md's run-continuation wiring
     # (IVG-280 T-07) has its own dedicated contract pin.
-    (
-        "quoin/adapters/claude/skills/run/SKILL.md",
-        "quoin/dev/tests/test_run_skill_auto_resume_contract.py",
-    ),
-    (
-        "quoin/memory/autonomous-mode.md",
-        "quoin/dev/tests/test_run_skill_auto_resume_contract.py",
-    ),
     (
         "quoin/docs/runtime-parity-matrix.md",
         "quoin/dev/tests/test_runtime_portability_docs.py",
@@ -917,10 +877,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/memory/dispatch-guide.md",
         "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
-    ),
-    (
-        "quoin/hooks/userpromptsubmit.sh",
-        "quoin/dev/tests/test_context_reading_consumers.py",
     ),
     (
         "quoin/hooks/precompact.sh",

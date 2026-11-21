@@ -21,7 +21,8 @@ def subsection() -> str:
     text = AUTONOMOUS_MODE.read_text(encoding="utf-8")
     assert text.count(HEADING) == 1
     i = text.index(HEADING)
-    return text[i : text.index("\n### ", i + 10)]
+    end = text.find("\n### ", i + 10)
+    return text[i : end if end != -1 else len(text)]
 
 
 def test_subsection_contents(subsection):
@@ -34,7 +35,7 @@ def test_subsection_contents(subsection):
     ):
         assert needle in flat, needle
     assert flat.index("wait_for.py wait") < flat.index("`known_red.py`")
-    assert "The supervisor sets it for every headless child it launches" in flat
+    assert "`quoin run --autonomous` sets it for every `/goal` session it starts" in flat
     assert "once its launch-time change lands" not in flat
     assert "deliberately ends its turn after a hand-off." not in flat
 

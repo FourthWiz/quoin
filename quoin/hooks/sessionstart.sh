@@ -7,7 +7,6 @@
 #
 # Responsibilities, in order:
 #   - compact re-entry (source=compact): one-shot advisory from the run-state record
-#   - run hand-off: asks auto_resume.py whether an abandoned run should be resumed
 #   - missing-EOD banner, discovery-staleness banner, workspace heartbeat
 #   - sweep of stale sentinel files (live and retired families) and pidfile locks
 # No restore banner is emitted: nothing on Claude Code consumes a pending-restore
@@ -118,12 +117,7 @@ run-notes: ${rs_notes_path}"
 fi
 # === end IVG-258 post-compaction re-entry ===
 
-# === run continuation hand-off ===
-# On a fresh or resumed session start, ask the run-continuation helper
-# whether the previous owner of an active run-state record is gone; if so
-# it spawns a detached supervisor and returns an advisory naming the task.
-# Decision logic lives in scripts/auto_resume.py. Fail-safe: without a
-# session_id, a memory dir, a run-state record or python3, this does nothing.
+# === session history ===
 case "$src" in
   startup|resume)
     # Session history for /continue_work: one line per start or resume. The
@@ -137,15 +131,9 @@ case "$src" in
         printf '%s | %s\n' "$_rs_now" "$session_id" >> "$MEMORY_DIR/recent-sessions.md" 2>/dev/null || true
       fi
     fi
-    if [ -n "$session_id" ] && [ -d "$MEMORY_DIR" ] \
-       && ls "$MEMORY_DIR"/run-state-*.json >/dev/null 2>&1 \
-       && command -v python3 >/dev/null 2>&1; then
-      _ar_out=$(python3 "$(dirname "$0")/../scripts/auto_resume.py" start --project-root "$cwd" --source "$src" --session-id "$session_id" 2>/dev/null)
-      [ -n "$_ar_out" ] && printf '%s\n' "$_ar_out"
-    fi
     ;;
 esac
-# === end run continuation hand-off ===
+# === end session history ===
 
 # === S-4 missing-EOD banner ===
 # Check for session files with end_of_day_due: yes within last 36 hours.
