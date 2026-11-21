@@ -240,6 +240,23 @@ once, focused on consumers of changed interfaces, and writes findings by
 and links them to each other. `/quoin:review-cross <branch>` also works by
 hand on any branch that exists in several repositories.
 
+#### Unattended runs
+
+`quoin run --autonomous <task>` runs a staged task with nobody watching: each
+stage still marked ⏳ in `.workflow_artifacts/<task>/architecture.md` becomes
+one headless `claude -p "/goal ..."` session whose condition is the stage's
+acceptance checks, its commit on the task branch, its ✅ mark, and printed
+`affected_tests.py` output as evidence. `--model`, `--max-budget-usd` (per
+stage) and `--dry-run` are available; each session is logged to
+`goal-run.log` in the task folder. A stage left unfinished stops the run
+(exit 1). Rerunning continues at the first unfinished stage.
+
+Claude Code does not document a pause-and-resume for a headless `/goal`
+session at a usage limit, so the run stops there with exit code 75 and the
+stage still unfinished; rerun it after the limit resets. For overnight runs
+that must wait out a limit by themselves, keep using the supervisor from the
+`legacy` tag (`pip install "git+https://github.com/FourthWiz/quoin@legacy"`).
+
 ## Runtime Support
 
 | Runtime | Setup command | Scope | Implemented behavior |

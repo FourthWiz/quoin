@@ -109,8 +109,6 @@ def test_hooks_dir_roster_unchanged() -> None:
             "capture.sh",
             "sessionend.sh",
             "sessionstart.sh",
-            "stop.sh",
-            "userpromptsubmit.sh",
             "worktreecreate.sh",
         ]
     )

@@ -17,9 +17,6 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 
 NEW_FIXTURES = (
-    "test_auto_resume_stop_hook.sh",
-    "test_auto_resume_sessionstart_start.sh",
-    "test_userpromptsubmit_disarm.sh",
     "test_sessionend_arm_cleanup.sh",
 )
 
@@ -36,7 +33,6 @@ BASELINE_FIXTURES = (
     "test_recent_sessions_hook.sh",
     "test_sessionstart_discovery_staleness.sh",
     "test_resolve_project_root.sh",
-    "test_userpromptsubmit_hook.sh",
     "test_checkpoint_picker_staleness.sh",
     "test_no_bare_cwd_writes.sh",
     "test_lifecycle_banner_drift.sh",

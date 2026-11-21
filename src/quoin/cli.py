@@ -3,19 +3,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.resources
-import json
 import os
 import pathlib
 import runpy
-import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import textwrap
-import time
-import uuid
-from datetime import datetime, timezone
 from typing import NamedTuple, Optional, Tuple
 
 
@@ -339,15 +333,14 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         print("\nInstall them and re-run this script.", file=sys.stderr)
         return 1
 
-    # The auto-resume resolver reads its record from its own deploy root,
-    # which is now the staged plugin. A failed install must never leave the
-    # previous record next to a plugin it no longer describes; the record is
-    # rewritten at the end. An earlier file-by-file install kept it in dest_root.
-    from quoin import runtime_record
-
     stage_dir = installer.default_stage_dir()
-    runtime_record.remove_existing_record(stage_dir)
-    runtime_record.remove_existing_record(dest_root)
+    # Earlier installs wrote an install record for the auto-resume hand-off,
+    # which no longer exists; nothing reads the file now.
+    for old_record in (stage_dir / "quoin-runtime.json", dest_root / "quoin-runtime.json"):
+        try:
+            old_record.unlink()
+        except OSError:
+            pass
     try:
         version = installer.stage_plugin(source_dir, stage_dir)
         print(f"Staged plugin {version} from {source_dir} in {stage_dir}")
@@ -374,13 +367,6 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
     if args.dev:
         installer.install_dev_deps()
-
-    # Records the interpreter and package tree this install came from, so an
-    # auto-resume hand-off can relaunch the exact same CLI instead of guessing
-    # via PATH. Never fails the install.
-    record_path = runtime_record.write_runtime_record(stage_dir, source_dir)
-    if record_path is not None:
-        print(f"Wrote install record {record_path}")
 
     print("Restart Claude Code to load the plugin; its skills are named /quoin:<skill>.")
     return 0
@@ -484,111 +470,6 @@ def _cmd_codex_init(args: argparse.Namespace) -> int:
     return _run_codex_script(generator, script_args)
 
 
-def _doctor_auto_resume_cli(
-    dest_root: pathlib.Path,
-    project_root: pathlib.Path,
-    errors: list[str],
-    warnings: list[str],
-    *,
-    run=subprocess.run,
-    which=shutil.which,
-    is_project_mode: Optional[bool] = None,
-) -> None:
-    """Verify the auto-resume hand-off CLI the same way the hooks do: via
-    the deployed resolver's read-only ``cli-check``, in a scrubbed env. This
-    matches a hook running with a clean environment; a hook inherits the
-    caller's PYTHONPATH and probes on a tighter budget, so the two can still
-    differ on an unusual host."""
-    dest_label = str(dest_root)
-    print(f"Auto-resume CLI ({dest_label}/quoin-runtime.json):")
-
-    record_path = dest_root / "quoin-runtime.json"
-    if not record_path.exists():
-        print("  ✗ no install record")
-        errors.append(
-            f"no install record at {record_path}; re-run 'quoin install' (same scope)"
-        )
-    else:
-        resolver = dest_root / "core" / "scripts" / "auto_resume.py"
-        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "QUOIN_HANDOFF_PYTHONPATH")}
-        env["PATH"] = "/usr/bin:/bin"
-        predates_msg = (
-            "deployed auto_resume.py could not report the hand-off CLI "
-            "(predates the install record or failed); re-run 'quoin install'"
-        )
-        parsed = None
-        try:
-            proc = run(
-                [sys.executable, str(resolver), "cli-check", "--project-root", str(project_root)],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                stdin=subprocess.DEVNULL,
-            )
-            lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
-            if lines:
-                candidate = json.loads(lines[-1])
-                if isinstance(candidate, dict):
-                    parsed = candidate
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            parsed = None
-
-        if parsed is None or "source" not in parsed or "status" not in parsed:
-            print("  ✗ could not report the hand-off CLI")
-            errors.append(predates_msg)
-        elif parsed.get("status") == "error":
-            print("  ✗ could not report the hand-off CLI")
-            errors.append(f"{predates_msg}: {parsed.get('message')}")
-        elif parsed.get("source") != "record":
-            print("  ✗ resolver ignored the install record")
-            errors.append(predates_msg)
-        elif parsed.get("status") == "stale":
-            kind = parsed.get("kind")
-            message = parsed.get("message")
-            print(f"  ✗ not usable ({kind})")
-            errors.append(f"auto-resume hand-off CLI is not usable ({kind}): {message}")
-        else:
-            probed_version = parsed.get("probed_version")
-            if probed_version is not None and probed_version != __version__:
-                print("  ✗ recorded interpreter runs a different quoin version")
-                errors.append(
-                    f"recorded interpreter runs quoin {probed_version} but this CLI is "
-                    f"{__version__}; re-run 'quoin install' with the CLI you use"
-                )
-            else:
-                print("  ✓ hand-off CLI is usable")
-
-            pythonpath = parsed.get("pythonpath")
-            if pythonpath:
-                print(f"  · hand-off relies on PYTHONPATH={pythonpath}")
-                warnings.append(
-                    f"hand-off relies on PYTHONPATH={pythonpath} (install.sh source-tree "
-                    "fallback); installing the package (pip install -e, uv tool, pipx) and "
-                    "re-running 'quoin install' from it avoids this"
-                )
-
-    # Project scope gets a plain warning; user scope already errors on this
-    # earlier in _cmd_doctor's prerequisites block, so avoid a duplicate.
-    if is_project_mode is None:
-        is_project_mode = dest_root.parent == project_root
-    found = which("claude")
-    if found is None:
-        if is_project_mode:
-            print("  ✗ claude not found on PATH")
-            warnings.append(
-                "claude not found on PATH; an auto-resume supervisor cannot relaunch a session"
-            )
-    else:
-        if which("claude", path="/usr/bin:/bin") is None:
-            print(
-                "  · claude resolves only outside /usr/bin:/bin; a supervisor started "
-                "from a minimal-PATH hook may not find it"
-            )
-
-    print()
-
-
 def _cmd_doctor(args: argparse.Namespace) -> int:
     if args.runtime == "codex":
         return _cmd_codex_doctor(args)
@@ -646,11 +527,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         )
     print()
 
-    doctor_project_root = dest_root.parent if is_project_mode else pathlib.Path.cwd()
-    _doctor_auto_resume_cli(
-        stage_dir, doctor_project_root, errors, warnings, is_project_mode=is_project_mode
-    )
-
     # Open-model router probe (user-scope only — home CCR paths are not project-scoped)
     if not is_project_mode:
         from quoin import ccr_config as _ccr
@@ -689,609 +565,22 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Supervisor single-driver lock (T-04). Filename templates are duplicated
-# from `quoin/core/scripts/auto_resume.py` (a standalone deployed script,
-# not part of this package, so it cannot be imported here) — a parity test
-# pins the two copies byte-identical.
-# ---------------------------------------------------------------------------
-
-_SUPERVISOR_LOCK_TEMPLATE = "run-supervisor-{task}.pid"
-_SUPERVISOR_RESULT_TEMPLATE = "run-supervisor-{task}.result"
-_SUPERVISOR_HALT_TEMPLATE = "autonomous-halt-{task}.md"
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _read_json(path: pathlib.Path):
-    try:
-        text = path.read_text()
-    except OSError:
-        return None
-    try:
-        return json.loads(text)
-    except ValueError:
-        return None
-
-
-def _atomic_write_text(memory_dir: pathlib.Path, path: pathlib.Path, content: str) -> None:
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(content)
-    os.replace(str(tmp), str(path))
-
-
-def _atomic_write_json(memory_dir: pathlib.Path, path: pathlib.Path, data: dict) -> None:
-    _atomic_write_text(memory_dir, path, json.dumps(data, sort_keys=True) + "\n")
-
-
-def _supervisor_paths(project_root: pathlib.Path, task: str) -> dict:
-    memory_dir = project_root / ".workflow_artifacts" / "memory"
-    return {
-        "memory_dir": memory_dir,
-        "lock": memory_dir / _SUPERVISOR_LOCK_TEMPLATE.format(task=task),
-        "result": memory_dir / _SUPERVISOR_RESULT_TEMPLATE.format(task=task),
-        "halt": memory_dir / _SUPERVISOR_HALT_TEMPLATE.format(task=task),
-    }
-
-
-def _write_supervisor_result(memory_dir: pathlib.Path, result_path: pathlib.Path, status: str, relaunches: int) -> None:
-    data = {"status": status, "relaunches": relaunches, "finished_at": _iso_now()}
-    _atomic_write_json(memory_dir, result_path, data)
-
-
-def _write_abort_halt(
-    memory_dir: pathlib.Path,
-    halt_path: pathlib.Path,
-    task: str,
-    reason: str,
-    takeover_hint: "str | None" = None,
-) -> bool:
-    """Write the halt sentinel unless one already exists (never overwritten, D-22).
-
-    Returns True when a halt was written, False when one was already there.
-    """
-    from quoin import supervisor as _supervisor  # noqa: PLC0415
-
-    if halt_path.exists():
-        return False
-    project_root = memory_dir.parent.parent
-    hint = takeover_hint or _supervisor.takeover_pointer(task, project_root)
-    content = (
-        f"task: {task}\n"
-        "phase: run\n"
-        f"reason: {reason}\n"
-        f"timestamp: {_iso_now()}\n"
-        f"resume_hint: /run --resume {task}\n"
-        f"takeover_hint: {hint}\n"
-    )
-    _atomic_write_text(memory_dir, halt_path, content)
-    return True
-
-
-_FIRST_CHILD_ENV = "QUOIN_FIRST_CHILD_SESSION_ID"
-_CORE_SCRIPT_MEMO: dict = {}
-
-
-def _load_core_script(name: str):
-    """Load a bundled portable script (``core/scripts/<name>.py``) by path.
-
-    Looks in the packaged data tree first, then the source checkout layout.
-    Returns None when it cannot be loaded; never raises or exits.
-    """
-    if name in _CORE_SCRIPT_MEMO:
-        return _CORE_SCRIPT_MEMO[name]
-    module = None
-    try:
-        import importlib.util  # noqa: PLC0415
-        import quoin as _quoin_pkg  # noqa: PLC0415
-
-        candidates = []
-        try:
-            candidates.append(
-                pathlib.Path(str(importlib.resources.files("quoin") / "data" / "core" / "scripts" / f"{name}.py"))
-            )
-        except Exception:  # noqa: BLE001
-            pass
-        candidates.append(
-            pathlib.Path(_quoin_pkg.__file__).resolve().parent.parent.parent
-            / "quoin" / "core" / "scripts" / f"{name}.py"
-        )
-        for path in candidates:
-            if path.is_file():
-                spec = importlib.util.spec_from_file_location(f"_quoin_cli_core_{name}", path)
-                if spec is None or spec.loader is None:
-                    continue
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                module = mod
-                break
-    except Exception:  # noqa: BLE001
-        module = None
-    _CORE_SCRIPT_MEMO[name] = module
-    return module
-
-
-def _update_supervisor_lock(paths: dict, token: "str | None", **fields) -> bool:
-    """Merge ``fields`` into our supervisor lock (a None value deletes the key).
-
-    Only touches a lock that names this process or carries our adoption
-    token; anything else is left alone. Returns True when the lock was written.
-    """
-    try:
-        data = _read_json(paths["lock"])
-        if not isinstance(data, dict):
-            return False
-        try:
-            held = int(data.get("pid", -1))
-        except (TypeError, ValueError):
-            held = -1
-        if held != os.getpid() and not (token and data.get("token") == token):
-            return False
-        for key, value in fields.items():
-            if value is None:
-                data.pop(key, None)
-            else:
-                data[key] = value
-        data["pid"] = os.getpid()
-        _atomic_write_json(paths["memory_dir"], paths["lock"], data)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _release_supervisor_lock(lock_path: pathlib.Path, our_pid: int) -> None:
-    """Remove the lock only when it still names our own pid (never a
-    lock some other process has since taken over)."""
-    data = _read_json(lock_path)
-    if data is None:
-        return
-    try:
-        held_pid = int(data.get("pid", -1))
-    except (TypeError, ValueError):
-        return
-    if held_pid == our_pid:
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-
-
-def _create_lock_exclusive(lock_path: pathlib.Path, payload: bytes) -> bool:
-    """Creates `lock_path` atomically and already fully populated with
-    `payload` — mirrors `auto_resume.py`'s helper of the same name (kept in
-    sync by hand; this module cannot import the standalone helper script,
-    which must stand alone under a bare system Python).
-
-    `payload` is written in full to a private tempfile in the same
-    directory first, then published under `lock_path` with `os.link` —
-    `os.link` fails with `FileExistsError` if `lock_path` already exists,
-    so at most one caller can ever win, and the file it publishes is
-    always the fully-written one. The previous O_CREAT|O_EXCL-then-
-    `os.write` split left a window where the lock existed but was still
-    empty; a reader hitting that window parsed it as `None` and could
-    unlink a winner's in-flight lock, and a lock left in exactly that
-    state by a crash made every later acquire refuse with `pid -1`
-    forever, since the path already existed but never parsed."""
-    tmp_path = lock_path.parent / f".{lock_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-    try:
-        fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        try:
-            os.write(fd, payload)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.link(str(tmp_path), str(lock_path))
-        return True
-    except FileExistsError:
-        return False
-    finally:
-        try:
-            os.unlink(str(tmp_path))
-        except OSError:
-            pass
-
-
-_STALE_UNPARSEABLE_LOCK_SECS = 5.0
-
-
-def _lock_is_stale(lock_path: pathlib.Path) -> bool:
-    """Mirrors `auto_resume.py`'s helper of the same name. A lock is
-    reclaimable only when its owner is provably gone: a parseable lock
-    naming a dead pid, or a lock that still fails to parse well past the
-    atomic creator's own write latency. An unparseable-but-fresh lock is
-    never treated as stale on emptiness alone — it could be another
-    creator's in-flight write."""
-    data = _read_json(lock_path)
-    if data is not None:
-        try:
-            pid = int(data.get("pid", -1))
-        except (TypeError, ValueError):
-            return True
-        return not (pid > 0 and _pid_alive(pid))
-    try:
-        age = time.time() - lock_path.stat().st_mtime
-    except OSError:
-        return False
-    return age > _STALE_UNPARSEABLE_LOCK_SECS
-
-
-def _claim_lock_for_removal(lock_path: pathlib.Path):
-    """Mirrors `auto_resume.py`'s helper of the same name: atomically takes
-    exclusive ownership of `lock_path` for removal and returns the JSON
-    content it held, or `None` if it had none or another racer already
-    claimed it first. `os.rename` within the same directory is atomic on
-    POSIX, so at most one of two racing reclaimers can ever succeed
-    against the same source name — closing the race where two callers
-    both read the same dead lock before either removed it."""
-    claim_path = lock_path.parent / f"{lock_path.name}.stale-{os.getpid()}-{uuid.uuid4().hex}"
-    try:
-        os.rename(str(lock_path), str(claim_path))
-    except OSError:
-        return None
-    try:
-        data = _read_json(claim_path)
-    finally:
-        try:
-            claim_path.unlink()
-        except OSError:
-            pass
-    return data
-
-
-def _acquire_supervisor_lock(
-    memory_dir: pathlib.Path,
-    lock_path: pathlib.Path,
-    result_path: pathlib.Path,
-    task: str,
-    max_relaunch: int,
-    token: "str | None",
-    _retried: bool = False,
-    runtime: "str | None" = None,
-) -> tuple:
-    """Best-effort single-driver lock (D-06/D-19).
-
-    A live lock naming a different pid refuses the run. A dead-pid lock is
-    replaced; a dead `writer: "handoff"` lock with no `.result` yet is
-    charged its full grant as an `ORPHANED` result before replacement (the
-    supervisor that held it never got to report in). A live `writer:
-    "handoff"` lock whose `token` field matches `token` (our own
-    `QUOIN_SUPERVISOR_LOCK_TOKEN`) is adopted — this process IS the child
-    that lock was reserved for.
-
-    Lock creation is atomic (`_create_lock_exclusive`), so a reader can
-    never observe a lock that exists but is still empty, and replacing a
-    lock that looks abandoned is conditional on it actually being stale
-    (`_lock_is_stale`) rather than on a bare failed parse — an unparseable
-    lock that is still fresh is refused, not clobbered, since it could be
-    another creator's in-flight write.
-
-    Returns ``(acquired, held_pid)``; ``held_pid`` is only meaningful when
-    ``acquired`` is False.
-    """
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    existing = _read_json(lock_path)
-    if existing is not None:
-        try:
-            held_pid = int(existing.get("pid", -1))
-        except (TypeError, ValueError):
-            held_pid = -1
-        alive = held_pid > 0 and _pid_alive(held_pid)
-        if alive:
-            if existing.get("writer") == "handoff" and token and existing.get("token") == token:
-                return True, None
-            return False, held_pid
-        if existing.get("writer") == "handoff" and not result_path.exists():
-            try:
-                granted = int(existing.get("granted", 0) or 0)
-            except (TypeError, ValueError):
-                granted = 0
-            _write_supervisor_result(memory_dir, result_path, "ORPHANED", granted)
-        _claim_lock_for_removal(lock_path)
-    elif lock_path.exists():
-        # `existing` failed to parse but the path is occupied — never
-        # treat that as "no lock": the atomic creator above could still be
-        # mid-write. Only reclaim once the lock is provably stale.
-        if not _lock_is_stale(lock_path):
-            current = _read_json(lock_path) or {}
-            try:
-                held_pid = int(current.get("pid", -1))
-            except (TypeError, ValueError):
-                held_pid = -1
-            return False, held_pid
-        _claim_lock_for_removal(lock_path)
-    content = {
-        "pid": os.getpid(),
-        "started_at": _iso_now(),
-        "granted": max_relaunch,
-        "writer": "cli",
-        "task": task,
-    }
-    if runtime is not None:
-        content["runtime"] = runtime
-    payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
-    if _create_lock_exclusive(lock_path, payload):
-        return True, None
-    if _retried:
-        existing2 = _read_json(lock_path) or {}
-        try:
-            held_pid2 = int(existing2.get("pid", -1))
-        except (TypeError, ValueError):
-            held_pid2 = -1
-        return False, held_pid2
-    return _acquire_supervisor_lock(
-        memory_dir, lock_path, result_path, task, max_relaunch, token,
-        _retried=True, runtime=runtime,
-    )
-
-
-def _lock_runtime(data) -> str:
-    """Runtime that owns a parsed lock; a missing key means claude and a
-    value outside the known runtimes reads as ``unknown``."""
-    from quoin import supervisor as _supervisor  # noqa: PLC0415
-
-    value = data.get("runtime") if isinstance(data, dict) else None
-    if not isinstance(value, str) or not value:
-        return "claude"
-    return value if value in _supervisor.RUNTIMES else "unknown"
-
-
-# (flag, argparse attribute, value that means "not given")
-
-
-def _strip_handoff_pythonpath() -> None:
-    """Removes the `PYTHONPATH` entry an auto-resume hand-off prepended so
-    it could relaunch the recorded interpreter, before this process
-    relaunches `claude` — the relaunched `claude` subprocess inherits
-    `os.environ`, and it must see the user's own `PYTHONPATH`, not the
-    hand-off's."""
-    marker = os.environ.pop("QUOIN_HANDOFF_PYTHONPATH", None)
-    if not marker:
-        return
-    entries = os.environ.get("PYTHONPATH", "").split(os.pathsep)
-    try:
-        entries.remove(marker)
-    except ValueError:
-        return
-    if entries:
-        os.environ["PYTHONPATH"] = os.pathsep.join(entries)
-    else:
-        del os.environ["PYTHONPATH"]
-
-
-def _light_task_refusal(project_root: pathlib.Path, task: str, memory_dir: pathlib.Path) -> Optional[str]:
-    """Why the supervisor must not drive `task`, or None.
-
-    The supervisor relaunches `/run --resume`, which only the heavy pipeline
-    can continue. A task the light `/run` started (a brief, but no heavy
-    run-state record or autonomous marker) would never write a done sentinel,
-    so each relaunch would be a wasted full session until the no-progress abort.
-    """
-    brief = project_root / ".workflow_artifacts" / task / "brief.md"
-    heavy = (memory_dir / f"run-state-{task}.json").exists() or (
-        memory_dir / f"autonomous-run-{task}.marker"
-    ).exists()
-    if brief.exists() and not heavy:
-        return (
-            f"quoin run: REFUSED: '{task}' was started by the light /run, which runs in one "
-            "session and cannot be relaunched; continue it with `/run --resume "
-            f"{task}` in Claude Code, or restart it with `/run hard: ...` for the supervised pipeline."
-        )
-    return None
-
-
 def _cmd_run(args: argparse.Namespace) -> int:
-    """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
+    """`quoin run --autonomous <task>`: each unfinished stage as one headless `/goal` session."""
+    from quoin import goal_run  # noqa: PLC0415
 
-    Lazily imports `supervisor` (mirrors the router/models lazy-import
-    convention, R-11/D-01) so the base install path stays import-clean.
-    Resolves --project-root, builds the real headless launch_fn, and runs
-    the relaunch loop to a terminal condition (SUCCESS/HALTED/ABORTED).
-
-    A single-driver lock (T-04) guards against two supervisors racing on
-    the same task: a live foreign lock refuses with exit 3 before any
-    launch happens. Under `--halt-on-abort`, a non-SUCCESS terminal state
-    also writes a halt sentinel and a `.result` file, and SIGTERM/SIGINT
-    stop the run the same way, so a hand-off never leaves the task silently
-    stuck (D-20). Without the flag, behavior is unchanged: no lock is
-    contended in the normal case, no `.result` and no halt are written.
-
-    NOTE (MIN-2): --budget is a no-op stub this release — cost is bounded
-    only by --max-relaunch + exponential backoff. See autonomous-mode.md.
-    """
-    from quoin import supervisor as _supervisor  # noqa: PLC0415
-
-    project_root = pathlib.Path(args.project_root).resolve()
-    paths = _supervisor_paths(project_root, args.task)
-
-    if getattr(args, "takeover", False):
-        from quoin import takeover as _takeover  # noqa: PLC0415
-
-        return _takeover.run_takeover(args.task, project_root)
-
-    refusal = _light_task_refusal(project_root, args.task, paths["memory_dir"])
-    if refusal:
-        print(refusal, file=sys.stderr)
-        return 2
-
-    # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
-    # so the relaunched `claude` subprocess (which inherits os.environ) sees
-    # the user's own PYTHONPATH, not the hand-off's.
-    _strip_handoff_pythonpath()
-
-    # Popped immediately after the lock decision so a relaunch child this
-    # process itself spawns never inherits our own adoption token.
-    token = os.environ.pop("QUOIN_SUPERVISOR_LOCK_TOKEN", None)
-    first_sid = os.environ.pop(_FIRST_CHILD_ENV, None)
-    if first_sid and not _supervisor.is_child_session_id(first_sid):
-        print(f"quoin run: ignoring invalid {_FIRST_CHILD_ENV}", file=sys.stderr)
-        first_sid = None
-    acquired, held_pid = _acquire_supervisor_lock(
-        paths["memory_dir"], paths["lock"], paths["result"], args.task, args.max_relaunch, token
-    )
-    if not acquired:
-        print(f"quoin run: REFUSED (supervisor lock held by pid {held_pid})")
-        print(f"  task: {args.task}")
-        print(f"  takeover: {_supervisor.takeover_pointer(args.task, project_root)}")
-        return 3
-
-    child_env = dict(os.environ)
-    child_env[_supervisor.HEADLESS_CHILD_ENV] = "1"
-    launch_fn = _supervisor.make_launch_fn(
-        project_root,
-        permission_mode=args.permission_mode,
-        timeout=_supervisor.launch_timeout_from_env(),
-        env=child_env,
-    )
-    launches = 0
-    memory_dir = paths["memory_dir"]
-    run_state = _load_core_script("run_state")
-    if run_state is None:
-        print("quoin run: run-state module unavailable; child id recorded in the lock only", file=sys.stderr)
-
-    def _warn(what: str, exc: BaseException) -> None:
-        print(f"quoin run: could not {what}: {exc}", file=sys.stderr)
-
-    def _record_child(entry, forward):
-        if run_state is not None:
-            try:
-                if entry is None:
-                    run_state.set_child_fields(memory_dir, args.task, "", "", "")
-                else:
-                    run_state.set_child_fields(
-                        memory_dir, args.task, entry.session_id, entry.cwd, entry.started_at
-                    )
-            except Exception as exc:  # noqa: BLE001
-                _warn("record the child in run-state", exc)
-        try:
-            # child_pid is cleared: a pid recorded for an earlier launch must
-            # never be read as belonging to this one.
-            _update_supervisor_lock(
-                paths, token,
-                child_session_id=entry.session_id if entry else None,
-                child_cwd=entry.cwd if entry else None,
-                child_started_at=entry.started_at if entry else None,
-                child_pid=None,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _warn("record the child in the lock", exc)
-        if forward and entry is not None and run_state is not None:
-            try:
-                run_state.append_note(
-                    memory_dir, args.task,
-                    f"{_supervisor.CHILD_NOTE_PREFIX} task={args.task} launch={entry.launch_no} "
-                    f"session={entry.session_id} cwd={shlex.quote(entry.cwd)} "
-                    f"takeover: {_supervisor.takeover_notice_pointer(args.task, project_root)}",
-                )
-            except Exception as exc:  # noqa: BLE001
-                _warn("note the child launch", exc)
-
-    def _record_pid(sid, pid):
-        lock = _read_json(paths["lock"])
-        if isinstance(lock, dict) and lock.get("child_session_id") == sid:
-            _update_supervisor_lock(paths, token, child_pid=pid)
-
-    tracked = _supervisor.make_tracked_launch_fn(
+    outcome = goal_run.run(
+        args.project_root,
         args.task,
-        project_root,
-        launch_fn,
-        first_session_id=first_sid,
-        record_fn=_record_child,
-        on_pid_fn=_record_pid,
+        max_budget_usd=args.max_budget_usd,
+        dry_run=args.dry_run,
+        model=args.model,
     )
+    print(f"quoin run: {outcome.status}: {outcome.message}")
+    if outcome.stages:
+        print(f"  stages done this run: {', '.join(outcome.stages)}")
+    return outcome.exit_code()
 
-    def _counting_launch_fn(task):
-        nonlocal launches
-        launches += 1
-        return tracked(task)
-
-    def _abort_hint():
-        last = tracked.last
-        return _supervisor.takeover_hint(
-            args.task, project_root, last.session_id if last else None
-        )
-
-    old_handlers = None
-    if args.halt_on_abort:
-        def _on_signal(signum, _frame):
-            _write_abort_halt(
-                paths["memory_dir"], paths["halt"], args.task, "supervisor stopped by signal",
-                takeover_hint=_abort_hint(),
-            )
-            _write_supervisor_result(paths["memory_dir"], paths["result"], "STOPPED", launches)
-            _release_supervisor_lock(paths["lock"], os.getpid())
-            raise SystemExit(143 if signum == signal.SIGTERM else 130)
-
-        old_handlers = (
-            signal.signal(signal.SIGTERM, _on_signal),
-            signal.signal(signal.SIGINT, _on_signal),
-        )
-
-    try:
-        result = _supervisor.supervise(
-            args.task,
-            project_root,
-            launch_fn=_counting_launch_fn,
-            max_relaunch=args.max_relaunch,
-            repair_allowance=_supervisor.repair_allowance_from_env(),
-        )
-    except SystemExit:
-        raise
-    except BaseException:
-        if args.halt_on_abort:
-            _write_abort_halt(
-                paths["memory_dir"], paths["halt"], args.task, "supervisor error",
-                takeover_hint=_abort_hint(),
-            )
-            _write_supervisor_result(paths["memory_dir"], paths["result"], "ERROR", launches)
-        _release_supervisor_lock(paths["lock"], os.getpid())
-        raise
-    finally:
-        if old_handlers is not None:
-            signal.signal(signal.SIGTERM, old_handlers[0])
-            signal.signal(signal.SIGINT, old_handlers[1])
-
-    if args.halt_on_abort:
-        if result.status == "ABORTED":
-            _write_abort_halt(
-                paths["memory_dir"], paths["halt"], args.task, result.reason or "aborted",
-                takeover_hint=_abort_hint(),
-            )
-        _write_supervisor_result(paths["memory_dir"], paths["result"], result.status, launches)
-    _release_supervisor_lock(paths["lock"], os.getpid())
-
-    label = result.status
-    if result.reason:
-        label += f" ({result.reason})"
-    print(f"quoin run: {label}")
-    print(f"  task: {args.task}")
-    print(f"  relaunches: {result.relaunches}")
-    if result.status != "SUCCESS":
-        last = tracked.last
-        if last is not None:
-            print(f"  takeover: {_supervisor.takeover_command(last.cwd, last.session_id)}")
-        else:
-            print(f"  takeover: {_supervisor.takeover_pointer(args.task, project_root)}")
-
-    if result.status == "SUCCESS":
-        return 0
-    if result.status == "HALTED":
-        return 1
-    return 2  # ABORTED
 
 
 _BENCH_CHECKOUT_MSG = (
@@ -1381,7 +670,7 @@ def main(argv: list[str] | None = None) -> int:
               quoin doctor                   Health-check an existing install (read-only)
               quoin router setup             Enable open-model routing (claude-code-router)
               quoin models set opus glm      Map the opus tier to an OpenRouter model
-              quoin run --autonomous <task>  Run the external autonomous supervisor
+              quoin run --autonomous <task>  Run a staged task unattended, one /goal per stage
 
             Run 'quoin <command> --help' for command-specific options.
             See QUICKSTART.md for the full command reference.
@@ -1676,24 +965,20 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser(
         "run",
         description=(
-            "Run the external autonomous supervisor: relaunches "
-            '`claude -p "/run --resume --autonomous <task>"` in fresh '
-            "headless sessions until the task's done- or halt-sentinel "
-            "appears, bounded by --max-relaunch and exponential backoff."
+            "Run a staged task unattended: each unfinished stage of "
+            ".workflow_artifacts/<task>/architecture.md becomes one headless "
+            '`claude -p "/goal ..."` session whose condition is the stage\'s '
+            "acceptance checks; a task with no stage list runs its brief as one "
+            "goal. Rerunning continues at the first unfinished stage. Exit 0 "
+            "complete, 1 stopped, 2 invalid, 75 paused at a usage limit."
         ),
-        help="Run the external autonomous supervisor for a task (relaunch loop)",
+        help="Run a staged task unattended, one /goal session per stage",
     )
-    run_p.add_argument(
-        "task",
-        help="Task name (matches the .workflow_artifacts/<task> folder).",
-    )
+    run_p.add_argument("task", help="Task name (matches the .workflow_artifacts/<task> folder).")
     run_p.add_argument(
         "--autonomous",
         action="store_true",
-        help=(
-            "This subcommand IS the autonomous supervisor entrypoint; the "
-            "flag is explicit/required for clarity in the relaunch string."
-        ),
+        help="Accepted for the callers that pass it; the command is always unattended.",
     )
     run_p.add_argument(
         "--project-root",
@@ -1701,49 +986,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Project root containing .workflow_artifacts/ (default: cwd).",
     )
     run_p.add_argument(
-        "--max-relaunch",
-        type=int,
-        default=10,
-        help=(
-            "Maximum relaunch count before aborting (default: 10; mirrors "
-            "supervisor.DEFAULT_MAX_RELAUNCH)."
-        ),
-    )
-    run_p.add_argument(
-        "--halt-on-abort",
-        action="store_true",
-        help=(
-            "Write a halt sentinel and a .result file on a non-SUCCESS "
-            "terminal state (incl. a caught signal); used by the automatic "
-            "hand-off so an unattended run never goes silently stuck."
-        ),
-    )
-    run_p.add_argument(
-        "--permission-mode",
-        default="allowedTools",
-        help=(
-            "Headless permission mode for the relaunch subprocess: "
-            "'allowedTools' (default; scoped allow-list, per the T-01 POC) "
-            "or 'bypassPermissions' (--dangerously-skip-permissions)."
-        ),
-    )
-    run_p.add_argument(
-        "--takeover",
-        action="store_true",
-        help=(
-            "Stop the supervisor and headless child for <task>, confirm both "
-            "are dead, then print the command that resumes the child "
-            "interactively."
-        ),
-    )
-    run_p.add_argument(
-        "--budget",
+        "--max-budget-usd",
+        type=float,
         default=None,
-        help=(
-            "Cross-session cost ceiling (nice-to-have). NOT YET ENFORCED "
-            "this release — cost is bounded by --max-relaunch + backoff "
-            "only; see autonomous-mode.md."
-        ),
+        help="Spending cap for each stage's session, passed to claude as --max-budget-usd.",
+    )
+    run_p.add_argument(
+        "--model",
+        default=None,
+        help="Model for each stage's session (an alias such as sonnet, or a full id).",
+    )
+    run_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the command for the next unfinished stage and stop.",
     )
     args = parser.parse_args(argv)
 
@@ -1788,8 +1044,6 @@ def main(argv: list[str] | None = None) -> int:
             return _models._cmd_models_reset(args)
         return _models._cmd_models_show(args)
     elif args.command == "run":
-        if args.takeover and args.autonomous:
-            run_p.error("--takeover cannot be combined with --autonomous")
         return _cmd_run(args)
 
     parser.print_help()

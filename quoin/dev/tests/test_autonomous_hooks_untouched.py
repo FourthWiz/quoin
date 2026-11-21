@@ -91,8 +91,6 @@ def test_hooks_dir_has_expected_files() -> None:
             "capture.sh",
             "sessionend.sh",
             "sessionstart.sh",
-            "stop.sh",
-            "userpromptsubmit.sh",
             "worktreecreate.sh",
         ]
     )

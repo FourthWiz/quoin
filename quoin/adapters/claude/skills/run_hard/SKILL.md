@@ -78,20 +78,16 @@ branch in this file. The read side of this contract (a resumed session re-establ
 `AUTONOMOUS=true` from this marker before its own first decision point) is documented
 in `## Resume` below.
 
-### Arm the in-session continuation (only under `AUTONOMOUS`, fresh entry only)
+### No hand-off (only under `AUTONOMOUS`)
 
-Immediately after the marker write above, when this is a fresh `--autonomous`
-invocation (not a `--resume`), arm the owning session for in-session
-continuation so the Stop hook can nudge this same conversation instead of
-only ever handing off to a detached supervisor:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/auto_resume.py arm --project-root "$(pwd)" \
-  --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID" --entry fresh || true
-```
-
-Never blocks on failure — a missing helper or a malformed arm is a no-op, and
-the external supervisor hand-off path is unaffected either way.
+The in-session continuation and the detached hand-off were removed from the
+default install (`auto_resume.py`, `child_watch.py`, `quoin run --takeover`).
+Wherever this skill says to arm the continuation, hand off, arm or check the
+child watcher, or print a takeover pointer, instead write the halt sentinel
+(`reason: hand-off unavailable`, with the phase reached) and stop. Tell the
+user to continue with `/run --resume <task>`, or, for a staged task, with
+`quoin run --autonomous <task>`, which runs each stage as a `/goal` session.
+The `legacy` tag keeps the supervised pipeline for those who need it.
 
 ### Parse input and determine task profile
 

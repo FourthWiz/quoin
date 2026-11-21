@@ -10,14 +10,6 @@ The SessionStart hook writes a sentinel file at `$TMPDIR/quoin-s4-eod-banner-<YY
 
 Every hook exits 0 on any error (no abort). If jq is absent, hooks fail-OPEN silently (zero protection — see jq soft-required dependency below). `userpromptsubmit.sh` prints nothing on any path, so there is no output to hold back on a failed write.
 
-## What `userpromptsubmit.sh` does
-
-The hook maintains run-continuation sentinels and nothing else. It never opens the transcript, prints no stdout on any path, needs no `jq` or `python3`, and costs one `cat` plus, when a file exists to remove or create, one `rm` or `touch`. On a typed prompt it removes the session's `run-continue-arm-<sid>.txt`, so a person taking over stops the Stop-hook continuation. When the prompt starts with `/run` (after optional blanks, followed by whitespace) or `/run_hard` and a `run-state-*.json` record exists, it also creates `run-continue-consent-<sid>.txt`. Prompts that start with `<task-notification>` and prompts from subagent transcripts leave the arm in place. The project root is found with an inline copy of `resolve_project_root`, and the hook exits at once when the root has no `.workflow_artifacts/memory` directory. Payloads over 8 KB are read by a single `awk` pass (below that size the hook forks nothing), which keeps the same bound of 4160 leading blanks before the prompt text.
-
-Context fullness is no longer reported per prompt: use native `/context`, and rely on automatic compaction, `SessionStart(compact)` re-entry and the Stop-hook continuation. `run_hard` (`/run hard:`) reads the context guard itself at heavy-phase boundaries. Pollution detection for self-dispatching skills runs on demand through `scripts/pollution_guard.py`. Session history for `/continue_work` is appended to `recent-sessions.md` by `sessionstart.sh` (startup and resume), `sessionend.sh` and `precompact.sh`; a session begun by `/clear` and still open is not listed until it ends, and no hook creates the memory directory for this purpose.
-
-A running Claude Code session picks up a changed hook through its settings watcher or after a restart.
-
 ## STDIN capture pattern
 
 All six event hooks open with `STDIN=$(cat)` to capture the JSON payload into a variable, then parse with `printf '%s' "$STDIN" | jq -r '<filter> // empty'`. The `// empty` jq filter handles missing fields by returning the empty string instead of `null`, supporting the fail-OPEN discipline.
@@ -44,41 +36,6 @@ Registered as the eighth stanza (`WorktreeCreate`/`*`, timeout 10s). Fires when 
 - **Opt-out:** `QUOIN_WORKTREE_SELFGEN=0` restores the old `rc=skip result=missing-worktree-path-or-branch` behaviour.
 
 Whether isolation is even attempted is gated UPSTREAM by the `worktree_isolation.py --decide` STEP A0 in the four source-mutating SKILL.md (default `skip`; see `dispatch-guide.md`). The hook source is `quoin/quoin/hooks/worktreecreate.sh`.
-
-## Stop hook (`stop.sh`, IVG-280)
-
-Registered as the ninth stanza (`Stop`/`*`, timeout 10s). Fires at the end of every assistant turn. Two shell-level early exits (no `.workflow_artifacts/memory` under the resolved project root, no `run-continue-arm-*.txt` file present) run before any Python process starts, so the common case — no armed run in this project — costs a couple of `ls`/`test` calls. When an arm file is present, the hook hands off to `python3 scripts/auto_resume.py stop --project-root <root>` with the Stop hook's own stdin (session_id, transcript_path, background_tasks, stop_hook_active) passed straight through.
-
-- **What it does:** continues an interrupted autonomous `run_hard` span (`/run hard: --autonomous`) in the session that armed it — either by emitting an in-session continuation block, or, once the in-session block count reaches `QUOIN_AUTO_RESUME_HANDOFF_AT`, by spawning a detached `quoin run --autonomous` supervisor and letting the turn end quietly.
-- **Fail-OPEN:** any error, missing `python3`, or a helper that raises internally exits 0 with empty stdout — the harness's own Stop-block cap remains the outer bound regardless.
-- **Opt-out:** `QUOIN_AUTO_RESUME=0` disables the helper entirely; the hook still exits early on the two shell-level checks either way, but the helper's own subcommands additionally no-op under the knob.
-- **CLI lookup:** the detached-hand-off path (both the Stop hook's escalation and `SessionStart`'s own liveness check) resolves the `quoin` CLI to relaunch from the install record (`quoin-runtime.json`) at the deploy root, not from `PATH`, within a time-bounded probe (`QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS`, per-caller clamp — see `memory/hooks-table.md`). A stale or missing record surfaces as `STALE_CLI|<kind>|<message>`: the Stop hook folds it into its `systemMessage` alongside the ordinary in-session continuation nudge (the nudge itself is unchanged), and `SessionStart` turns it into a startup advisory only — neither ever blocks. Full kind list and remedies: `memory/autonomous-mode.md` "How the hand-off finds the CLI".
-- **State files:** `run-continue-arm-<sid>.txt` (armed by `run_hard`'s Setup/Resume steps), `run-continue-consent-<sid>.txt` and `session-ended-<sid>.txt` (written by `userpromptsubmit.sh`/`sessionend.sh`), `auto-resume-<task>.json` (the continuation counter), `run-supervisor-<task>.pid`/`.result`/`.log` (the hand-off lock and its outcome), `quoin-runtime.json` (the install record the CLI lookup above reads; written by `quoin install`, not by this hook) — all under `.workflow_artifacts/memory/` except the install record itself, all read or written exclusively by `scripts/auto_resume.py` and `src/quoin/cli.py`'s `run`/`install` subcommands.
-- **Un-registering.** `QUOIN_AUTO_RESUME=0` is the supported opt-out (above) and needs no settings.json edit. To remove the stanza itself instead:
-
-  ```bash
-  python3 - <<'EOF'
-  import json, pathlib, shutil
-
-  settings_path = pathlib.Path.home() / ".claude" / "settings.json"
-  backup_path = settings_path.with_suffix(settings_path.suffix + ".bak")
-  shutil.copyfile(settings_path, backup_path)
-
-  settings = json.loads(settings_path.read_text())
-  stanzas = settings.get("hooks", {}).get("Stop", [])
-  settings.setdefault("hooks", {})["Stop"] = [
-      s for s in stanzas
-      if not any(h.get("command", "").endswith("stop.sh") for h in s.get("hooks", []))
-  ]
-  settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-  print(f"Backed up to {backup_path}; Stop stanza(s) ending in stop.sh removed.")
-  EOF
-  ```
-
-  To fully roll back state as well, delete the state files listed above for
-  the task(s) in question — they are inert once the stanza is gone, but
-  removing them clears any stale counter or lock before re-enabling the
-  feature later.
 
 ## Tunable constants
 

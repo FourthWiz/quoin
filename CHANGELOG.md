@@ -4,6 +4,14 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- **Unattended runs go through Claude Code's `/goal`** (v0.102.0). `quoin run --autonomous <task>` now runs each unfinished stage of a staged task as one headless `claude -p "/goal <condition>"` session started in the project root, with a fixed `--allowedTools` list and `QUOIN_HEADLESS_CHILD=1`. The condition is the stage's acceptance line plus evidence the goal's evaluator can see: the stage committed on the task branch, its row marked ✅, and the output of `affected_tests.py` printed. The stage list is reread after each session; a stage left unfinished stops the run, a usage limit pauses it (exit 75), and rerunning continues at the first unfinished stage. A task with no stage list runs its brief as one goal. New options: `--model`, `--max-budget-usd` (per stage), `--dry-run`; each session's start, end, cost and id go to `goal-run.log`.
+
+### Removed
+
+- **The relaunching supervisor, in-session hand-off and child watcher** (v0.102.0). `supervisor.py`, `takeover.py`, `auto_resume.py` and `child_watch.py` leave the default install, with the `Stop` and `UserPromptSubmit` hooks that served them, the SessionStart hand-off, the install record they read (`quoin-runtime.json`, now deleted on install), the `quoin doctor` hand-off check and `quoin run`'s `--max-relaunch`, `--halt-on-abort`, `--permission-mode`, `--takeover`, `--runtime` and `--budget` options. `run_hard --autonomous` now writes its halt sentinel and stops where it used to hand off. Claude Code documents no pause-and-resume for a headless `/goal` run at a usage limit, so overnight runs that must wait out a limit should keep the supervisor from the `legacy` tag.
+
 ### Fixed
 
 - **`quoin install` no longer deletes the context-tracker mod** (v0.101.1). Retiring an earlier file-by-file deployment removed every unchanged file its manifest listed except the opt-in mods still shipped in this package, so the context-tracker mod, which moved to `quoin-cockpit`, was deleted from `~/.claude/skills/context-tracker`. Mods that moved to another repository are now kept like the opt-in ones. Anyone it removed can copy `quoin/plugins/context-tracker/` from `quoin-cockpit` back to `~/.claude/skills/context-tracker/`.

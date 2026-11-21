@@ -30,7 +30,6 @@
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
 | `/run` | Default pipeline: scope triage → implement on Opus → verify → local commit. Scope triage adds exactly one thing only when its signal fires: r1 (auth, permissions, crypto, input sanitising, schema or migration, public API) adds one review; r2 (several repos, or parts that must land in order) adds a short stage plan, with discovery when stale and a context pack; r3 (novel architecture, data-migration strategy, several consumers) offers the heavy pipeline, opt-in only. Force a class with `r0:`/`r1:`/`r2:`. A second `/run` started while another is live in the same checkout works in its own git worktree (`QUOIN_WORKTREE_ROOT`, default under `~/.quoin/worktrees/<repo>/<task>/`); add `isolate:` to force one. The final report names the worktree and branch; remove them with `/workspace teardown <task>`. r2 work is split into 2–5 stages in a short `architecture.md`, each run as r0 or r1. Add `parallel:` to run independent stages concurrently in separate worktrees (`QUOIN_PARALLEL_MAX`, default 2; optional daily budget `QUOIN_PARALLEL_BUDGET_USD` drops to one stage at a time once reached) |
 | `/run hard:` | Full heavy pipeline (`/run_hard`): discover → specify → architect → plan with critic rounds → implement → gate → review → end_of_task. `/run` also switches here itself when a light run hits an escalation trigger (design-level review blocker, repeated unexplained test failures, too many stages), keeping the brief, context pack and diff; `run_hard` hands a well-localized Small/Medium task back to `/run`. One switch per task; `no-switch:` or `QUOIN_RUN_AUTO_SWITCH=0` turns it off |
-| `quoin run --takeover <task>` | Shell command: stops an autonomous run's supervisor and headless child, then prints the `claude --resume` command to continue that session yourself |
 | `/cost_snapshot` | Shows today's cost, project lifetime cost, and per-task breakdown |
 | `/status` | Renders the workflow pipeline graph with the active phase marked (read-only) |
 | `/triage` | Suggests which skill fits your request; type the command to confirm |
@@ -177,6 +176,23 @@ once, focused on consumers of changed interfaces, and writes findings by
 `repo/path:line` with a fix for each. `/pr` then opens one PR per repository
 and links them to each other. `/quoin:review-cross <branch>` also works by
 hand on any branch that exists in several repositories.
+
+### Unattended runs
+
+`quoin run --autonomous <task>` runs a staged task with nobody watching: each
+stage still marked ⏳ in `.workflow_artifacts/<task>/architecture.md` becomes
+one headless `claude -p "/goal ..."` session whose condition is the stage's
+acceptance checks, its commit on the task branch, its ✅ mark, and printed
+`affected_tests.py` output as evidence. `--model`, `--max-budget-usd` (per
+stage) and `--dry-run` are available; each session is logged to
+`goal-run.log` in the task folder. A stage left unfinished stops the run
+(exit 1). Rerunning continues at the first unfinished stage.
+
+Claude Code does not document a pause-and-resume for a headless `/goal`
+session at a usage limit, so the run stops there with exit code 75 and the
+stage still unfinished; rerun it after the limit resets. For overnight runs
+that must wait out a limit by themselves, keep using the supervisor from the
+`legacy` tag (`pip install "git+https://github.com/FourthWiz/quoin@legacy"`).
 
 ## Files
 
