@@ -1,6 +1,6 @@
 {
   "name": "quoin",
-  "version": "0.98.0",
+  "version": "0.99.0",
   "description": "Workspace layer for projects made of several linked repositories: task records, cross-repo coordination and script checks for Claude Code.",
   "author": {
     "name": "IvGor"
@@ -8,5 +8,6 @@
   "homepage": "https://github.com/FourthWiz/quoin",
   "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
   "skills": "./adapters/claude/skills/",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "types": "./types/index.d.ts"
 }

@@ -197,15 +197,112 @@ def test_command_line_round_trip(repo):
 
 def test_plugin_registers_the_capture_hooks_and_module():
     hooks = json.loads((PKG / "hooks" / "hooks.json").read_text())
-    assert hooks["modules"] == ["./capture.ts"]
-    assert (PKG / "hooks" / "capture.ts").is_file()
-    wanted = {
-        "PostToolUse": "post-tool-use",
-        "Stop": "stop",
-        "UserPromptSubmit": "user-prompt-submit",
-        "SessionStart": "session-start",
-    }
-    for event, arg in wanted.items():
+    assert hooks["modules"] == ["./capture.tsx"]
+    assert (PKG / "hooks" / "capture.tsx").is_file()
+    wanted = [
+        ("PostToolUse", "post-tool-use"),
+        ("PostToolUse", "post-bash"),
+        ("Stop", "stop"),
+        ("UserPromptSubmit", "user-prompt-submit"),
+        ("SessionStart", "session-start"),
+    ]
+    for event, arg in wanted:
         commands = [h["command"] for entry in hooks["hooks"][event] for h in entry["hooks"]]
         assert any(c.endswith(f'/hooks/capture.sh" {arg}') for c in commands), event
     assert os.stat(PKG / "hooks" / "capture.sh").st_mode & stat.S_IXUSR
+
+
+# ── lifecycle ──────────────────────────────────────────────────────────────
+
+
+def _second_repo(tmp_path, name):
+    other = tmp_path / name
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    _git(other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+    _git(other, "checkout", "-q", "-b", "feat/multi")
+    return other
+
+
+def _bash(repo, session, command, stdout):
+    return _hook("post-bash", {"session_id": session, "cwd": str(repo), "tool_name": "Bash",
+                               "tool_input": {"command": command}, "tool_response": {"stdout": stdout}})
+
+
+def _field(repo, folder, name):
+    return tr._get_field((_art(repo) / folder / "brief.md").read_text(), name)
+
+
+def test_pr_moves_a_single_repo_task_to_review(repo):
+    _git(repo, "checkout", "-q", "-b", "feat/one")
+    _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(repo / "a")}})
+    _bash(repo, "s1", "gh pr create --fill", "https://github.com/o/proj/pull/7\n")
+    assert _field(repo, "feat-one", "Status") == "review"
+    assert _field(repo, "feat-one", "PRs") == "proj=https://github.com/o/proj/pull/7"
+    assert [t["status"] for t in tr.open_tasks(str(repo))] == ["review"]
+
+
+def test_multi_repo_task_waits_for_a_pr_in_every_repository(repo, tmp_path):
+    _git(repo, "checkout", "-q", "-b", "feat/multi")
+    other = _second_repo(tmp_path, "api")
+    for path in (repo / "a", other / "b"):
+        _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(path)}})
+    _bash(repo, "s1", "gh pr create --fill", "https://github.com/o/proj/pull/1\n")
+    assert _field(repo, "feat-multi", "Status") == "open"
+    _bash(repo, "s1", f'cd "{other}" && gh pr create --fill', "https://github.com/o/api/pull/2\n")
+    assert _field(repo, "feat-multi", "Status") == "review"
+
+
+def test_failed_pr_create_records_nothing(repo):
+    _git(repo, "checkout", "-q", "-b", "feat/fail")
+    _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(repo / "a")}})
+    _bash(repo, "s1", "gh pr create --fill", "pull request create failed: GraphQL error\n")
+    assert _field(repo, "feat-fail", "Status") == "open"
+
+
+def test_merged_prs_archive_the_task_and_release_its_claims(repo, monkeypatch, tmp_path):
+    import run_isolation
+
+    monkeypatch.setenv("QUOIN_RUN_REGISTRY", str(tmp_path / "runs"))
+    monkeypatch.setenv("QUOIN_RUN_OWNER_PID", str(os.getpid()))
+    _git(repo, "checkout", "-q", "-b", "feat/merge")
+    _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(repo / "a")}})
+    run_isolation.claim_session(repo / "a", "s1")
+    _bash(repo, "s1", "gh pr create", "https://github.com/o/proj/pull/9\n")
+
+    assert tr.lifecycle(str(repo), force=True, gh=lambda url: "OPEN") == []
+    assert _field(repo, "feat-merge", "Status") == "review"
+    changes = tr.lifecycle(str(repo), force=True, gh=lambda url: "MERGED")
+    assert [c["status"] for c in changes] == ["archived"]
+    assert tr.open_tasks(str(repo)) == []
+    assert run_isolation.load_entries(run_isolation.registry_dir(repo)) == {}
+    assert tr.lifecycle(str(repo), gh=lambda url: "MERGED") == []  # within the interval
+
+
+def test_done_closes_a_task_without_a_pr(repo):
+    _git(repo, "checkout", "-q", "-b", "feat/done")
+    _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(repo / "a")}})
+    assert tr.close_task(str(repo), "s1")["status"] == "closed"
+    assert tr.open_tasks(str(repo)) == []
+
+
+def test_idle_task_without_a_pr_is_flagged_stale(repo):
+    _git(repo, "checkout", "-q", "-b", "feat/idle")
+    _hook("post-tool-use", {"session_id": "s1", "cwd": str(repo), "tool_name": "Edit", "tool_input": {"file_path": str(repo / "a")}})
+    _hook("stop", {"session_id": "s1", "cwd": str(repo), "last_assistant_message": "done"})
+    old = time.time() - 8 * 86400
+    for name in ("brief.md", "journal.md"):
+        os.utime(_art(repo) / "feat-idle" / name, (old, old))
+    [task] = tr.open_tasks(str(repo))
+    assert task["stale"] is True
+
+
+def test_commit_runs_the_discovery_check(repo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tr, "_spawn", calls.append)
+    _git(repo, "checkout", "-q", "-b", "feat/commit")
+    _bash(repo, "s1", "git commit -m x", "[feat/commit 1a2b3c4] x\n 1 file changed\n")
+    _bash(repo, "s1", "git commit -m y", "nothing to commit, working tree clean\n")
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[1].endswith("discovery_dirty.py") and argv[argv.index("--task") + 1] == "feat/commit"
