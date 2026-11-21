@@ -44,7 +44,9 @@ LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.
 # Lowered when it became the r2-only file and the review moved to SKILL.md:
 # measured 15,004 bytes, plus margin.
-LIGHT_CEILING_BYTES = 15400
+# Raised for the stage list from the interface graph and the cross-repository
+# review after the last stage: measured 15,882 bytes, plus margin.
+LIGHT_CEILING_BYTES = 16000
 REFERENCE = RUN_SKILL.with_name("reference.md")
 # reference.md is read only for rare tags, non-Opus sessions, lessons and
 # escalation: measured 14,666 bytes at the split, times 1.05.

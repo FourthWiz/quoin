@@ -53,13 +53,13 @@ def test_known_description_exact_byte_count(census, tmp_path):
 
 
 def test_live_tree_census_totals(census):
-    # (c) live-tree census: 33 skills, total never above
+    # (c) live-tree census: 34 skills, total never above
     # the 13,470 B pre-trim baseline (equal at T-01 commit time; the trim
     # batches only ever reduce it — asserting exact equality would red the
     # suite the moment batch 1 lands, so the invariant here is the no-growth
     # bound plus the skill count).
     sizes = census.census_tree(census.TREES["adapter"])
-    assert len(sizes) == 33
+    assert len(sizes) == 34
     assert sum(sizes.values()) <= 13470
 
 

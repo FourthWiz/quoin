@@ -105,7 +105,10 @@ Then Step 4b.
 
 ## Step 4b — Decompose (inline)
 
-Marker: `decompose`. Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
+Marker: `decompose`. Stage list: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/impact.py --plan --repos <repos the task changes, comma-separated> --project-root "<root>" --json`
+gives those repos plus their interfaces' consumers, providers first. One stage
+per repo in that order; drop a consumer needing no change, naming it under
+`## Interfaces between stages`. Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
 (at most about 60 lines). Keep the stage rows in exactly this form, which the
 stage resolver parses:
 
@@ -167,6 +170,12 @@ stage, given the stage brief (reference.md "Opus implementer (dispatch)").
 5. Mark the stage ✅ in `architecture.md` (replace ⏳). If the stage showed the
    decomposition was wrong, update the later stages and add a one-line note to
    the Overview saying why, rather than forcing the old plan.
+
+**Cross-repo review (once, after the last stage).** Marker `review-cross`
+(`--skipped` if one repo). Invoke the `review-cross` skill (argument
+`<task branch> <task>`); it writes `review-cross.md` with findings by
+`repo/path:line`. Fix blockers and majors in the repo named (one commit there,
+tests rerun), note what you did under each; no second pass. Then Step 8 item 5.
 
 **Parallel waves (`PARALLEL` only).** Stages run in dependency waves instead
 of strict file order. Below, `PS` means

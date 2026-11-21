@@ -59,6 +59,7 @@ User-facing workflow skills with effort levels (from `quoin/core/workflow/skills
 | `plan` | planning | high |
 | `pr` | pr | medium |
 | `review` | review | high |
+| `review-cross` | review | high |
 | `revise` | planning | high |
 | `rollback` | rollback | medium |
 | `run` | orchestration | high |

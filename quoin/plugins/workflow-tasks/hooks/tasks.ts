@@ -264,6 +264,7 @@ const LIGHT_MARKER_PHASE: Record<string, Phase> = {
   verify: 'implement',
   review: 'review',
   'review-fixes': 'review',
+  'review-cross': 'review',
   commit: 'committed',
 }
 const LIGHT_MARKER_RE = /^\S+\s+(?:\d+:)?([a-z-]+)(\s+skipped)?\s*$/
