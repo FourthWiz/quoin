@@ -210,6 +210,15 @@
       "spawn_target": false
     },
     {
+      "name": "run-unattended",
+      "phase": "implement",
+      "effort": "low",
+      "user_facing": true,
+      "claude_model": "haiku",
+      "section_0": false,
+      "spawn_target": false
+    },
+    {
       "name": "run_hard",
       "phase": "orchestration",
       "effort": "max",

@@ -10,7 +10,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = _ROOT / "adapters" / "claude" / "skills"
 
 PER_SKILL_BYTES = 200
-TOTAL_BYTES = 5200
+# Raised from 5,200 for the review-cross and run-unattended skills; the
+# retirement stage removes many skills and their descriptions.
+TOTAL_BYTES = 5300
 
 
 def _description(path: Path) -> str:

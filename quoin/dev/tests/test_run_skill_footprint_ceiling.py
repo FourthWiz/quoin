@@ -46,7 +46,8 @@ LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # measured 15,004 bytes, plus margin.
 # Raised for the stage list from the interface graph and the cross-repository
 # review after the last stage: measured 15,882 bytes, plus margin.
-LIGHT_CEILING_BYTES = 16000
+# Raised for the option to run the stages unattended: measured 16,133 bytes.
+LIGHT_CEILING_BYTES = 16300
 REFERENCE = RUN_SKILL.with_name("reference.md")
 # reference.md is read only for rare tags, non-Opus sessions, lessons and
 # escalation: measured 14,666 bytes at the split, times 1.05.

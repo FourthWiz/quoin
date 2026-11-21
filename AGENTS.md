@@ -63,6 +63,7 @@ User-facing workflow skills with effort levels (from `quoin/core/workflow/skills
 | `revise` | planning | high |
 | `rollback` | rollback | medium |
 | `run` | orchestration | high |
+| `run-unattended` | implement | low |
 | `run_hard` | orchestration | max |
 | `security_review` | security_review | high |
 | `sleep` | sleep | low |

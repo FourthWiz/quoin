@@ -4,6 +4,10 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- **Unattended runs from inside a session** (v0.103.0). A new skill, `/quoin:run-unattended <task>`, starts `quoin run --autonomous` as a detached background process through `launch_unattended.py` (pid in `unattended.pid`, output in `unattended.log`, a second launch refused while one runs) and returns at once. The staged `/quoin:run` offers it when you confirm the stage plan, recommended for three or more stages: it adds a `Branch:` line to the plan and hands off. `quoin run` now names that branch (or a brief's `Branch:`) in each stage's goal, and its sessions run with `QUOIN_CLAIM_SHARED=1`, so they share the checkout the launching session handed over instead of moving to a worktree on another branch.
+
 ### Changed
 
 - **Unattended runs go through Claude Code's `/goal`** (v0.102.0). `quoin run --autonomous <task>` now runs each unfinished stage of a staged task as one headless `claude -p "/goal <condition>"` session started in the project root, with a fixed `--allowedTools` list and `QUOIN_HEADLESS_CHILD=1`. The condition is the stage's acceptance line plus evidence the goal's evaluator can see: the stage committed on the task branch, its row marked ✅, and the output of `affected_tests.py` printed. The stage list is reread after each session; a stage left unfinished stops the run, a usage limit pauses it (exit 75), and rerunning continues at the first unfinished stage. A task with no stage list runs its brief as one goal. New options: `--model`, `--max-budget-usd` (per stage), `--dry-run`; each session's start, end, cost and id go to `goal-run.log`.

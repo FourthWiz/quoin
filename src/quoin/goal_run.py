@@ -32,6 +32,10 @@ SESSION_TIMEOUT_S = 6 * 3600
 # Tells the session it runs headless: it must wait for long test runs instead
 # of ending its turn with work pending (autonomous-mode.md).
 HEADLESS_ENV = "QUOIN_HEADLESS_CHILD"
+# The session that launched the run handed its checkout over: share claims
+# instead of moving each stage's session to a worktree on another branch.
+SHARED_CLAIM_ENV = "QUOIN_CLAIM_SHARED"
+_BRANCH = re.compile(r"^\s*(?:-\s*)?Branch\s*:\s*`?([^\s`]+)`?\s*$", re.M | re.I)
 EXIT_OK, EXIT_STOPPED, EXIT_INVALID, EXIT_PAUSED = 0, 1, 2, 75
 
 _SECTION = re.compile(r"^##\s+Stage decomposition\s*$", re.M)
@@ -82,6 +86,18 @@ def parse_stages(text: str) -> list[Stage]:
     return stages
 
 
+def task_branch(task_dir: Path) -> Optional[str]:
+    """The task branch named by a ``Branch:`` line in architecture.md or brief.md."""
+    for name in ("architecture.md", "brief.md"):
+        try:
+            match = _BRANCH.search((task_dir / name).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if match and match.group(1).lower() not in ("none", "-"):
+            return match.group(1)
+    return None
+
+
 def affected_tests_script() -> Path:
     """The staged plugin's copy when installed, else this checkout's."""
     try:
@@ -95,7 +111,7 @@ def affected_tests_script() -> Path:
     return Path(__file__).resolve().parents[2] / "quoin" / "scripts" / "affected_tests.py"
 
 
-def condition(task: str, stage: Optional[Stage], project_root: Path) -> str:
+def condition(task: str, stage: Optional[Stage], project_root: Path, branch: Optional[str] = None) -> str:
     """The `/goal` condition for one stage, or for a task with no stage list."""
     tests = f'python3 "{affected_tests_script()}" --project-root "{project_root}"'
     evidence = (
@@ -105,7 +121,8 @@ def condition(task: str, stage: Optional[Stage], project_root: Path) -> str:
     )
     if stage is None:
         return (
-            f"Task {task} is done as .workflow_artifacts/{task}/brief.md asks, on the task's branch (never main or "
+            f"Task {task} is done as .workflow_artifacts/{task}/brief.md asks, on "
+            f"{f'branch {branch}' if branch else 'the task branch'} (never main or "
             f"master), committed with a conventional commit message. {evidence} Do not push or open a pull request. If it cannot be done, say why and stop."
         )
     where = f" in {stage.repo}" if stage.repo else ""
@@ -113,8 +130,10 @@ def condition(task: str, stage: Optional[Stage], project_root: Path) -> str:
     return (
         f"Stage {stage.id} ({stage.name}) of task {task} is done{where}: {checks}. The work follows "
         f".workflow_artifacts/{task}/architecture.md (and stage-{int(stage.id.split('-')[1])}/brief.md when present), "
-        "is committed on the task branch, which has the same name in every repository and is never main or master, "
-        f"and the row for {stage.id} in that architecture.md is marked ✅. {evidence} Do not push or open a pull request. If the stage cannot be done, say why and stop."
+        + (f"is committed on branch {branch} in every repository it changes (create it from the default branch where it "
+           "does not exist yet), " if branch else
+           "is committed on the task branch, which has the same name in every repository and is never main or master, ")
+        + f"and the row for {stage.id} in that architecture.md is marked ✅. {evidence} Do not push or open a pull request. If the stage cannot be done, say why and stop."
     )
 
 
@@ -168,6 +187,7 @@ def run(project_root: str | os.PathLike, task: str, *, runner: Runner = subproce
     if not staged and not (task_dir / "brief.md").is_file():
         return Outcome("invalid", message=f"{task} has neither a stage list in architecture.md nor a brief.md")
 
+    branch = task_branch(task_dir)
     done: list[str] = []
     while True:
         pending = None
@@ -177,7 +197,7 @@ def run(project_root: str | os.PathLike, task: str, *, runner: Runner = subproce
             if pending is None:
                 return Outcome("complete", done, f"all {len(stages)} stages of {task} are done")
         label = pending.id if pending else task
-        cond = condition(task, pending, root)
+        cond = condition(task, pending, root, branch)
         argv = argv_for(cond, max_budget_usd, model)
         if dry_run:
             printer(json.dumps({"stage": label, "argv": argv}))
@@ -187,7 +207,7 @@ def run(project_root: str | os.PathLike, task: str, *, runner: Runner = subproce
         _log(task_dir, f"{label} start")
         try:
             proc = runner(argv, cwd=str(root), capture_output=True, text=True, timeout=SESSION_TIMEOUT_S,
-                          env={**os.environ, HEADLESS_ENV: "1"})
+                          env={**os.environ, HEADLESS_ENV: "1", SHARED_CLAIM_ENV: "1"})
         except subprocess.TimeoutExpired:
             _log(task_dir, f"{label} timeout")
             return Outcome("stopped", done, f"{label}: the session ran past {SESSION_TIMEOUT_S // 3600} hours")

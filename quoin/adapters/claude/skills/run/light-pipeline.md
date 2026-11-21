@@ -138,7 +138,11 @@ with several consumers), stop and escalate instead (see Escalation).
 **Confirm.** Interactive: show the stage list and ask once (`AskUserQuestion`):
 proceed with these stages, run it as a single change instead (the plain
 route, as r1 when an r1 signal holds, else r0; set `## Scope` to match), or switch to
-`run_hard` (the switch procedure above, with no second question). When
+`run_hard` (the switch procedure above, with no second question), or run the
+stages unattended (recommend it for three or more stages): add a
+`Branch: <task branch>` line under `## Overview`, then invoke the
+`run-unattended` skill with the task name and end the run there; each stage
+runs as its own `/goal` session. When
 Escalation does not allow switching (`NO_SWITCH`, or `pipeline-switch.md`
 exists), the third option is stop and recommend `/run hard:` instead. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
 note the decomposition under Assumptions in the brief.

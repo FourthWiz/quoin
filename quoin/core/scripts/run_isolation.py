@@ -462,7 +462,10 @@ def claim_session(path: Path, session_id: str, label: str | None = None,
     ``reason`` is ``free`` or ``resume`` when the tree is this session's,
     ``shared`` when the caller chose to stay beside a live holder, and
     ``conflict`` (nothing written) when another live session or run holds it.
+    A session started by ``quoin run`` (``QUOIN_CLAIM_SHARED=1``) works on the
+    checkout the session that launched it handed over, so its claims are shared.
     """
+    shared = shared or os.environ.get("QUOIN_CLAIM_SHARED") == "1"
     tree = working_tree(path)
     if tree is None:
         return {"mode": None, "reason": "not-a-repo", "tree": None, "blocking": None}
