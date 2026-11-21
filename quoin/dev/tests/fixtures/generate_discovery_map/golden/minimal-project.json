@@ -6,6 +6,7 @@
     "workflow_artifacts_path": ".workflow_artifacts"
   },
   "generated_at": "2026-05-13T00:00:00Z",
+  "interfaces": [],
   "memory": {
     "daily_dir": ".workflow_artifacts/memory/daily",
     "lessons_learned": ".workflow_artifacts/memory/lessons-learned.md",
@@ -18,7 +19,7 @@
     "runtime_adapters": []
   },
   "repos": [],
-  "schema_version": 1,
+  "schema_version": 2,
   "tasks": {
     "active": [],
     "finalized": []

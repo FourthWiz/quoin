@@ -32,6 +32,9 @@ if str(REPO_ROOT) not in sys.path:
 # We extend quoin.__path__ to include the source-tree quoin/ directory so that
 # sub-packages like quoin.benchmarks resolve correctly in both cases.
 import importlib
+
+# The interface fixture is a sample project; its test files are scanner input, not tests.
+collect_ignore_glob = ["fixtures/interface_project/*"]
 _quoin_src_dir = str(REPO_ROOT / "quoin")
 try:
     import quoin as _quoin_pkg

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Order",
+  "type": "object",
+  "required": ["order_id", "total_cents"],
+  "properties": {"order_id": {"type": "string"}, "total_cents": {"type": "integer"}}
+}

@@ -501,15 +501,27 @@ def generate_map(
         "memory": memory,
         "project": project_obj,
         "repos": repos,
-        "schema_version": 1,
+        "schema_version": 2,
         "tasks": tasks,
     }
     if freshness:
         map_obj["freshness"] = freshness
+    map_obj["interfaces"] = _scan_interfaces(project_root)
     # dependency_hints: OMITTED in v1 (D-06)
     # extensions: OMITTED in v1
 
     return map_obj
+
+
+def _scan_interfaces(project_root: Path) -> List[Dict[str, Any]]:
+    """The interface graph; an empty list when the scan fails, so the map is still written."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import interfaces
+
+        return interfaces.scan(project_root)
+    except Exception:  # noqa: BLE001 - the graph is advisory
+        return []
 
 
 # ── Write helper ──────────────────────────────────────────────────────────────

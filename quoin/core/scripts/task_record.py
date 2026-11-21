@@ -747,6 +747,9 @@ def hook(event: str, data: dict) -> str:
         if source not in ("startup", "resume"):
             return ""
         _spawn([sys.executable, str(Path(__file__).resolve()), "lifecycle", "--cwd", cwd])
+        if (artifacts_dir(cwd) / "memory" / "discovery-dirty").is_file():
+            script = Path(__file__).resolve().parent / "gen_rules.py"
+            _spawn([sys.executable, str(script), "--if-dirty", "--project-root", str(artifacts_dir(cwd).parent)])
         art = artifacts_dir(cwd)
         state = load_state(art, session)
         task = None
