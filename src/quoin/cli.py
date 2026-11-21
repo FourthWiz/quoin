@@ -5,7 +5,6 @@ import argparse
 import importlib.resources
 import os
 import pathlib
-import runpy
 import shutil
 import subprocess
 import sys
@@ -405,69 +404,57 @@ def _cmd_install(args: argparse.Namespace) -> int:
 # copied out of the real environment, so no credential variable can reach it.
 
 
-def _codex_script(source_dir: pathlib.Path, name: str) -> pathlib.Path:
-    script = source_dir / "adapters" / "codex" / name
-    if not script.is_file():
-        print(
-            f"quoin: cannot find Codex adapter script {script}; "
-            "pass --source-dir <path-to-clone>/quoin if needed",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    return script
+def _agent_skills_builder(source_dir: pathlib.Path):
+    """The source tree's `build_agent_skills` module, loaded from its file."""
+    import importlib.util  # noqa: PLC0415
+
+    path = source_dir / "core" / "scripts" / "build_agent_skills.py"
+    if not path.is_file():
+        _abort(f"quoin: cannot find {path}; pass --source-dir <path-to-clone>/quoin if needed")
+    spec = importlib.util.spec_from_file_location("_quoin_build_agent_skills", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
-def _run_codex_script(script: pathlib.Path, argv: list[str]) -> int:
-    old_argv = sys.argv[:]
-    try:
-        sys.argv = [str(script), *argv]
-        try:
-            runpy.run_path(str(script), run_name="__main__")
-        except SystemExit as exc:
-            code = exc.code
-            if code is None:
-                return 0
-            if isinstance(code, int):
-                return code
-            print(code, file=sys.stderr)
-            return 1
-    finally:
-        sys.argv = old_argv
+def _check_agent_skills(source_dir: pathlib.Path, out: pathlib.Path) -> int:
+    builder = _agent_skills_builder(source_dir)
+    missing = [
+        builder.agent_name(s) for s in builder.KEPT_SKILLS
+        if (source_dir / "adapters" / "claude" / "skills" / s / "SKILL.md").is_file()
+        and not (out / builder.agent_name(s) / "SKILL.md").is_file()
+    ]
+    if missing or not (out / builder.SUPPORT).is_dir():
+        print(f"quoin: {out} is missing {', '.join(missing) or builder.SUPPORT}; run 'quoin install --runtime codex'")
+        return 1
+    print(f"Agent Skills folder {out}: every quoin skill is present")
+    return 0
+
+
+def _cmd_codex_init(args: argparse.Namespace) -> int:
+    """`quoin install --runtime codex`: the kept skills as `.agents/skills/` in the project."""
+    source_dir = _resolve_source_dir(args.source_dir)
+    out = pathlib.Path(args.project_root).resolve() / ".agents" / "skills"
+    if args.check:
+        return _check_agent_skills(source_dir, out)
+    result = _agent_skills_builder(source_dir).build(out, source_dir)
+    print(f"Wrote {len(result['skills'])} skills to {out}: {', '.join(result['skills'])}")
+    print("Codex and OpenCode read them from there.")
     return 0
 
 
 def _cmd_codex_doctor(args: argparse.Namespace) -> int:
     source_dir = _resolve_source_dir(args.source_dir)
-    project_root = pathlib.Path(args.project_root).resolve()
-
-    readiness = _codex_script(source_dir, "verify_codex_readiness.py")
-    print(f"Codex readiness: {project_root}")
-    readiness_rc = _run_codex_script(
-        readiness,
-        ["--project-root", str(project_root)],
-    )
-    if readiness_rc != 0:
-        return readiness_rc
-
-    if args.smoke:
-        smoke = _codex_script(source_dir, "smoke_codex_workflow.py")
-        print()
-        print(f"Codex smoke: {project_root}")
-        return _run_codex_script(smoke, ["--project-root", str(project_root)])
-
-    return 0
+    return _check_agent_skills(source_dir, pathlib.Path(args.project_root).resolve() / ".agents" / "skills")
 
 
-def _cmd_codex_init(args: argparse.Namespace) -> int:
+def _cmd_skills(args: argparse.Namespace) -> int:
+    """`quoin skills build --out DIR`: the kept skills as a plain Agent Skills folder."""
     source_dir = _resolve_source_dir(args.source_dir)
-    project_root = pathlib.Path(args.project_root).resolve()
-    generator = _codex_script(source_dir, "generate_codex_assets.py")
-
-    script_args = ["--project-root", str(project_root)]
-    if args.check:
-        script_args.append("--check")
-
-    return _run_codex_script(generator, script_args)
+    result = _agent_skills_builder(source_dir).build(pathlib.Path(args.out), source_dir)
+    print(f"Wrote {len(result['skills'])} skills to {result['out']}")
+    return 0
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -563,6 +550,31 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     print("doctor: all checks passed")
     return 0
+
+
+def _cmd_open(args: argparse.Namespace) -> int:
+    """`quoin open [setup|remove|probe|launch]`: the open-model pack."""
+    from quoin import open_pack  # noqa: PLC0415
+
+    action = args.open_action or "launch"
+    if action == "setup":
+        try:
+            result = open_pack.setup(_resolve_source_dir(args.source_dir), overwrite_profile=args.reset_profile)
+        except FileNotFoundError as exc:
+            print(f"quoin open: {exc}", file=sys.stderr)
+            return 2
+        print(f"Open-model pack copied to {result['pack']}")
+        state = "written" if result["profile_written"] else "kept (pass --reset-profile to replace it)"
+        print(f"Launch profile {result['profile']}: {state}")
+        print("Check the gateway with `quoin open probe`, then start a session with `quoin open`.")
+        return 0
+    if action == "remove":
+        removed = open_pack.remove()["removed"]
+        print("Removed " + ", ".join(removed) if removed else "Nothing to remove.")
+        return 0
+    if action == "probe":
+        return open_pack.probe()
+    return open_pack.launch(list(args.claude_args))
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -717,14 +729,14 @@ def main(argv: list[str] | None = None) -> int:
         default="claude",
         help=(
             "Runtime target. 'claude' installs globally to ~/.claude; "
-            "'codex' generates repo-local AGENTS.md only. Defaults to claude."
+            "'codex' writes the kept skills to <project>/.agents/skills (Agent Skills, also read by OpenCode). Defaults to claude."
         ),
     )
     install_p.add_argument(
         "--project-root",
         default=".",
         help=(
-            "Project root for --runtime codex AGENTS.md generation/checking; "
+            "Project root for --runtime codex (.agents/skills is written there); "
             "defaults to the current directory."
         ),
     )
@@ -732,8 +744,7 @@ def main(argv: list[str] | None = None) -> int:
         "--check",
         action="store_true",
         help=(
-            "For --runtime codex, check AGENTS.md without writing files "
-            "(same behavior as 'quoin codex init --check')."
+            "For --runtime codex, check .agents/skills holds every quoin skill without writing files."
         ),
     )
     install_p.add_argument("--dev", action="store_true", help="Install dev dependencies")
@@ -837,41 +848,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="Override quoin data source directory for Codex adapter scripts.",
     )
-    doctor_p.add_argument(
-        "--smoke",
-        action="store_true",
-        help=(
-            "For --runtime codex, also run the deterministic repo-local smoke check."
-        ),
-    )
 
-    codex_p = sub.add_parser(
-        "codex",
-        description="Repo-local Codex setup helpers (generate/check AGENTS.md).",
-        help="Repo-local Codex setup helpers",
+    skills_p = sub.add_parser(
+        "skills",
+        description="Write quoin's kept skills as a plain Agent Skills folder (for Codex, OpenCode and others).",
+        help="Write the kept skills as an Agent Skills folder",
     )
-    codex_sub = codex_p.add_subparsers(dest="codex_command")
-
-    codex_init_p = codex_sub.add_parser(
-        "init",
-        description="Generate or check the repo-local Codex AGENTS.md scaffold.",
-        help="Generate or check repo-local Codex AGENTS.md",
-    )
-    codex_init_p.add_argument(
-        "--project-root",
-        default=".",
-        help="Project root where AGENTS.md is generated or checked.",
-    )
-    codex_init_p.add_argument(
-        "--check",
-        action="store_true",
-        help="Check AGENTS.md without writing files.",
-    )
-    codex_init_p.add_argument(
-        "--source-dir",
-        metavar="PATH",
-        help="Override quoin data source directory for Codex adapter scripts.",
-    )
+    skills_sub = skills_p.add_subparsers(dest="skills_command")
+    skills_build_p = skills_sub.add_parser("build", help="Write the folder")
+    skills_build_p.add_argument("--out", required=True, help="Folder to write, e.g. <project>/.agents/skills")
+    skills_build_p.add_argument("--source-dir", default=None, help="Source tree (default: this package).")
 
     sub.add_parser(
         "bench",
@@ -962,6 +948,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Explicit-intent alias for reset; produces identical behaviour.",
     )
 
+    open_p = sub.add_parser(
+        "open",
+        description=(
+            "Run Claude Code on an open model through a gateway. 'setup' copies the "
+            "open-model pack and writes ~/.config/quoin/open.json (Qwen3 Coder through "
+            "OpenRouter by default; edit it for another model); 'probe' checks the "
+            "gateway; 'remove' deletes both; 'launch' (the default) starts claude with "
+            "the profile's environment and the pack. Claude Code's own settings and "
+            "the default quoin plugin are never changed."
+        ),
+        help="Run Claude Code on an open model (setup, probe, remove, launch)",
+    )
+    open_p.add_argument("open_action", nargs="?", choices=("setup", "remove", "probe", "launch"), default=None)
+    open_p.add_argument("claude_args", nargs=argparse.REMAINDER, help="Arguments passed to claude on launch.")
+    open_p.add_argument("--source-dir", default=None, help="Source tree for setup (default: this package).")
+    open_p.add_argument("--reset-profile", action="store_true", help="With setup, replace an existing profile.")
+
     run_p = sub.add_parser(
         "run",
         description=(
@@ -1019,10 +1022,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_install(args)
     elif args.command == "doctor":
         return _cmd_doctor(args)
-    elif args.command == "codex":
-        if args.codex_command == "init":
-            return _cmd_codex_init(args)
-        codex_p.print_help()
+    elif args.command == "skills":
+        if args.skills_command == "build":
+            return _cmd_skills(args)
+        skills_p.print_help()
         return 1
     elif args.command == "router":
         # Lazy import keeps quoin install path import-clean (R-11 / D-01).
@@ -1043,6 +1046,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.models_command == "reset":
             return _models._cmd_models_reset(args)
         return _models._cmd_models_show(args)
+    elif args.command == "open":
+        return _cmd_open(args)
     elif args.command == "run":
         return _cmd_run(args)
 

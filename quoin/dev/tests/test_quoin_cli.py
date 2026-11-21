@@ -50,7 +50,7 @@ def test_cli_help():
     result = _py("-m", "quoin", "--help")
     assert result.returncode == 0, result.stderr
     assert "install" in result.stdout
-    assert "codex" in result.stdout
+    assert "skills" in result.stdout and "open" in result.stdout
     assert "Examples:" in result.stdout
     assert "quoin router setup" in result.stdout
     assert "quoin models set" in result.stdout
@@ -62,7 +62,7 @@ def test_cli_help():
     assert "--dev" in result2.stdout
     assert "--runtime" in result2.stdout
     assert "installs the quoin plugin" in result2.stdout
-    assert "repo-local AGENTS.md" in result2.stdout
+    assert ".agents/skills" in result2.stdout
     assert "Scope" in result2.stdout
     assert "project:/path" in result2.stdout
 
@@ -73,14 +73,13 @@ def test_cli_help():
     assert "codex" in result3.stdout
     assert "read-only" in result3.stdout
 
-    # thin subparsers now carry a description=
-    result4 = _py("-m", "quoin", "codex", "--help")
+    result4 = _py("-m", "quoin", "skills", "build", "--help")
     assert result4.returncode == 0, result4.stderr
-    assert "Codex" in result4.stdout
+    assert "--out" in result4.stdout
 
-    result5 = _py("-m", "quoin", "codex", "init", "--help")
+    result5 = _py("-m", "quoin", "open", "--help")
     assert result5.returncode == 0, result5.stderr
-    assert "AGENTS.md" in result5.stdout
+    assert "setup" in result5.stdout and "probe" in result5.stdout
 
     result7 = _py("-m", "quoin", "router", "--help")
     assert result7.returncode == 0, result7.stderr
@@ -189,110 +188,24 @@ def test_run_subcommand_bare_other_subcommands_unchanged(monkeypatch):
     assert runtimes == ["claude", "claude"]
 
 
-def test_codex_doctor_cli_passes_for_repo_root():
-    result = _py(
-        "-m", "quoin", "doctor", "--runtime", "codex", "--project-root", str(REPO),
-        timeout=60,
-    )
-    assert result.returncode == 0, (
-        f"Codex doctor failed:\nstdout={result.stdout}\nstderr={result.stderr}"
-    )
-    assert "Codex readiness:" in result.stdout
-    assert "READY: repo-local Codex setup contract is satisfied" in result.stdout
-
-
-def test_codex_init_cli_writes_agents_md_repo_locally():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result = _py(
-            "-m", "quoin", "codex", "init", "--project-root", tmpdir,
-            timeout=60,
-        )
-        assert result.returncode == 0, result.stderr
-
-        root = Path(tmpdir)
-        agents = root / "AGENTS.md"
-        assert agents.is_file()
-        assert sorted(path.name for path in root.iterdir()) == ["AGENTS.md"]
-
-        content = agents.read_text(encoding="utf-8")
-        assert ".workflow_artifacts/" in content
-        for forbidden in (
-            "~/." + "codex",
-            "$HOME/." + "codex",
-            "/usr/local/" + "codex",
-            "/opt/" + "codex",
-            "." + "codex/commands",
-            "npm install" + " -g " + "codex",
-        ):
-            assert forbidden not in content
-
-
-def test_install_runtime_codex_writes_and_checks_agents_md_repo_locally():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result = _py(
-            "-m", "quoin", "install", "--runtime", "codex", "--project-root", tmpdir,
-            timeout=60,
-        )
-        assert result.returncode == 0, result.stderr
-
-        root = Path(tmpdir)
-        agents = root / "AGENTS.md"
-        assert agents.is_file()
-        assert sorted(path.name for path in root.iterdir()) == ["AGENTS.md"]
-        assert ".workflow_artifacts/" in agents.read_text(encoding="utf-8")
-
-        check = _py(
-            "-m", "quoin", "install", "--runtime", "codex",
-            "--project-root", tmpdir, "--check",
-            timeout=60,
-        )
-        assert check.returncode == 0, (
-            f"Codex install --check failed:\nstdout={check.stdout}\nstderr={check.stderr}"
-        )
-        assert "is up to date" in check.stdout
-
-
-def test_codex_init_check_is_non_destructive():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result = _py(
-            "-m", "quoin", "codex", "init", "--project-root", tmpdir,
-            timeout=60,
-        )
-        assert result.returncode == 0, result.stderr
-
-        agents = Path(tmpdir) / "AGENTS.md"
-        before = agents.read_text(encoding="utf-8")
-
-        check = _py(
-            "-m", "quoin", "codex", "init", "--project-root", tmpdir, "--check",
-            timeout=60,
-        )
-        assert check.returncode == 0, (
-            f"Codex init --check failed:\nstdout={check.stdout}\nstderr={check.stderr}"
-        )
-        assert agents.read_text(encoding="utf-8") == before
-        assert "is up to date" in check.stdout
-
-
-def test_codex_doctor_does_not_write_global_codex_paths():
+def test_install_runtime_codex_writes_the_agent_skills_folder_and_checks_it():
     with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as home:
-        init = _py(
-            "-m", "quoin", "codex", "init", "--project-root", tmpdir,
-            timeout=60,
-        )
-        assert init.returncode == 0, init.stderr
+        missing = _py("-m", "quoin", "doctor", "--runtime", "codex", "--project-root", tmpdir, timeout=60, home=home)
+        assert missing.returncode == 1 and "is missing" in missing.stdout
+        assert not (Path(tmpdir) / ".agents").exists()
 
-        doctor = _py(
-            "-m", "quoin", "doctor", "--runtime", "codex", "--project-root", tmpdir,
-            home=home,
-            timeout=60,
-        )
-        assert doctor.returncode == 0, (
-            f"Codex doctor failed:\nstdout={doctor.stdout}\nstderr={doctor.stderr}"
-        )
-        assert not (Path(home) / ".codex").exists()
-        assert sorted(path.name for path in Path(tmpdir).iterdir()) == ["AGENTS.md"]
+        result = _py("-m", "quoin", "install", "--runtime", "codex", "--project-root", tmpdir, timeout=60, home=home)
+        assert result.returncode == 0, result.stderr
+        skills = Path(tmpdir) / ".agents" / "skills"
+        for name in ("discover", "init-workflow", "review-cross", "security-review"):
+            assert (skills / name / "SKILL.md").is_file(), name
+        assert (skills / "quoin-support" / "scripts").is_dir()
+        assert sorted(p.name for p in Path(tmpdir).iterdir()) == [".agents"]
+        assert list(Path(home).iterdir()) == []
 
+        check = _py("-m", "quoin", "install", "--runtime", "codex", "--project-root", tmpdir, "--check",
+                    timeout=60, home=home)
+        assert check.returncode == 0 and "every quoin skill is present" in check.stdout
 
 # ── Installer idempotency ─────────────────────────────────────────────────────
 

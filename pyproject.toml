@@ -47,10 +47,10 @@ exclude = [
 [tool.hatch.build.targets.wheel.force-include]
 "quoin/scripts" = "src/quoin/data/scripts"
 "quoin/hooks" = "src/quoin/data/hooks"
+"quoin/packs" = "src/quoin/data/packs"
 "quoin/types" = "src/quoin/data/types"
 "quoin/core" = "src/quoin/data/core"
 "quoin/adapters/claude" = "src/quoin/data/adapters/claude"
-"quoin/adapters/codex" = "src/quoin/data/adapters/codex"
 "quoin/QUICKSTART.md" = "src/quoin/data/QUICKSTART.md"
 "quoin/CLAUDE.md" = "src/quoin/data/CLAUDE.md"
 "quoin/CLAUDE.slim.md" = "src/quoin/data/CLAUDE.slim.md"

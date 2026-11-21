@@ -1,5 +1,7 @@
 # Runtime Portability
 
+> **Superseded (v0.104.0).** The Codex adapter this document describes was removed; Codex and OpenCode now read quoin's kept skills from a plain Agent Skills folder (`quoin install --runtime codex`, see the README). Kept as a record of the earlier design.
+
 Quoin is moving from a Claude-specific workflow toolkit to a runtime-portable workflow system. The portable value is the artifact-centric workflow, not any single agent runtime.
 
 This document defines the boundary for the first migration pass. It is intentionally conservative: existing Claude Code behavior remains the compatibility baseline.

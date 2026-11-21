@@ -80,26 +80,3 @@ def test_core_doc_verify_fix_loop_stays_portable():
 
 # ── (c) Codex procedure — verify/fix-loop token present ───────────────────
 
-
-def test_codex_procedure_mentions_verify_fix_loop():
-    text = _load(CODEX_PROCEDURE)
-    assert "verify-fix loop" in text, (
-        "Codex adapter procedure must mention a bounded verify-fix loop (T-03)."
-    )
-    assert "quoin/core/skills/implement.md" in text, (
-        "Codex adapter procedure must reference the portable contract path (T-03)."
-    )
-
-
-# ── (d) CRIT-1 regression guard (round 3, strengthened) ────────────────────
-
-
-# ── (e) MAJ-1 regression guard (round 3) ───────────────────────────────────
-
-
-# ── (f) MIN-1 regression guard (round 3) ───────────────────────────────────
-
-
-# ── (g) MIN-2 regression guard (round 3) ───────────────────────────────────
-
-
