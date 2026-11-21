@@ -169,7 +169,7 @@ def _remove_manifest_files(dest_root: pathlib.Path, manifest: dict[str, str]) ->
     Opt-in mod folders are skipped: the mods are still managed file by file.
     An edited file is kept and reported.
     """
-    protected = tuple(f"skills/{mod.name}/" for mod in OPT_IN_MODS)
+    protected = tuple(f"skills/{name}/" for name in [mod.name for mod in OPT_IN_MODS] + list(_MOVED_MODS))
     removed, kept = 0, []
     for rel, digest in sorted(manifest.items()):
         if rel.startswith(protected):
@@ -362,6 +362,11 @@ def apply_autocompact_env(
 # written. The next install deletes the files it no longer ships, but only
 # while they still hold exactly what quoin wrote.
 MANIFEST_FILENAME = "quoin-manifest.json"
+
+# Mods an earlier install deployed that now ship in another repository
+# (quoin-cockpit). The person still uses them, so retiring the old deployment
+# must never remove their files.
+_MOVED_MODS: tuple[str, ...] = ("context-tracker",)
 
 
 MANIFEST_SCHEMA = 1

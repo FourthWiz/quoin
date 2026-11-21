@@ -4,6 +4,10 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- **`quoin install` no longer deletes the context-tracker mod** (v0.101.1). Retiring an earlier file-by-file deployment removed every unchanged file its manifest listed except the opt-in mods still shipped in this package, so the context-tracker mod, which moved to `quoin-cockpit`, was deleted from `~/.claude/skills/context-tracker`. Mods that moved to another repository are now kept like the opt-in ones. Anyone it removed can copy `quoin/plugins/context-tracker/` from `quoin-cockpit` back to `~/.claude/skills/context-tracker/`.
+
 ### Added
 
 - **Cross-repository review and the staged route** (v0.101.0). A new forked Opus skill, `review-cross`, reviews one task's change across every repository it touched. `review_cross_pack.py` gives it the impact report, each touched interface with the current code of its consumers (changed or not, with line numbers) and every repository's diff; it returns findings by `repo/path:line` with severity and a concrete fix, focused on consumers of changed interfaces, writes them to `.workflow_artifacts/<task>/review-cross.md`, and never edits code (it may run only Python and git commands). The staged route (`/run` r2) now takes its stage list from `impact.py --plan` (the repositories the task changes plus their interfaces' consumers, providers first), keeps one branch name in every repository as before, keeps per-stage review for r1 stages only, and runs `review-cross` once after the last stage, applying blockers and majors in the repository named (new `review-cross` phase marker). `impact.py --branch <name>` diffs each repository that has the branch against its own default branch. `/pr` opens a PR in every repository where the task branch has changes and links them with `link_prs.py`, which adds a "Related pull requests" section to each body.
