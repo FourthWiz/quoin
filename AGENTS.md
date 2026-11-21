@@ -1,4 +1,7 @@
 ## Purpose
+
+> Quoin's skills for Codex are a plain Agent Skills folder: run `quoin skills build --out .agents/skills` (or `quoin install --runtime codex --project-root .`) and Codex picks them up. References below to `quoin/adapters/codex/` describe the removed adapter.
+
 This repository contains Quoin, a workflow-memory toolkit. Its core value is the
 artifact-centric workflow system, not any single coding agent runtime.
 

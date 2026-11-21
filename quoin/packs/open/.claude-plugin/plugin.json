@@ -1,0 +1,10 @@
+{
+  "name": "quoin-open",
+  "version": "0.104.0",
+  "description": "Quoin's open-model pack: a plan-first skill and a review skill tuned for open models, loaded only in sessions started with `quoin open`.",
+  "author": {
+    "name": "IvGor"
+  },
+  "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
+  "skills": "./skills/"
+}

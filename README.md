@@ -268,75 +268,30 @@ that must wait out a limit by themselves, keep using the supervisor from the
 | Runtime | Setup command | Scope | Implemented behavior |
 |---------|---------------|-------|----------------------|
 | Claude Code | `quoin install --runtime claude` | Claude Code plugin, user scope | Skills, scripts, hooks, memory files, short `CLAUDE.md` core rules (full rules in `memory/workflow-catalog.md`), slash-command workflow |
-| Codex | `quoin install --runtime codex --project-root .` | Repo-local `AGENTS.md` | Portable artifact workflow, generated root instructions, readiness/smoke checks, handoff validation, cost event writer |
+| Codex, OpenCode | `quoin install --runtime codex --project-root .` | `<project>/.agents/skills/` | The kept skills as a plain Agent Skills folder, with the scripts and guides they call |
 
 The portable core is shared. Runtime-specific mechanics are adapter-owned:
 
 - Claude adapter files live under `quoin/adapters/claude/`; `quoin/` is the
   plugin root (`quoin/.claude-plugin/plugin.json`).
-- Codex adapter files live under `quoin/adapters/codex/` and are used from the
-  repository. They are documentation, generated instructions, and validation
-  scripts, not Codex command packages.
+- Codex and OpenCode get the kept skills as a plain Agent Skills folder
+  (`build_agent_skills.py`); there is no Codex-specific adapter.
 
-## Codex Quickstart
+## Codex and OpenCode
 
-In the project where you want Codex to use Quoin:
+Codex reads Agent Skills from a project's `.agents/skills/` (OpenCode reads the
+same format). Write quoin's kept skills there:
 
 ```bash
 pip install quoin
-quoin install --runtime codex --project-root .
-quoin doctor --runtime codex --project-root . --smoke
+quoin install --runtime codex --project-root .    # writes .agents/skills/
+quoin doctor --runtime codex --project-root .     # checks every skill is there
+quoin skills build --out <any folder>             # the same folder anywhere else
 ```
 
-Then ask Codex for Quoin phases in natural language:
-
-- "Use Quoin to discover this repository and write the discovery artifacts."
-- "Use Quoin to create an architecture artifact for this task."
-- "Use Quoin to write a current plan under `.workflow_artifacts/`."
-- "Use Quoin to implement the current plan."
-- "Use Quoin to review this implementation against the current plan."
-- "Use Quoin to run a gate before the next phase."
-- "Update Quoin session handoff and lessons learned."
-- "Record a Codex cost event for this task."
-
-The practical Codex workflow loop is documented as:
-
-```text
-discover -> plan -> implement -> review -> gate
-```
-
-Codex procedure docs live in `quoin/adapters/codex/procedures/` and link back
-to portable contracts in `quoin/core/skills/`.
-
-## Codex Validation And Utilities
-
-Codex readiness and smoke:
-
-```bash
-quoin doctor --runtime codex --project-root .
-quoin doctor --runtime codex --project-root . --smoke
-```
-
-Handoff validation:
-
-```bash
-python3 quoin/adapters/codex/validate_codex_handoff.py --self-test
-python3 quoin/adapters/codex/validate_codex_handoff.py --project-root . --file .workflow_artifacts/memory/sessions/<date>-<task>-codex.md
-```
-
-Cost event writing and validation:
-
-```bash
-python3 quoin/adapters/codex/cost_event.py --self-test
-python3 quoin/adapters/codex/cost_event.py write --project-root . --task <task> --phase <phase> --effort <low|medium|high|max|unknown>
-python3 quoin/adapters/codex/cost_event.py validate --project-root . --task <task> --expect-codex
-```
-
-Codex cost rows use the portable cost-ledger shape. They record known local
-values such as runtime, task, phase, timestamp, session id when supplied, and
-effort. Token counts, dollar cost, and telemetry source are recorded as
-`not_available` because this repository has no verified Codex local telemetry
-interface.
+Each skill keeps its name in the standard's form (`init_workflow` becomes
+`init-workflow`) and only `name` and `description` in its frontmatter; the
+scripts and guides the skills call go into `quoin-support/` beside them.
 
 ## Claude Quickstart
 
@@ -407,6 +362,35 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/cleanup` | Sonnet | Trash-moves stale sentinels and old checkpoints into recoverable archive; standalone runs also offer a confirmed task-folder bookkeeping pass |
 | `/repo_cleanup` | Opus | Whole-repo pass: removes redundant comments under a removal-only proof, trims tests only on coverage and mutation evidence |
 | `/next-steps` | Haiku | Append-only queue for future work items (`add` / `list` / `done N`) |
+
+## Open models
+
+`quoin open` runs Claude Code on an open model through a gateway, with plain
+environment variables and no router. The default profile is Qwen3 Coder through
+OpenRouter:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+quoin open setup      # copies the pack, writes ~/.config/quoin/open.json
+quoin open probe      # model list, one message, one tool call
+quoin open            # starts claude on the profile; extra arguments pass through
+quoin open remove     # deletes the pack and the profile
+```
+
+The profile sets `ANTHROPIC_BASE_URL`, the gateway key and the tier-alias
+variables, so `model: sonnet` in a skill resolves to the model you chose, and
+sets the auto-compact window to the model's context (Claude Code does not know
+it). Edit `open.json` for another model or gateway. The pack adds two skills,
+`/quoin-open:plan` (plan first, then work the plan with tests) and
+`/quoin-open:review`, and is loaded only in `quoin open` sessions through
+`--plugin-dir`; Claude Code's settings and the default quoin plugin are not
+changed, and the capture layer records these sessions like any other. Pass
+absolute paths in prompts that name files: some open models call the file
+tools with relative ones.
+
+`quoin/docs/native-coverage.md` is the running list of what Claude Code now
+covers natively; check it monthly against the changelog and run one task with
+`quoin open`.
 
 ## Open-model routing (opt-in)
 

@@ -1,5 +1,7 @@
 # Cross-Runtime Parity Matrix
 
+> **Superseded (v0.104.0).** The Codex adapter this document describes was removed; Codex and OpenCode now read quoin's kept skills from a plain Agent Skills folder (`quoin install --runtime codex`, see the README). Kept as a record of the earlier design.
+
 Phase 28 records the current Quoin runtime parity boundary. This matrix is
 evidence-based: each claim points to repository files, tests, or scripts that
 exist today. It does not treat planned adapter work as implemented behavior.

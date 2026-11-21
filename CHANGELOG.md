@@ -6,6 +6,16 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- **Open-model pack** (v0.104.0). `quoin open setup` copies a small pack (`/quoin-open:plan`, a plan-first skill that writes a plan and works it step by step with tests; `/quoin-open:review`, an independent review checklist; `probe_gateway.py`) to `~/.local/share/quoin/open-pack` and writes a launch profile, `~/.config/quoin/open.json`, defaulting to Qwen3 Coder through OpenRouter. `quoin open` starts `claude` with the profile as plain environment variables (`ANTHROPIC_BASE_URL`, the gateway key, the tier-alias variables) and the pack through `--plugin-dir`, so neither Claude Code's settings nor the default plugin change; the profile's context-budget guard sets the auto-compact window to the model's context. `quoin open probe` checks the model list, one message and one forced tool call; `quoin open remove` deletes the pack and profile. The plain environment profile works for Qwen3 Coder, so claude-code-router is no longer needed for it.
+- **Agent Skills folder for Codex and OpenCode** (v0.104.0). `build_agent_skills.py` writes the kept skills as plain Agent Skills (standard names, `name` and `description` frontmatter, `${CLAUDE_PLUGIN_ROOT}` pointing at a `quoin-support/` folder holding the scripts and guides). `quoin install --runtime codex --project-root .` writes it to `.agents/skills/`, `quoin doctor --runtime codex` checks it, and `quoin skills build --out DIR` writes it anywhere.
+- **`quoin/docs/native-coverage.md`** (v0.104.0): the running list of what each part of Quoin made up for, what Claude Code covers natively, and what Quoin does about it, every row dated, for a monthly check.
+
+### Removed
+
+- **The Codex adapter** (v0.104.0). `quoin/adapters/codex/` (generated `AGENTS.md`, procedures, readiness and smoke checks, handoff validator, cost-event writer) and the `quoin codex` command group are gone, as is `quoin doctor --smoke`; Codex reads the Agent Skills folder instead. The Codex-era portability docs carry a note saying so.
+
+### Added
+
 - **Unattended runs from inside a session** (v0.103.0). A new skill, `/quoin:run-unattended <task>`, starts `quoin run --autonomous` as a detached background process through `launch_unattended.py` (pid in `unattended.pid`, output in `unattended.log`, a second launch refused while one runs) and returns at once. The staged `/quoin:run` offers it when you confirm the stage plan, recommended for three or more stages: it adds a `Branch:` line to the plan and hands off. `quoin run` now names that branch (or a brief's `Branch:`) in each stage's goal, and its sessions run with `QUOIN_CLAIM_SHARED=1`, so they share the checkout the launching session handed over instead of moving to a worktree on another branch.
 
 ### Changed

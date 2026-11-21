@@ -20,10 +20,6 @@ def test_core_skill_doc_exists():
     assert CORE_SKILL_DOC.is_file(), f"Missing {CORE_SKILL_DOC}"
 
 
-def test_codex_readme_exists():
-    assert CODEX_README.is_file(), f"Missing {CODEX_README}"
-
-
 def test_install_sh_has_security_review_override():
     _adapter_pilot_helpers.assert_installer_selects_adapter("security_review")
 
