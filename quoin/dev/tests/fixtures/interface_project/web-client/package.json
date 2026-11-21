@@ -1,0 +1,5 @@
+{
+  "name": "web-client",
+  "version": "2.0.0",
+  "dependencies": {"zod": "^3.23.0"}
+}

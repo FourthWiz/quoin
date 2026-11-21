@@ -1,0 +1,7 @@
+[project]
+name = "order-service"
+version = "1.4.0"
+dependencies = [
+    "acme-schema>=0.3",
+    "requests>=2.31",
+]

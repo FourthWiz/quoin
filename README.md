@@ -211,6 +211,23 @@ and a task with no PR and no activity for seven days shows as stale. Each
 `git commit` also runs the discovery check that marks the project map out of
 date when the structure changed.
 
+#### Interface graph and rules
+
+`/discover` records where one repository provides something another uses: a
+package another repository depends on, an HTTP route another repository calls,
+a schema file another repository reads, or an event topic another repository
+subscribes to. The graph is the `interfaces` section of
+`.workflow_artifacts/discovery-map.json` (schema version 2), and
+`dependencies-map.md` is generated from it. For each interface the plugin
+writes a path-scoped rule under `.claude/rules/quoin-interface-*.md`, so a
+session editing a provider file is told which consumers to check. The rules are
+regenerated in the background at session start after a commit changes the
+project's structure.
+
+`python3 ~/.local/share/quoin/plugin/core/scripts/impact.py --diff main...HEAD`
+lists the repositories and interfaces a change touches and the consumer
+repositories to check.
+
 ## Runtime Support
 
 | Runtime | Setup command | Scope | Implemented behavior |

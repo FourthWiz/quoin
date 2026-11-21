@@ -9,7 +9,7 @@ Invariants implemented:
   DM-02  All top-level required keys present (schema_version, generated_at, project,
           artifact_roots, memory, tasks, repos).
   DM-03  No unknown top-level keys (strict at top level; extensions is the escape hatch).
-  DM-04  schema_version == 1 (int, not string). Checked before DM-05.
+  DM-04  schema_version is 1 or 2 (int, not string). Checked before DM-05.
   DM-05  For each typed field, value matches expected type (str/int/list/dict).
   DM-06  Each enum field's value is in the allowed set (task status, relation, stage status).
   DM-07  repos array elements conform to RepoSummary; tasks.active and tasks.finalized
@@ -18,6 +18,10 @@ Invariants implemented:
           is allowed — no closed allowlist. Non-conforming keys silently pass.
   DM-09  All path-bearing fields enumerated in PATH_FIELDS (except project.root_path)
           hold repo-relative strings: no leading './' or '/', forward slashes only.
+  DM-10  interfaces (version 2 only) is a list of InterfaceSummary: id, name, kind
+          (http, schema, package, event), provider (a repo name), provider_paths
+          (repo-relative globs) and consumers ([{repo, paths}]); provider and
+          consumer repos must be listed in repos. A version 1 map has no interfaces.
 
 Checks execute in the listed order. Wrong-type checks on `schema_version` precede the
 generic missing-field check to produce the precise error for the f02 fixture.
@@ -53,6 +57,7 @@ _TOP_LEVEL_REQUIRED: frozenset = frozenset({
 })
 
 _TOP_LEVEL_OPTIONAL: frozenset = frozenset({
+    "interfaces",
     "dependency_hints",
     "freshness",
     "extensions",
@@ -400,6 +405,59 @@ def _check_path_fields(map_obj: dict) -> List[str]:
     return errors
 
 
+_INTERFACE_KINDS: frozenset = frozenset({"http", "schema", "package", "event"})
+_SCHEMA_VERSIONS = (1, 2)
+
+
+def _check_interfaces(map_obj: dict) -> List[str]:
+    """DM-10: the interface graph of a version 2 map."""
+    errors: List[str] = []
+    interfaces = map_obj["interfaces"]
+    if map_obj.get("schema_version") == 1:
+        return ["DM-10: interfaces: only a schema_version 2 map has interfaces"]
+    if not isinstance(interfaces, list):
+        return [f"DM-05: interfaces: expected list, got {type(interfaces).__name__}"]
+    repo_names = {r.get("name") for r in map_obj.get("repos", []) if isinstance(r, dict)}
+    for i, item in enumerate(interfaces):
+        prefix = f"interfaces[{i}]"
+        if not isinstance(item, dict):
+            errors.append(f"DM-05: {prefix}: expected dict, got {type(item).__name__}")
+            continue
+        for key in ("id", "name", "kind", "provider"):
+            if not isinstance(item.get(key), str):
+                errors.append(f"DM-05: {prefix}.{key}: expected str")
+        if isinstance(item.get("kind"), str) and item["kind"] not in _INTERFACE_KINDS:
+            errors.append(f"DM-06: {prefix}.kind: invalid enum value '{item['kind']}', must be one of {sorted(_INTERFACE_KINDS)}")
+        if isinstance(item.get("provider"), str) and item["provider"] not in repo_names:
+            errors.append(f"DM-10: {prefix}.provider: '{item['provider']}' is not a repo in repos")
+        paths = item.get("provider_paths")
+        if not isinstance(paths, list) or not paths:
+            errors.append(f"DM-05: {prefix}.provider_paths: expected a non-empty list")
+        else:
+            for j, path in enumerate(paths):
+                if not isinstance(path, str) or _bad_repo_relative(path):
+                    errors.append(f"DM-09: {prefix}.provider_paths[{j}]: path must be repo-relative, got '{path}'")
+        consumers = item.get("consumers")
+        if not isinstance(consumers, list):
+            errors.append(f"DM-05: {prefix}.consumers: expected list")
+            continue
+        for j, consumer in enumerate(consumers):
+            cprefix = f"{prefix}.consumers[{j}]"
+            if not isinstance(consumer, dict) or not isinstance(consumer.get("repo"), str):
+                errors.append(f"DM-05: {cprefix}: expected {{repo, paths}}")
+                continue
+            if consumer["repo"] not in repo_names:
+                errors.append(f"DM-10: {cprefix}.repo: '{consumer['repo']}' is not a repo in repos")
+            cpaths = consumer.get("paths")
+            if not isinstance(cpaths, list):
+                errors.append(f"DM-05: {cprefix}.paths: expected list")
+                continue
+            for k, path in enumerate(cpaths):
+                if not isinstance(path, str) or _bad_repo_relative(path):
+                    errors.append(f"DM-09: {cprefix}.paths[{k}]: path must be repo-relative, got '{path}'")
+    return errors
+
+
 # ── Main validate function ────────────────────────────────────────────────────
 
 def validate(map_obj: dict) -> List[str]:
@@ -420,13 +478,13 @@ def validate(map_obj: dict) -> List[str]:
         errors.append(f"DM-01: top-level value must be a dict (object), got {type(map_obj).__name__}")
         return errors
 
-    # DM-04: schema_version must be int 1 (checked before DM-02 per plan D-04)
+    # DM-04: schema_version must be int 1 or 2 (checked before DM-02 per plan D-04)
     if "schema_version" in map_obj:
         sv = map_obj["schema_version"]
         if not isinstance(sv, int) or isinstance(sv, bool):
-            errors.append(f"DM-04: schema_version: expected int 1, got {type(sv).__name__} '{sv}'")
-        elif sv != 1:
-            errors.append(f"DM-04: schema_version: expected int 1, got {sv}")
+            errors.append(f"DM-04: schema_version: expected int 1 or 2, got {type(sv).__name__} '{sv}'")
+        elif sv not in _SCHEMA_VERSIONS:
+            errors.append(f"DM-04: schema_version: expected int 1 or 2, got {sv}")
 
     # DM-02: all required top-level keys present
     missing = _TOP_LEVEL_REQUIRED - set(map_obj.keys())
@@ -453,6 +511,8 @@ def validate(map_obj: dict) -> List[str]:
         errors.extend(_check_dependency_hints(map_obj["dependency_hints"]))
     if "freshness" in map_obj:
         errors.extend(_check_freshness(map_obj["freshness"]))
+    if "interfaces" in map_obj:
+        errors.extend(_check_interfaces(map_obj))
 
     # DM-08: extensions structure
     if "extensions" in map_obj:

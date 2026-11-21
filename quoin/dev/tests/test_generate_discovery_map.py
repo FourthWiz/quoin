@@ -189,7 +189,7 @@ def test_default_output_path(tmp_path):
     assert expected_out.exists(), f"Expected {expected_out} to exist"
     with open(expected_out, encoding="utf-8") as fh:
         data = json.load(fh)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     expected_out.unlink(missing_ok=True)
 
 
@@ -227,7 +227,7 @@ def test_stdout_mode(tmp_path):
     assert exit_code == 0
     output_str = captured.getvalue()
     data = json.loads(output_str)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     # No file written
     default_out = _MINIMAL / ".workflow_artifacts" / "discovery-map.json"
     assert not default_out.exists(), f"No file should have been written at {default_out}"
@@ -338,7 +338,7 @@ def test_deployment_flat_layout_import(tmp_path):
     # Call generate_map on minimal fixture — should work including validator load
     _pin_mtimes(_MINIMAL)
     result = flat_gen.generate_map(_MINIMAL, now_iso=_PINNED_NOW)
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == 2
     assert "project" in result
 
     # Also verify the CLI works with --validate from the flat layout

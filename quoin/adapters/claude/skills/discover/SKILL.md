@@ -136,7 +136,7 @@ Use subagents to scan repos in parallel when possible.
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write `repos-inventory.md`, `architecture-overview.md`, `dependencies-map.md`, and `git-log.md` in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` (primitives — markdown table for the per-repo inventory rows; caveman prose for architecture-overview narrative; markdown table for dependencies-map rows; terse numbered list with date-prefixes for git-log entries), `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` (abbreviation whitelist), `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` (prose discipline inside narrative sections of architecture-overview). Per-file primitive picks: `repos-inventory.md` → markdown table for the per-repo rows; `architecture-overview.md` → caveman prose + ASCII diagram; `dependencies-map.md` → markdown table for cross-service deps + terse list for shared resources; `git-log.md` → terse numbered list grouped by repo+branch. After composing each file's body to `{path}.body.tmp`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py {path}.tmp` (filename auto-detection — each file matches its named type per T-15 format-kit.sections.json additions). On V-failure: retry-once with primitive-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename per the standard Step 6 graceful pattern. Write all cache entries (`_index.md`, `_deps.md`, file-stem entries) per the CLAUDE.md "Knowledge cache" schema (frontmatter with path/hash/updated/updated_by/tokens, then sections: Purpose, Key Exports, Dependencies, Patterns, Integration Points, Notes) — the cache schema pre-dates format-kit and has its own enforced shape; do NOT apply format-kit primitives to cache entries.
+Write `repos-inventory.md`, `architecture-overview.md` and `git-log.md` in v3 format (`dependencies-map.md` is generated, see below) per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `${CLAUDE_PLUGIN_ROOT}/memory/format-kit.md` (primitives — markdown table for the per-repo inventory rows; caveman prose for architecture-overview narrative; terse numbered list with date-prefixes for git-log entries), `${CLAUDE_PLUGIN_ROOT}/memory/glossary.md` (abbreviation whitelist), `${CLAUDE_PLUGIN_ROOT}/memory/terse-rubric.md` (prose discipline inside narrative sections of architecture-overview). Per-file primitive picks: `repos-inventory.md` → markdown table for the per-repo rows; `architecture-overview.md` → caveman prose + ASCII diagram; `git-log.md` → terse numbered list grouped by repo+branch. After composing each file's body to `{path}.body.tmp`, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_artifact.py {path}.tmp` (filename auto-detection — each file matches its named type per T-15 format-kit.sections.json additions). On V-failure: retry-once with primitive-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename per the standard Step 6 graceful pattern. Write all cache entries (`_index.md`, `_deps.md`, file-stem entries) per the CLAUDE.md "Knowledge cache" schema (frontmatter with path/hash/updated/updated_by/tokens, then sections: Purpose, Key Exports, Dependencies, Patterns, Integration Points, Notes) — the cache schema pre-dates format-kit and has its own enforced shape; do NOT apply format-kit primitives to cache entries.
 
 Save all findings to `<project-folder>/.workflow_artifacts/memory/`:
 
@@ -220,12 +220,7 @@ Example:
 
 ### `dependencies-map.md`
 
-```markdown
-# Cross-Service Dependencies
-
-Last scanned: <date>
-
-## Dependency graph
+Generated, not written by hand: `interfaces.py render` (run in "After scanning" below) writes it from the discovery map's `interfaces`, one row per interface between repositories (package, HTTP API, schema, event) with its provider, defining paths and consumers. Put cross-service observations the scanner cannot see (shared databases, queues configured outside code) in `architecture-overview.md`.
 
 ### <Service A>
 - **Depends on:** <Service B> (HTTP, for auth), PostgreSQL, Redis
@@ -407,20 +402,17 @@ When `/discover` runs incrementally (some repos skipped because HEAD unchanged):
 
 ## After scanning
 
-### Structured-output hook (optional)
+### Discovery map, interface graph and rules
 
-After writing the four markdown files (`repos-inventory.md`, `architecture-overview.md`,
-`dependencies-map.md`, `git-log.md`) and verifying cache writes, invoke:
+After writing the markdown files and verifying cache writes, run:
 
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_discovery_map.py "$PROJECT_ROOT" --quiet
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/interfaces.py render --project-root "$PROJECT_ROOT"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gen_rules.py --project-root "$PROJECT_ROOT"
 ```
 
-This emits a structured `discovery-map.json` index at
-`<project_root>/.workflow_artifacts/discovery-map.json`. The hook is
-best-effort: a non-zero exit prints a single-line warning and continues — never
-aborts `/discover`. The JSON index is supplemental; the markdown files remain
-the authoritative source.
+The first writes `.workflow_artifacts/discovery-map.json` (schema version 2) with its `interfaces` section, the graph of where one repository provides a package, HTTP API, schema or event that another uses. The second writes `dependencies-map.md` from that graph. The third writes one path-scoped `.claude/rules/quoin-interface-*.md` per interface, so a session editing a provider file is told which consumers to check. Each step is best-effort: a non-zero exit prints a one-line warning and `/discover` continues. Report the interface count, and name any interface whose consumers look wrong, without editing the generated files.
 
 ### Repo main spec (optional offer)
 
