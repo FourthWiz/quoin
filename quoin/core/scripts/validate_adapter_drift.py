@@ -510,9 +510,9 @@ _REQUIRED_FORCE_INCLUDE_KEYS = {
     "quoin/scripts",
     "quoin/core",
     "quoin/adapters/claude",
-    "quoin/adapters/codex",
     "quoin/hooks",
     "quoin/memory",
+    "quoin/packs",
 }
 
 # Regex to extract quoted left-hand keys in force-include section lines

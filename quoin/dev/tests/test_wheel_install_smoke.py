@@ -137,7 +137,7 @@ def test_distributions_hold_no_split_out_components(built_wheel, built_sdist):
 
 
 @_requires_build
-def test_wheel_contents_include_codex_cli_assets(built_wheel):
+def test_wheel_contents_include_agent_skills_and_open_pack_assets(built_wheel):
     """Wheel installs must include the repo-local assets used by Codex CLI helpers."""
     with zipfile.ZipFile(built_wheel) as whl:
         names = whl.namelist()
@@ -145,9 +145,9 @@ def test_wheel_contents_include_codex_cli_assets(built_wheel):
     required = [
         "quoin/data/core/workflow/skills.json",
         "quoin/data/core/workflow/rules.md",
-        "quoin/data/adapters/codex/generate_codex_assets.py",
-        "quoin/data/adapters/codex/verify_codex_readiness.py",
-        "quoin/data/adapters/codex/smoke_codex_workflow.py",
+        "quoin/data/core/scripts/build_agent_skills.py",
+        "quoin/data/packs/open/.claude-plugin/plugin.json",
+        "quoin/data/packs/open/scripts/probe_gateway.py",
     ]
     for path in required:
         assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"

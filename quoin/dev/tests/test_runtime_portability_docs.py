@@ -27,22 +27,6 @@ def test_runtime_portability_docs_exist():
         "quoin/adapters/README.md",
         "quoin/adapters/claude/README.md",
         "quoin/adapters/claude/models.md",
-        "quoin/adapters/codex/README.md",
-        "quoin/adapters/codex/effort.md",
-        "quoin/adapters/codex/setup.md",
-        "quoin/adapters/codex/workflow.md",
-        "quoin/adapters/codex/handoff.md",
-        "quoin/adapters/codex/validate_codex_handoff.py",
-        "quoin/adapters/codex/cost.md",
-        "quoin/adapters/codex/cost_event.py",
-        "quoin/adapters/codex/procedures/README.md",
-        "quoin/adapters/codex/procedures/discover.md",
-        "quoin/adapters/codex/procedures/plan.md",
-        "quoin/adapters/codex/procedures/implement.md",
-        "quoin/adapters/codex/procedures/review.md",
-        "quoin/adapters/codex/procedures/gate.md",
-        "quoin/adapters/codex/verify_codex_readiness.py",
-        "quoin/adapters/codex/smoke_codex_workflow.py",
     ]
     missing = [path for path in expected if not (REPO_ROOT / path).is_file()]
     assert not missing, f"Missing runtime-portability docs: {missing}"
@@ -133,34 +117,6 @@ def test_core_workflow_docs_are_referenced_from_runtime_boundary_and_claude_rule
     assert "active Claude Code runtime rules file" in claude
 
 
-def test_codex_handoff_and_core_spec_cross_reference():
-    """The Codex session handoff and the inter-agent handoff envelope spec
-    name each other, so a reader following either file finds the other.
-
-    A bare substring check cannot catch a wrong path spelling here: the
-    project-root spelling (`quoin/quoin/core/workflow/handoff-format.md`)
-    contains the correct repo-root spelling as a substring, so `in` would
-    pass on either. The predicate instead extracts the backticked path
-    token each file cites for the other and requires it to resolve on
-    disk from REPO_ROOT — a wrong spelling fails the file-existence check
-    even though it would pass a containment check.
-    """
-    codex_handoff = read_rel("quoin/adapters/codex/handoff.md")
-    core_spec = read_rel("quoin/core/workflow/handoff-format.md")
-
-    codex_match = re.search(r"`(quoin/core/workflow/handoff-format\.md)`", codex_handoff)
-    assert codex_match, "handoff.md must cite handoff-format.md by backticked repo-root path"
-    assert (REPO_ROOT / codex_match.group(1)).is_file()
-
-    spec_match = re.search(r"`(quoin/adapters/codex/handoff\.md)`", core_spec)
-    assert spec_match, "handoff-format.md must cite handoff.md by backticked repo-root path"
-    assert (REPO_ROOT / spec_match.group(1)).is_file()
-
-    # both files must also state the distinction, not just the path
-    assert "session continuation" in codex_handoff
-    assert "session continuation" in core_spec
-
-
 def test_handoff_format_core_and_reference_cross_reference():
     """The handoff-format core file and its checkable-rules reference file
     name each other, so a reader following either one finds the other.
@@ -217,82 +173,6 @@ def test_skill_manifest_readme_documents_all_fields():
         assert f"`{field}`" in text
     assert "`effort` is the portable field" in text
     assert "`claude_model` exists to keep the manifest auditable" in text
-
-
-def test_adapter_model_docs_define_runtime_mappings():
-    claude = read_rel("quoin/adapters/claude/models.md").lower()
-    codex = read_rel("quoin/adapters/codex/effort.md").lower()
-
-    for token in ["haiku", "sonnet", "opus"]:
-        assert token in claude
-    for effort in ["low", "medium", "high", "max"]:
-        assert f"`{effort}`" in claude
-        assert f"`{effort}`" in codex
-
-    assert "model:" in claude
-    assert "skill.md" in claude
-    assert "native codex controls" in codex
-    assert "should not consume `claude_model`" in codex
-
-
-def test_codex_docs_do_not_hardcode_model_names():
-    docs = [
-        read_rel("quoin/adapters/codex/README.md"),
-        read_rel("quoin/adapters/codex/effort.md"),
-        read_rel("quoin/adapters/codex/setup.md"),
-        read_rel("quoin/adapters/codex/workflow.md"),
-    ]
-    combined = "\n".join(docs).lower()
-    forbidden = ["gpt-", "codex-", "o3", "o4", "o5"]
-    for token in forbidden:
-        assert token not in combined
-
-
-def test_codex_docs_do_not_guess_global_install_paths():
-    docs = [
-        read_rel("AGENTS.md"),
-        read_rel("quoin/adapters/codex/README.md"),
-        read_rel("quoin/adapters/codex/effort.md"),
-        read_rel("quoin/adapters/codex/setup.md"),
-        read_rel("quoin/docs/runtime-portability.md"),
-        read_rel("quoin/docs/runtime-portability-status.md"),
-        read_rel("quoin/docs/effort-levels.md"),
-    ]
-    combined = "\n".join(docs)
-    forbidden = ["~/." + "codex"]
-    for token in forbidden:
-        assert token not in combined
-
-
-def test_codex_setup_and_status_are_explicitly_not_installable():
-    setup = read_rel("quoin/adapters/codex/setup.md").lower()
-    status = read_rel("quoin/docs/runtime-portability-status.md").lower()
-
-    assert "no verified stable codex" in setup
-    assert "global install" in setup
-    assert "native planning, approvals, sandboxing" in setup
-    assert "verify_codex_readiness.py" in setup
-    assert "repo-local setup/readiness only" in status
-    assert "no global codex installer" in status
-    assert "no global codex paths are assumed" in status
-    assert "no verified global install target" in status
-    assert "claude code" in status
-    assert "status: installable" in status
-
-
-def test_codex_docs_pin_workflow_artifacts_to_project_root():
-    docs = {
-        "AGENTS.md": read_rel("AGENTS.md").lower(),
-        "quoin/adapters/codex/README.md": read_rel("quoin/adapters/codex/README.md").lower(),
-        "quoin/adapters/codex/setup.md": read_rel("quoin/adapters/codex/setup.md").lower(),
-    }
-    for path, text in docs.items():
-        assert "project root" in text, f"{path} must pin the Quoin project root"
-        assert ".workflow_artifacts/" in text, f"{path} must mention .workflow_artifacts/"
-
-    setup = docs["quoin/adapters/codex/setup.md"]
-    assert "not inside a nested application or package directory" in setup
-    assert "nested subdirectory" in setup
 
 
 def test_readme_preserves_claude_install_command():

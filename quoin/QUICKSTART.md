@@ -200,6 +200,16 @@ stage still unfinished; rerun it after the limit resets. For overnight runs
 that must wait out a limit by themselves, keep using the supervisor from the
 `legacy` tag (`pip install "git+https://github.com/FourthWiz/quoin@legacy"`).
 
+## Open models and other agents
+
+- `quoin open setup`, then `quoin open probe` and `quoin open`: Claude Code on
+  an open model (Qwen3 Coder through OpenRouter by default; edit
+  `~/.config/quoin/open.json`), with `/quoin-open:plan` and
+  `/quoin-open:review`. `quoin open remove` undoes setup.
+- `quoin install --runtime codex --project-root .`: the kept skills in
+  `.agents/skills/` for Codex and OpenCode.
+- `quoin/docs/native-coverage.md`: the monthly running list.
+
 ## Files
 
 - `~/.local/share/quoin/plugin/` — the staged plugin Claude Code loads: skills, hooks, scripts, memory guides
