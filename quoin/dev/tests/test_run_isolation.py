@@ -255,3 +255,84 @@ def test_crafted_record_cannot_widen_teardown(env, shape):
     ws.write_ownership_record(project, slug, {"workspace_path": str(path)})
     ws.teardown_workspace(slug, project)
     assert (victim_wt / "wip.txt").exists()
+
+
+# ── session claims ─────────────────────────────────────────────────────────
+
+
+def test_single_session_claims_its_tree_and_is_never_blocked(env):
+    _, repo, _ = env
+    first = ri.claim_session(repo / "a.txt", "s1")
+    again = ri.claim_session(repo / "a.txt", "s1")
+    assert (first["mode"], first["reason"]) == ("main", "free")
+    assert (again["mode"], again["reason"]) == ("main", "resume")
+
+
+def test_second_live_session_gets_a_conflict_and_writes_nothing(env):
+    _, repo, _ = env
+    ri.claim_session(repo / "a.txt", "s1", label="Fix widget")
+    out = ri.claim_session(repo / "a.txt", "s2")
+    assert out["mode"] is None and out["reason"] == "conflict"
+    assert out["blocking"]["task"] == "Fix widget"
+    assert sorted(ri.load_entries(ri.registry_dir(repo))) == ["session-s1"]
+
+
+def test_shared_claim_stays_beside_the_holder_and_is_remembered(env):
+    _, repo, _ = env
+    ri.claim_session(repo / "a.txt", "s1")
+    assert ri.claim_session(repo / "a.txt", "s2", shared=True)["reason"] == "shared"
+    assert ri.claim_session(repo / "a.txt", "s2")["mode"] == "main"
+
+
+def test_stale_session_claim_does_not_block(env, monkeypatch):
+    _, repo, _ = env
+    monkeypatch.setenv("QUOIN_RUN_OWNER_PID", str(_dead_pid()))
+    ri.claim_session(repo / "a.txt", "killed")
+    monkeypatch.setenv("QUOIN_RUN_OWNER_PID", str(os.getpid()))
+    assert ri.claim_session(repo / "a.txt", "next")["reason"] == "free"
+
+
+def test_live_run_in_the_checkout_blocks_a_session(env):
+    _, repo, _ = env
+    _claim(env, "a", "run-session")
+    out = ri.claim_session(repo / "a.txt", "plain")
+    assert out["reason"] == "conflict" and out["blocking"]["task"] == "a"
+
+
+def test_a_linked_worktree_is_its_own_tree(env):
+    _, repo, tmp = env
+    wt = tmp / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(wt))
+    ri.claim_session(repo / "a.txt", "s1")
+    out = ri.claim_session(wt / "a.txt", "s2")
+    assert (out["mode"], out["reason"]) == ("main", "free")
+    assert out["tree"] == str(wt.resolve())
+
+
+def test_release_session_drops_every_claim_it_holds(env):
+    _, repo, tmp = env
+    other = tmp / "other"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    ri.claim_session(repo / "a.txt", "s1")
+    ri.claim_session(other, "s1")
+    ri.claim_session(repo / "a.txt", "s2", shared=True)
+    released = ri.release_session("s1")["released"]
+    assert sorted(released) == sorted([str(repo), str(other.resolve())])
+    assert sorted(ri.load_entries(ri.registry_dir(repo))) == ["session-s2"]
+
+
+def test_outside_a_repository_nothing_is_claimed(env):
+    _, _, tmp = env
+    loose = tmp / "loose"
+    loose.mkdir()
+    assert ri.claim_session(loose / "x.txt", "s1")["reason"] == "not-a-repo"
+
+
+def test_session_claim_command_line(env):
+    _, repo, _ = env
+    run = lambda *a: json.loads(subprocess.run(  # noqa: E731
+        [sys.executable, str(WRAPPER), *a], capture_output=True, text=True, check=True).stdout)
+    assert run("claim-session", "--path", str(repo / "a.txt"), "--session-id", "c1")["reason"] == "free"
+    assert run("claim-session", "--path", str(repo / "a.txt"), "--session-id", "c2")["reason"] == "conflict"
+    assert run("release-session", "--session-id", "c1")["released"] == [str(repo)]

@@ -484,3 +484,34 @@ def test_hook_bounds_git_worktree_add_with_timeout(tmp_path):
     assert stdout == "", f"Expected no stdout when git worktree add times out, got: {stdout!r}"
     assert not Path(str(tmp_path / "wt-timeout")).exists(), "No worktree should exist after a timed-out add"
 
+
+
+def test_hook_creates_worktree_in_cwd_repo_without_sidecar(tmp_path):
+    """EnterWorktree from a session inside a repository: no sidecar, cwd's repo."""
+    repo = make_git_repo(tmp_path / "repo")
+    hook_input = {"cwd": str(repo), "hook_event_name": "WorktreeCreate"}
+    rc, stdout, _ = run_hook(hook_input, None, repo, tmp_path, extra_env={"TMPDIR": str(tmp_path / "t")})
+    assert rc == 0
+    wt = Path(stdout)
+    assert (wt / ".git").is_file() and (wt / ".gitkeep").is_file()
+    listed = subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout
+    assert str(wt.resolve()) in listed or str(wt) in listed
+
+
+def test_hook_creates_worktree_in_single_nested_repo_without_sidecar(tmp_path):
+    """A session started in a non-git parent folder holding one repository."""
+    project = tmp_path / "project"
+    nested = make_git_repo(project / "app")
+    hook_input = {
+        "cwd": str(project),
+        "worktree_path": str(tmp_path / "wt"),
+        "branch_name": "side",
+        "hook_event_name": "WorktreeCreate",
+    }
+    rc, stdout, _ = run_hook(hook_input, None, project, tmp_path)
+    assert rc == 0 and stdout == str(tmp_path / "wt")
+    branch = subprocess.run(["git", "-C", stdout, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)
+    assert branch.stdout.strip() == "side"
+    common = subprocess.run(["git", "-C", stdout, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True).stdout.strip()
+    assert Path(common).resolve() == (nested / ".git").resolve()

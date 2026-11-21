@@ -9,6 +9,10 @@
 #   - Prints the created worktree path to stdout (harness picks this up as the
 #     created worktree path)
 #
+# Without a sidecar, the worktree goes into the repository holding cwd, or the
+# single repository nested below a non-git cwd (EnterWorktree, isolated
+# subagents and the isolation claim's move all land here).
+#
 # For skip cases (multi-repo, no nested git, stale sidecar, or any error):
 #   - Exits 0 with NO stdout output
 #   - The harness sees a missing path → worktree creation fails
@@ -46,49 +50,60 @@ BASE_REF="$(printf '%s' "$HOOK_INPUT" | jq -r '.base_ref // empty' 2>/dev/null)"
 # Set to 1 when we synthesize worktree_path/branch_name the harness omitted (audit signal).
 SELFGEN=0
 
-# ── read sidecar ──────────────────────────────────────────────────────────────
-SIDECAR="$PROJECT_ROOT/.workflow_artifacts/.dispatch-hint.json"
-[[ ! -f "$SIDECAR" ]] && exit 0
-
-# ── stale sidecar check (reject if mtime > 60s) ───────────────────────────────
-NOW="$(date +%s 2>/dev/null)" || true
-if [[ -n "$NOW" ]]; then
-    SIDECAR_MTIME=""
-    SIDECAR_MTIME="$(stat -f %m "$SIDECAR" 2>/dev/null || stat -c %Y "$SIDECAR" 2>/dev/null)" || true
-    if [[ -n "$SIDECAR_MTIME" ]] && [[ "$NOW" -gt $(( SIDECAR_MTIME + 60 )) ]]; then
-        # Stale — skip without consuming the sidecar
-        exit 0
-    fi
-fi
-
 # ── audit log path ────────────────────────────────────────────────────────────
 AUDIT_DIR="$PROJECT_ROOT/.workflow_artifacts/memory"
 AUDIT="$AUDIT_DIR/worktree-hook-audit.log"
-mkdir -p "$AUDIT_DIR" 2>/dev/null || true
 
-# ── resolve nested git root ───────────────────────────────────────────────────
 # Find git_root_for_dispatch.py in the scripts/ folder next to this hook's folder
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 GIT_ROOT_SCRIPT=""
-
 if [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/../scripts/git_root_for_dispatch.py" ]]; then
     GIT_ROOT_SCRIPT="$(cd "$SCRIPT_DIR/../scripts" && pwd)/git_root_for_dispatch.py"
 fi
 
-if [[ -z "$GIT_ROOT_SCRIPT" ]]; then
-    echo "$(date -u +%FT%TZ) rc=err result=no-script" >> "$AUDIT" 2>/dev/null || true
-    exit 0
-fi
-
+# ── resolve the repository that receives the worktree ────────────────────────
+# A dispatch sidecar, when present and fresh, names it. Otherwise it is the
+# repository holding cwd, or the single repository nested below a non-git cwd.
+# Claude Code leaves worktree creation entirely to this hook once it is
+# registered, so every EnterWorktree call and every isolated subagent lands here.
+SIDECAR="$PROJECT_ROOT/.workflow_artifacts/.dispatch-hint.json"
 RESOLVED_GIT_ROOT=""
-RESOLVED_GIT_ROOT="$(python3 "$GIT_ROOT_SCRIPT" --sidecar "$SIDECAR" 2>/dev/null)"
-RC=$?
-
-# ── consume sidecar (single-shot, regardless of outcome) ─────────────────────
-rm -f "$SIDECAR" 2>/dev/null || true
-
-# ── log audit entry ───────────────────────────────────────────────────────────
-echo "$(date -u +%FT%TZ) rc=$RC result=${RESOLVED_GIT_ROOT:-skip}" >> "$AUDIT" 2>/dev/null || true
+RC=1
+if [[ -f "$SIDECAR" ]]; then
+    NOW="$(date +%s 2>/dev/null)" || true
+    if [[ -n "$NOW" ]]; then
+        SIDECAR_MTIME=""
+        SIDECAR_MTIME="$(stat -f %m "$SIDECAR" 2>/dev/null || stat -c %Y "$SIDECAR" 2>/dev/null)" || true
+        if [[ -n "$SIDECAR_MTIME" ]] && [[ "$NOW" -gt $(( SIDECAR_MTIME + 60 )) ]]; then
+            # Stale — skip without consuming the sidecar
+            exit 0
+        fi
+    fi
+    mkdir -p "$AUDIT_DIR" 2>/dev/null || true
+    if [[ -z "$GIT_ROOT_SCRIPT" ]]; then
+        echo "$(date -u +%FT%TZ) rc=err result=no-script" >> "$AUDIT" 2>/dev/null || true
+        exit 0
+    fi
+    RESOLVED_GIT_ROOT="$(python3 "$GIT_ROOT_SCRIPT" --sidecar "$SIDECAR" 2>/dev/null)"
+    RC=$?
+    # Consume the sidecar (single-shot, regardless of outcome)
+    rm -f "$SIDECAR" 2>/dev/null || true
+    echo "$(date -u +%FT%TZ) rc=$RC result=${RESOLVED_GIT_ROOT:-skip}" >> "$AUDIT" 2>/dev/null || true
+else
+    RESOLVED_GIT_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null)" || RESOLVED_GIT_ROOT=""
+    if [[ -n "$RESOLVED_GIT_ROOT" ]]; then
+        RC=0
+    elif [[ -n "$GIT_ROOT_SCRIPT" ]]; then
+        RESOLVED_GIT_ROOT="$(python3 "$GIT_ROOT_SCRIPT" --cwd-scan-only --cwd "$PROJECT_ROOT" 2>/dev/null)"
+        RC=$?
+    fi
+    [[ "$RC" -eq 0 ]] || exit 0
+    if [[ -d "$PROJECT_ROOT/.workflow_artifacts" ]]; then
+        mkdir -p "$AUDIT_DIR" 2>/dev/null || true
+    else
+        AUDIT=/dev/null
+    fi
+fi
 
 # ── bound git worktree add with QUOIN_SUBPROCESS_TIMEOUT ─────────────────────
 # Wrap git in `timeout` so a hung git-worktree-add on a slow Drive mount cannot stall

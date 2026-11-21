@@ -116,6 +116,19 @@ Every session keeps its own record without a skill being invoked:
 Where mods cannot load, the plugin's settings hooks keep the same brief and
 journal; only the task name (taken from the branch) and the two commands differ.
 
+### One session per checkout
+
+Before a session's first edit in a checkout, the plugin claims that checkout
+for it. A single session is never interrupted. If another live Claude Code
+session already holds the checkout, an interactive session asks whether to
+move to a worktree or continue there; a headless run moves without asking.
+Moving runs `EnterWorktree` for the session and applies the edit to the
+worktree's copy, so the other session's files are never touched. Claims go
+away when a session ends, and a claim left by a killed session stops counting
+once its process is gone. `python3 ~/.local/share/quoin/plugin/core/scripts/run_isolation.py status`
+lists a checkout's claims. This needs mods; without them sessions are not
+claimed.
+
 ## Files
 
 - `~/.local/share/quoin/plugin/` — the staged plugin Claude Code loads: skills, hooks, scripts, memory guides

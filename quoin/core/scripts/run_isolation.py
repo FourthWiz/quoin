@@ -21,6 +21,11 @@ Subcommands (each prints one JSON object on stdout):
   release  Remove this task's registry entry. The worktree and branch stay;
            ``workspace.py teardown`` removes them with its safety checks.
   status   List the checkout's registry entries with their liveness.
+  claim-session    Claim the working tree holding ``--path`` for a plain
+           session (keyed on that tree, never creating a worktree). Prints
+           ``mode`` (``main`` or null), ``reason`` (``free``, ``resume``,
+           ``shared``, ``conflict`` or ``not-a-repo``) and ``blocking``.
+  release-session  Drop every claim a session holds.
 
 Liveness: an entry records the pid of the Claude Code process that owns the
 run. A pid that no longer exists (or now belongs to a different process)
@@ -428,6 +433,90 @@ def status(repo: Path) -> dict:
     return {"repo": str(repo), "registry": str(directory), "runs": runs}
 
 
+# ── session claims ──────────────────────────────────────────────────────────
+#
+# A plain Claude Code session claims the working tree it edits, keyed on that
+# tree itself (a linked worktree is its own tree here, unlike a /run claim,
+# which is keyed on the main checkout). A session claim never creates a
+# worktree: on a conflict the caller asks the person or moves the session with
+# the native EnterWorktree tool.
+
+def _session_slug(session_id: str) -> str:
+    return "session-" + re.sub(r"[^A-Za-z0-9._-]", "_", session_id)[:80]
+
+
+def working_tree(path: Path) -> Path | None:
+    start = path
+    while not start.is_dir():
+        if start == start.parent:
+            return None
+        start = start.parent
+    rc, out, _ = _git(start, "rev-parse", "--show-toplevel")
+    return Path(out).resolve() if rc == 0 and out else None
+
+
+def claim_session(path: Path, session_id: str, label: str | None = None,
+                  shared: bool = False) -> dict:
+    """Claim the working tree holding ``path`` for this session.
+
+    ``reason`` is ``free`` or ``resume`` when the tree is this session's,
+    ``shared`` when the caller chose to stay beside a live holder, and
+    ``conflict`` (nothing written) when another live session or run holds it.
+    """
+    tree = working_tree(path)
+    if tree is None:
+        return {"mode": None, "reason": "not-a-repo", "tree": None, "blocking": None}
+    slug = _session_slug(session_id)
+    rc, branch, _ = _git(tree, "symbolic-ref", "--quiet", "--short", "HEAD")
+    branch = branch if rc == 0 and branch else None
+    directory = registry_dir(tree)
+    with _locked(directory):
+        entries = load_entries(directory)
+        mine = entries.get(slug)
+        holders = [
+            other for other_slug, other in entries.items()
+            if other_slug != slug and other.get("mode") == "main"
+            and other.get("session_id") != session_id and is_live(other)
+        ]
+        out: dict[str, Any] = {"tree": str(tree), "branch": branch, "blocking": None}
+        if holders and not shared and not (mine and mine.get("shared")):
+            holder = holders[0]
+            out.update(mode=None, reason="conflict", blocking={
+                "task": holder.get("task"), "session_id": holder.get("session_id"),
+                "branch": holder.get("branch")})
+            return out
+        entry = {"task": label or f"session {session_id[:8]}", "repo": str(tree), "mode": "main",
+                 "worktree": str(tree), "branch": branch, "kind": "session",
+                 "shared": bool(shared or (mine and mine.get("shared"))),
+                 "created": (mine or {}).get("created") or workspace._utc_now_iso(),
+                 **_identity(session_id)}
+        _write_entry(directory, slug, entry)
+        reason = "shared" if entry["shared"] and holders else ("resume" if mine else "free")
+        out.update(mode="main", reason=reason)
+        return out
+
+
+def release_session(session_id: str) -> dict:
+    """Remove every claim this session holds, in any working tree."""
+    slug = _session_slug(session_id)
+    released = []
+    root = registry_root()
+    try:
+        directories = [d for d in root.iterdir() if d.is_dir()]
+    except OSError:
+        directories = []
+    for directory in directories:
+        path = _entry_path(directory, slug)
+        if not path.is_file():
+            continue
+        with _locked(directory):
+            with contextlib.suppress(OSError):
+                tree = json.loads(path.read_text()).get("worktree")
+                path.unlink()
+                released.append(tree)
+    return {"session_id": session_id, "released": released}
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def _emit(code: int, payload: dict) -> int:
@@ -438,6 +527,13 @@ def _emit(code: int, payload: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("claim-session", help="claim the working tree a session edits")
+    p.add_argument("--path", required=True, help="the file or folder being edited")
+    p.add_argument("--session-id", default=None)
+    p.add_argument("--label", default=None)
+    p.add_argument("--shared", action="store_true", help="stay beside a live holder")
+    p = sub.add_parser("release-session", help="drop every claim a session holds")
+    p.add_argument("--session-id", default=None)
     for name in ("claim", "release", "status"):
         p = sub.add_parser(name)
         if name != "status":
@@ -454,6 +550,15 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_INVALID
+
+    try:
+        if args.command == "claim-session":
+            return _emit(EXIT_OK, claim_session(Path(args.path).expanduser(), _session_id(args.session_id),
+                                                label=args.label, shared=args.shared))
+        if args.command == "release-session":
+            return _emit(EXIT_OK, release_session(_session_id(args.session_id)))
+    except (OSError, TimeoutError, ValueError) as exc:
+        return _emit(EXIT_INVALID, {"error": str(exc)})
 
     repo = repo_toplevel(Path(args.repo).expanduser())
     if repo is None:
