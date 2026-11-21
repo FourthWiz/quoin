@@ -36,7 +36,7 @@ from .cost import estimate_cost, load_pricing
 
 PHASES = (
     "setup", "discover", "frame", "context", "decompose",
-    "implement", "verify", "review", "review-fixes", "commit",
+    "implement", "verify", "review", "review-fixes", "review-cross", "commit",
 )
 OTHER = "other"
 TOKEN_TYPES = ("input", "output", "cache_read", "cache_write")

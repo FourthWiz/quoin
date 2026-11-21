@@ -228,6 +228,18 @@ project's structure.
 lists the repositories and interfaces a change touches and the consumer
 repositories to check.
 
+#### Cross-repository changes
+
+A change that spans repositories runs as a staged `/run` (route r2). Its stage
+list comes from the interface graph (`impact.py --plan`): the repositories the
+task changes plus the consumers of the interfaces they provide, providers
+first, all on one branch name. Stages that hit an r1 signal get their own
+review; after the last stage, `/quoin:review-cross` reviews the whole change
+once, focused on consumers of changed interfaces, and writes findings by
+`repo/path:line` with a fix for each. `/pr` then opens one PR per repository
+and links them to each other. `/quoin:review-cross <branch>` also works by
+hand on any branch that exists in several repositories.
+
 ## Runtime Support
 
 | Runtime | Setup command | Scope | Implemented behavior |

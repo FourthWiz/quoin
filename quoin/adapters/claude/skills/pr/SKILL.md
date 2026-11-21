@@ -171,6 +171,22 @@ them before running /pr."
 
 5. Print the PR URL to the user.
 
+### Step 4b: Sibling repositories (cross-repository tasks)
+
+A staged task keeps one branch name in every repository it touches. From the
+project root (the folder holding `.workflow_artifacts/`), run
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/impact.py --branch "<branch>" --project-root "<project root>" --json`
+and read `changed`: the repositories where this branch has changes. When it
+names only this repository, skip to Step 5.
+
+Otherwise, for each other repository in `changed`, in its folder: run Step 3
+(push), then Step 4 with that repository's own default branch as the base and
+its own diff for the body, adding a line under `## Related` for each sibling
+repository. Then link them all:
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/link_prs.py <url> <url> ...` (every PR
+of the task, this repository's included), which adds a "Related pull requests"
+section to each body. Print every URL.
+
 ### Step 5: Wait for merge
 
 Tell the user:
@@ -180,6 +196,8 @@ PR created: <URL>
 Please review and merge when ready. Tell me 'merged' (or similar) when it's done.
 ```
 
+For a cross-repository task, list every PR and wait until all are merged.
+
 Wait for the user's confirmation before proceeding to Step 6.
 
 ### Step 6: Post-merge cleanup
@@ -188,6 +206,7 @@ Wait for the user's confirmation before proceeding to Step 6.
 2. Run: `git checkout <merge-target>`
 3. Run: `git pull`
 4. Confirm: "Switched to <merge-target> and pulled latest. Ready for next task."
+5. For a cross-repository task, repeat 2–3 in each sibling repository with its own merge target.
 
 ## Cost tracking
 

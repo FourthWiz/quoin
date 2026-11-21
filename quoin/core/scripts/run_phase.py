@@ -28,7 +28,7 @@ from pathlib import Path
 
 PHASES = (
     "setup", "discover", "frame", "context", "decompose",
-    "implement", "verify", "review", "review-fixes", "commit",
+    "implement", "verify", "review", "review-fixes", "review-cross", "commit",
 )
 PROFILE_ENV = "QUOIN_RUN_PROFILE"
 

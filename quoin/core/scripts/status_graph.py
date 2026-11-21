@@ -158,7 +158,7 @@ _LIGHT_MARKER_PHASE = {
     "setup": "planning", "discover": "planning", "frame": "planning",
     "context": "planning", "decompose": "planning",
     "implement": "implement", "verify": "implement",
-    "review": "review", "review-fixes": "review",
+    "review": "review", "review-fixes": "review", "review-cross": "review",
     "commit": "committed",
 }
 _LIGHT_MARKER_RE = re.compile(r"^\S+\s+(?:(\d+):)?([a-z-]+)(\s+skipped)?\s*$")

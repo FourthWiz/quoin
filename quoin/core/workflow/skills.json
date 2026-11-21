@@ -165,6 +165,15 @@
       "spawn_target": true
     },
     {
+      "name": "review-cross",
+      "phase": "review",
+      "effort": "high",
+      "user_facing": true,
+      "claude_model": "opus",
+      "section_0": false,
+      "spawn_target": false
+    },
+    {
       "name": "revise",
       "phase": "planning",
       "effort": "high",

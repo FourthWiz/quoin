@@ -28,6 +28,7 @@ mechanics.
 | [`plan`](plan/README.md) | planning | high | yes |
 | [`pr`](pr/README.md) | pr | medium | yes |
 | [`review`](review/README.md) | review | high | yes |
+| [`review-cross`](review-cross/README.md) | review | high | yes |
 | [`revise`](revise/README.md) | planning | high | yes |
 | [`revise-fast`](revise-fast/README.md) | planning | medium | no |
 | [`rollback`](rollback/README.md) | rollback | medium | yes |
