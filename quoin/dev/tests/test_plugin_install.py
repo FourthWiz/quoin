@@ -193,6 +193,7 @@ def _legacy(dest: Path) -> dict:
         "memory/m.md": "m\n",
         "QUICKSTART.md": "q\n",
         "skills/workflow-tasks/hooks/tasks.ts": "mod\n",
+        "skills/context-tracker/hooks/register.tsx": "moved mod\n",
     }
     manifest = {}
     for rel, text in files.items():
@@ -235,6 +236,7 @@ def test_legacy_cleanup_removes_what_quoin_wrote_and_keeps_the_rest(tmp_path):
     assert not (dest / "scripts").exists() and not (dest / "core").exists()
     assert not (dest / "skills" / "run").exists() and not (dest / "QUICKSTART.md").exists()
     assert (dest / "skills" / "workflow-tasks" / "hooks" / "tasks.ts").exists()
+    assert (dest / "skills" / "context-tracker" / "hooks" / "register.tsx").read_text() == "moved mod\n"
     assert not (dest / installer.MANIFEST_FILENAME).exists()
 
     settings = json.loads((dest / "settings.json").read_text())
