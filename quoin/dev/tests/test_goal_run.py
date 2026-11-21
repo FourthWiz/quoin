@@ -148,3 +148,22 @@ def test_cli_dry_run_prints_the_next_command(project, capsys):
     code = cli.main(["run", "--autonomous", "demo", "--project-root", str(project), "--dry-run"])
     out = capsys.readouterr().out
     assert code == 0 and '"stage": "S-02"' in out and "/goal Stage S-02" in out
+
+
+def test_task_branch_reaches_the_condition_and_sessions_share_claims(project):
+    arch = _arch(project)
+    arch.write_text(arch.read_text().replace("## Overview\n", "## Overview\nBranch: feat/currency\n"))
+    fake = FakeClaude(project)
+    goal_run.run(project, "demo", runner=fake, printer=lambda _l: None)
+    argv, kwargs = fake.calls[0]
+    assert "is committed on branch feat/currency in every repository it changes" in argv[2]
+    assert kwargs["env"]["QUOIN_CLAIM_SHARED"] == "1"
+
+
+def test_branch_from_the_brief_when_the_plan_has_none(tmp_path):
+    task = tmp_path / ".workflow_artifacts" / "solo"
+    task.mkdir(parents=True)
+    (task / "brief.md").write_text("# solo\n- Branch: fix/thing\n## Request\nfix it\n")
+    assert goal_run.task_branch(task) == "fix/thing"
+    (task / "brief.md").write_text("# solo\n- Branch: none\n")
+    assert goal_run.task_branch(task) is None

@@ -251,6 +251,12 @@ stage) and `--dry-run` are available; each session is logged to
 `goal-run.log` in the task folder. A stage left unfinished stops the run
 (exit 1). Rerunning continues at the first unfinished stage.
 
+From inside a session, `/quoin:run-unattended <task>` starts the same run in
+the background and returns at once, and the staged `/quoin:run` offers it when
+you confirm a stage plan (recommended for three or more stages). Sessions it
+starts share the checkout the launching session handed over rather than moving
+to a worktree, and commit on the plan's `Branch:`.
+
 Claude Code does not document a pause-and-resume for a headless `/goal`
 session at a usage limit, so the run stops there with exit code 75 and the
 stage still unfinished; rerun it after the limit resets. For overnight runs

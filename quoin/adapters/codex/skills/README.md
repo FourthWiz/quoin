@@ -33,6 +33,7 @@ mechanics.
 | [`revise-fast`](revise-fast/README.md) | planning | medium | no |
 | [`rollback`](rollback/README.md) | rollback | medium | yes |
 | [`run`](run/README.md) | orchestration | high | yes |
+| [`run-unattended`](run-unattended/README.md) | implement | low | yes |
 | [`run_hard`](run_hard/README.md) | orchestration | max | yes |
 | [`security_review`](security_review/README.md) | security_review | high | yes |
 | [`sleep`](sleep/README.md) | sleep | low | yes |

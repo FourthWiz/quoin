@@ -336,3 +336,11 @@ def test_session_claim_command_line(env):
     assert run("claim-session", "--path", str(repo / "a.txt"), "--session-id", "c1")["reason"] == "free"
     assert run("claim-session", "--path", str(repo / "a.txt"), "--session-id", "c2")["reason"] == "conflict"
     assert run("release-session", "--session-id", "c1")["released"] == [str(repo)]
+
+
+def test_sessions_started_by_quoin_run_share_the_checkout(env, monkeypatch):
+    _, repo, _ = env
+    ri.claim_session(repo / "a.txt", "parent")
+    monkeypatch.setenv("QUOIN_CLAIM_SHARED", "1")
+    out = ri.claim_session(repo / "a.txt", "goal-session")
+    assert (out["mode"], out["reason"]) == ("main", "shared")
