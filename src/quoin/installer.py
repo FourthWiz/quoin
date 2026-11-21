@@ -23,6 +23,7 @@ PLUGIN_PATHS = (
     ".claude-plugin",
     "adapters/claude/skills",
     "hooks",
+    "types",
     "scripts",
     "core",
     "memory",

@@ -38,6 +38,12 @@ EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 TRUNK_BRANCHES = frozenset({"main", "master", "develop", "development", "trunk", "dev"})
 JOURNAL_FILES_SHOWN = 8
 ANSWER_CHARS = 160
+STALE_DAYS = 7
+LIFECYCLE_INTERVAL = 30 * 60
+ACTIVE_STATUSES = ("open", "review")
+_PR_URL = re.compile(r"https://github\.com/[^/\s]+/([^/\s]+)/pull/\d+")
+_COMMIT_LINE = re.compile(r"^\[[^\]]+ [0-9a-f]{7,}\]", re.M)
+_CD_PREFIX = re.compile(r"""^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*&&""")
 
 
 # --- locations -------------------------------------------------------------
@@ -200,6 +206,7 @@ def _write_brief(art: Path, state: dict) -> None:
         f"- Branch: {state.get('branch') or 'none'}",
         f"- Sessions: {state['session']}",
         f"- Repositories: {', '.join(state.get('repos', []))}",
+        "- PRs: none",
         "",
         "## Request",
         "",
@@ -432,20 +439,28 @@ def open_tasks(cwd: str) -> list[dict]:
     tasks = []
     if not art.is_dir():
         return tasks
+    now = time.time()
     for brief in sorted(art.glob("*/brief.md")):
         text = brief.read_text(encoding="utf-8", errors="replace")
-        if _get_field(text, "Status") != "open" or _get_field(text, "Task") is None:
+        status = _get_field(text, "Status")
+        if status not in ACTIVE_STATUSES or _get_field(text, "Task") is None:
             continue
         journal_file = brief.parent / "journal.md"
         last = None
+        touched = brief.stat().st_mtime
         if journal_file.is_file():
             lines = journal_file.read_text(encoding="utf-8", errors="replace").splitlines()
             last = lines[-1] if lines else None
+            touched = max(touched, journal_file.stat().st_mtime)
+        prs = _prs(text)
         tasks.append(
             {
                 "name": text.split("\n", 1)[0].lstrip("# ").strip(),
                 "key": _get_field(text, "Task"),
                 "branch": _get_field(text, "Branch"),
+                "status": status,
+                "prs": prs,
+                "stale": status == "open" and not prs and now - touched > STALE_DAYS * 86400,
                 "brief": str(brief),
                 "last": last,
             }
@@ -458,6 +473,154 @@ def task_for_branch(cwd: str, branch: str) -> dict | None:
         if task["key"] == branch:
             return task
     return None
+
+
+# --- lifecycle -------------------------------------------------------------
+
+
+def _prs(text: str) -> dict[str, str]:
+    """``{repository: pr url}`` from a brief's PRs field."""
+    raw = _get_field(text, "PRs") or "none"
+    out = {}
+    for part in raw.split(","):
+        repo, _, url = part.strip().partition("=")
+        if url:
+            out[repo] = url
+    return out
+
+
+def _with_prs(text: str, prs: dict[str, str]) -> str:
+    value = ", ".join(f"{repo}={url}" for repo, url in prs.items()) or "none"
+    if _get_field(text, "PRs") is None:
+        return re.sub(r"^(- Repositories: .*)$", lambda m: f"{m.group(1)}\n- PRs: {value}", text, count=1, flags=re.M)
+    return _set_field(text, "PRs", value)
+
+
+def _list_field(text: str, field: str) -> list[str]:
+    return [p.strip() for p in (_get_field(text, field) or "").split(",") if p.strip()]
+
+
+def _brief_for(cwd: str, session: str, repo: Path | None) -> Path | None:
+    art = artifacts_dir(cwd)
+    state = load_state(art, session)
+    if state and state.get("kind") == "provisional":
+        _maybe_promote(art, state)
+        save_state(art, state)
+    if state and state.get("kind") == "task":
+        return _brief_path(art, state)
+    branch = task_branch(repo)
+    task = task_for_branch(cwd, branch) if branch else None
+    return Path(task["brief"]) if task else None
+
+
+def record_pr(cwd: str, session: str, url: str, repo_name: str, repo: Path | None = None) -> dict | None:
+    """Record a PR; the task moves to review once every repository it touched has one."""
+    brief = _brief_for(cwd, session, repo)
+    if brief is None or not brief.is_file():
+        return None
+    text = brief.read_text(encoding="utf-8")
+    prs = _prs(text)
+    prs[repo_name] = url
+    text = _with_prs(text, prs)
+    repos = _list_field(text, "Repositories") or [repo_name]
+    if _get_field(text, "Status") == "open" and all(r in prs for r in repos):
+        text = _set_field(text, "Status", "review")
+    brief.write_text(text, encoding="utf-8")
+    return {"brief": str(brief), "status": _get_field(text, "Status"), "prs": prs}
+
+
+def _gh_state(url: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["gh", "pr", "view", url, "--json", "state", "-q", ".state"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def _release_claims(sessions: list[str]) -> None:
+    try:
+        import run_isolation
+    except Exception:  # noqa: BLE001 - claims also expire on their own
+        return
+    for sid in sessions:
+        try:
+            run_isolation.release_session(sid)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def lifecycle(cwd: str, *, force: bool = False, gh=_gh_state) -> list[dict]:
+    """Archive tasks in review whose PRs have all merged, and release their claims."""
+    art = artifacts_dir(cwd)
+    if not art.is_dir():
+        return []
+    in_review = [
+        brief for brief in sorted(art.glob("*/brief.md"))
+        if _get_field(brief.read_text(encoding="utf-8", errors="replace"), "Status") == "review"
+    ]
+    if not in_review:
+        return []
+    stamp = capture_dir(art) / "lifecycle.json"
+    try:
+        last = json.loads(stamp.read_text(encoding="utf-8")).get("at", 0)
+    except (OSError, ValueError, AttributeError):
+        last = 0
+    if not force and time.time() - last < LIFECYCLE_INTERVAL:
+        return []
+    changes = []
+    for brief in in_review:
+        text = brief.read_text(encoding="utf-8", errors="replace")
+        prs = _prs(text)
+        if _get_field(text, "Status") != "review" or not prs:
+            continue
+        states = [gh(url) for url in prs.values()]
+        if all(state == "MERGED" for state in states):
+            brief.write_text(_set_field(text, "Status", "archived"), encoding="utf-8")
+            _release_claims(_list_field(text, "Sessions"))
+            changes.append({"brief": str(brief), "status": "archived"})
+    _ensure_capture_dir(art)
+    stamp.write_text(json.dumps({"at": time.time()}), encoding="utf-8")
+    return changes
+
+
+def close_task(cwd: str, session: str) -> dict | None:
+    """Close the session's task by hand, for work that ends without a PR."""
+    brief = _brief_for(cwd, session, repo_of(cwd))
+    if brief is None or not brief.is_file():
+        return None
+    text = brief.read_text(encoding="utf-8")
+    brief.write_text(_set_field(text, "Status", "closed"), encoding="utf-8")
+    _release_claims(_list_field(text, "Sessions"))
+    return {"brief": str(brief), "status": "closed", "name": text.split("\n", 1)[0].lstrip("# ").strip()}
+
+
+def _command_dir(command: str, cwd: str) -> Path:
+    match = _CD_PREFIX.match(command)
+    if match:
+        target = Path(os.path.expanduser(next(g for g in match.groups() if g)))
+        return target if target.is_absolute() else Path(cwd) / target
+    return Path(cwd)
+
+
+def _discovery_check(cwd: str, session: str, repo: Path) -> None:
+    art = artifacts_dir(cwd)
+    state = load_state(art, session) or {}
+    task = state.get("key") or task_branch(repo) or f"session-{session[:8]}"
+    script = Path(__file__).resolve().parent / "discovery_dirty.py"
+    _spawn([sys.executable, str(script), "--repo", str(repo), "--task", task, "--project-root", str(art.parent)])
+
+
+def _spawn(argv: list[str]) -> None:
+    """Start a background job that outlives the hook and never holds the session."""
+    subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def mark_mod(session: str) -> None:
@@ -566,10 +729,24 @@ def hook(event: str, data: dict) -> str:
         if state and state.get("kind") == "task" and state.get("name") != data.get("session_title"):
             return _hook_output("UserPromptSubmit", title=state["name"])
         return ""
+    if event == "post-bash":
+        command = (data.get("tool_input") or {}).get("command") or ""
+        response = data.get("tool_response")
+        stdout = response.get("stdout", "") if isinstance(response, dict) else str(response or "")
+        where = _command_dir(command, cwd)
+        repo = repo_of(where)
+        if "gh pr create" in command:
+            match = _PR_URL.search(stdout)
+            if match:
+                record_pr(cwd, session, match.group(0), repo.name if repo else match.group(1), repo)
+        if "git commit" in command and repo is not None and _COMMIT_LINE.search(stdout):
+            _discovery_check(cwd, session, repo)
+        return ""
     if event == "session-start":
         source = data.get("source")
         if source not in ("startup", "resume"):
             return ""
+        _spawn([sys.executable, str(Path(__file__).resolve()), "lifecycle", "--cwd", cwd])
         art = artifacts_dir(cwd)
         state = load_state(art, session)
         task = None
@@ -617,8 +794,15 @@ def main(argv: list[str] | None = None) -> int:
     p_status.add_argument("--json", action="store_true")
     p_mark = sub.add_parser("mark-mod", help="record that the capture mod drives this session")
     p_mark.add_argument("--session", required=True)
+    p_pr = with_session(sub.add_parser("pr", help="record a PR opened for the session's task"))
+    p_pr.add_argument("--url", required=True)
+    p_pr.add_argument("--repo", default=None, help="the repository folder the PR is for (default: --cwd)")
+    with_session(sub.add_parser("done", help="close the session's task without a PR"))
+    p_life = sub.add_parser("lifecycle", help="archive tasks whose PRs have all merged")
+    p_life.add_argument("--cwd", default=os.getcwd())
+    p_life.add_argument("--force", action="store_true", help="ignore the 30-minute interval")
     p_hook = sub.add_parser("hook", help="settings-hook entry; hook input on stdin")
-    p_hook.add_argument("event", choices=["post-tool-use", "stop", "user-prompt-submit", "session-start"])
+    p_hook.add_argument("event", choices=["post-tool-use", "post-bash", "stop", "user-prompt-submit", "session-start"])
     args = parser.parse_args(argv)
 
     if args.cmd == "hook":
@@ -638,12 +822,25 @@ def main(argv: list[str] | None = None) -> int:
             print("No open tasks.")
         else:
             for task in tasks:
-                print(f"{task['name']}  ({task['key']})")
+                flag = " [in review]" if task["status"] == "review" else (" [stale]" if task["stale"] else "")
+                print(f"{task['name']}  ({task['key']}){flag}")
                 if task["last"]:
                     print(f"    {task['last'].lstrip('- ')}")
         return 0
     if args.cmd == "mark-mod":
         mark_mod(args.session)
+        return 0
+    if args.cmd == "lifecycle":
+        print(json.dumps(lifecycle(args.cwd, force=args.force)))
+        return 0
+    if args.cmd == "pr":
+        repo = repo_of(args.repo or args.cwd)
+        match = _PR_URL.search(args.url)
+        name = repo.name if repo else (match.group(1) if match else "repo")
+        print(json.dumps(record_pr(args.cwd, args.session, args.url, name, repo) or {}))
+        return 0
+    if args.cmd == "done":
+        print(json.dumps(close_task(args.cwd, args.session) or {}))
         return 0
 
     body = _read_stdin_json() if args.cmd in ("open", "journal", "task") else {}

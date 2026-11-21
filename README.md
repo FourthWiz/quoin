@@ -191,6 +191,26 @@ once its process is gone. `python3 ~/.local/share/quoin/plugin/core/scripts/run_
 lists a checkout's claims. This needs mods; without them sessions are not
 claimed.
 
+#### Inbox and task status
+
+Sessions are asked one question, whether they showed a reusable lesson or a
+standing rule for `CLAUDE.md` or `.claude/rules/`: over the conversation when
+it compacts or opens a PR, and, for sessions that ended without it (closed,
+killed or read-only, five prompts or more), over their transcript at the next
+session start on a small model. Answers land in
+`.workflow_artifacts/memory/inbox.md`, skipping anything already there or in
+`lessons-learned.md`. Nothing takes effect until you accept it: `/quoin-inbox`
+opens a pane where `a` accepts (appending to `lessons-learned.md` or the named
+instruction file) and `x` rejects.
+
+A task follows its PRs. `gh pr create` records the PR and moves the task to
+review once every repository it touched has one; at session start the plugin
+checks, in the background, whether those PRs have merged and archives the task
+and releases its claims. `/quoin-done` closes a task that ends without a PR,
+and a task with no PR and no activity for seven days shows as stale. Each
+`git commit` also runs the discovery check that marks the project map out of
+date when the structure changed.
+
 ## Runtime Support
 
 | Runtime | Setup command | Scope | Implemented behavior |
