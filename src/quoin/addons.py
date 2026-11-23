@@ -45,9 +45,7 @@ KNOWN: dict[str, Known] = {
         "opencode",
         "quoin-opencode",
         "OpenCode support",
-        "the OpenCode adapter and workctl",
-        available=False,
-        note="not yet ported to this quoin; install it from its repository when it is",
+        "quoin's skills and an open-model profile for OpenCode, plus the workctl broker",
     ),
 }
 

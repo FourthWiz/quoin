@@ -65,8 +65,9 @@ session through the plugin's SessionStart hook instead of `~/.claude/CLAUDE.md`.
 Restart Claude Code after an install or update.
 
 **Add-ons.** Some tools live in their own packages and repositories: the
-cockpit (Stream Deck panel, Agentdesk, dashboard, context-tracker pane) and,
-later, OpenCode support. `quoin install` asks whether to add each one; a yes
+cockpit (Stream Deck panel, Agentdesk, dashboard, context-tracker pane) and
+OpenCode support (quoin's skills and an open-model profile for OpenCode, plus
+workctl). `quoin install` asks whether to add each one; a yes
 pip-installs its package into the same environment and runs its own install.
 `quoin addons` lists them, `quoin addons install cockpit` adds one later,
 `--with-addon NAME[=SPEC]` chooses one without asking (SPEC is any pip

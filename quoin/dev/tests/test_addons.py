@@ -71,9 +71,11 @@ def test_a_spec_overrides_the_package(registry):
     assert calls[0][-1] == "git+https://example.com/quoin-cockpit"
 
 
-def test_unavailable_and_unknown_addons_are_refused_without_a_spec(registry):
+def test_unavailable_and_unknown_addons_are_refused_without_a_spec(registry, monkeypatch):
+    monkeypatch.setitem(addons.KNOWN, "later", addons.Known("later", "quoin-later", "Later", "x",
+                                                            available=False, note="not yet ported"))
     out = []
-    assert addons.install("opencode", runner=lambda a: pytest.fail("pip ran"), printer=out.append) == 2
+    assert addons.install("later", runner=lambda a: pytest.fail("pip ran"), printer=out.append) == 2
     assert "not yet ported" in out[-1]
     assert addons.install("nope", runner=lambda a: pytest.fail("pip ran"), printer=out.append) == 2
 
@@ -90,7 +92,7 @@ def test_status_lists_known_and_third_party_addons(registry):
     registry["cockpit"] = Point(FakeAddon())
     registry["extra"] = Point(FakeAddon(), "extra.addon:addon")
     rows = {r["name"]: r for r in addons.status()}
-    assert rows["cockpit"]["installed"] and not rows["opencode"]["available"]
+    assert rows["cockpit"]["installed"] and rows["opencode"]["available"] and not rows["opencode"]["installed"]
     assert rows["extra"]["note"] == "third-party"
 
 
@@ -102,8 +104,9 @@ def test_install_question_offers_available_addons_only(registry, monkeypatch):
     asked = []
     monkeypatch.setattr(cli.install_prompts, "is_interactive", lambda: True)
     monkeypatch.setattr(cli.install_prompts, "ask_yes_no", lambda q, default: asked.append((q, default)) or True)
-    assert cli._choose_addons(_args()) == (("cockpit", None),)
-    assert len(asked) == 1 and "Cockpit add-on" in asked[0][0] and asked[0][1] is False
+    assert cli._choose_addons(_args()) == (("cockpit", None), ("opencode", None))
+    assert len(asked) == 2 and "Cockpit add-on" in asked[0][0] and "OpenCode support add-on" in asked[1][0]
+    assert all(default is False for _, default in asked)
 
 
 def test_flags_decide_without_asking(registry, monkeypatch):
@@ -122,9 +125,10 @@ def test_non_interactive_install_asks_nothing(registry, monkeypatch):
 
 def test_an_installed_addon_is_refreshed_without_asking(registry, monkeypatch):
     registry["cockpit"] = Point(FakeAddon())
+    registry["opencode"] = Point(FakeAddon())
     monkeypatch.setattr(cli.install_prompts, "is_interactive", lambda: True)
     monkeypatch.setattr(cli.install_prompts, "ask_yes_no", lambda q, default: pytest.fail("asked"))
-    assert cli._choose_addons(_args()) == (("cockpit", None),)
+    assert cli._choose_addons(_args()) == (("cockpit", None), ("opencode", None))
 
 
 def test_addons_command_lists_and_removes(registry, capsys):

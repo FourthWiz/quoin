@@ -213,7 +213,8 @@ that must wait out a limit by themselves, keep using the supervisor from the
 ## Add-ons
 
 `quoin install` offers add-ons that live in their own packages (the cockpit:
-Stream Deck, Agentdesk, dashboard, context-tracker pane). `quoin addons` lists
+Stream Deck, Agentdesk, dashboard, context-tracker pane; OpenCode support:
+quoin's skills and an open-model profile for OpenCode). `quoin addons` lists
 them; `quoin addons install <name>` adds one later.
 
 ## Files

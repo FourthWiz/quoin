@@ -4,6 +4,10 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- **`quoin install` offers OpenCode support** (v0.106.0). The `opencode` add-on is now available: `quoin-opencode` 0.95.0, rebuilt as a small add-on, installs quoin's kept skills into OpenCode's global skills folder, writes a separate OpenCode profile for the open model (Qwen3 Coder through OpenRouter by default, read from `~/.config/quoin/open.json` when present) that `quoin-opencode run` launches with, and keeps the workctl broker. The old OpenCode pipeline engine stays on the `legacy` tag.
+
 ### Added
 
 - **Add-ons from their own packages** (v0.105.0). Tools split into their own repositories register an object in the `quoin.addons` entry-point group (`name`, `title`, `description`, `install(options)`, `remove()`). `quoin install` asks about each available add-on (the cockpit now; OpenCode is listed as not yet available), and for a yes pip-installs its package into the same environment and runs its own install; an add-on already installed is refreshed without asking. `--with-addon NAME[=SPEC]` chooses one without asking (SPEC is any pip requirement, so a git URL works before the package is on PyPI), `--no-addons` skips the question, and `quoin addons [install NAME[=SPEC] | remove NAME]` lists, adds or removes them later. A failed add-on install is reported without failing the core install.
