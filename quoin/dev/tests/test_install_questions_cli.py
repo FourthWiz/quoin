@@ -55,6 +55,7 @@ class Session:
             allow_hook_merge=True, runtime="claude", check=False,
             source_dir=str(QUOIN_SRC), force_merge=False, dev=False, use_pip=False,
             with_workflow_tasks=False, remove_workflow_tasks=False,
+            no_addons=True,
         )
         if scope == "project":
             ns["scope"] = f"project:{self.project}"

@@ -64,6 +64,14 @@ Skills are then named `/quoin:<skill>`, and the short workflow rules reach every
 session through the plugin's SessionStart hook instead of `~/.claude/CLAUDE.md`.
 Restart Claude Code after an install or update.
 
+**Add-ons.** Some tools live in their own packages and repositories: the
+cockpit (Stream Deck panel, Agentdesk, dashboard, context-tracker pane) and,
+later, OpenCode support. `quoin install` asks whether to add each one; a yes
+pip-installs its package into the same environment and runs its own install.
+`quoin addons` lists them, `quoin addons install cockpit` adds one later,
+`--with-addon NAME[=SPEC]` chooses one without asking (SPEC is any pip
+requirement, such as a git URL), and `--no-addons` skips the question.
+
 An earlier file-by-file install is removed on the way: every file its manifest
 lists goes unless you edited it, quoin's hook stanzas leave `settings.json`
 (other hooks stay), and the marked rules block leaves `~/.claude/CLAUDE.md`

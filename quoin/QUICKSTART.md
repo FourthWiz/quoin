@@ -210,6 +210,12 @@ that must wait out a limit by themselves, keep using the supervisor from the
   `.agents/skills/` for Codex and OpenCode.
 - `quoin/docs/native-coverage.md`: the monthly running list.
 
+## Add-ons
+
+`quoin install` offers add-ons that live in their own packages (the cockpit:
+Stream Deck, Agentdesk, dashboard, context-tracker pane). `quoin addons` lists
+them; `quoin addons install <name>` adds one later.
+
 ## Files
 
 - `~/.local/share/quoin/plugin/` — the staged plugin Claude Code loads: skills, hooks, scripts, memory guides

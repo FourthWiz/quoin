@@ -223,6 +223,7 @@ def _resolve_dest_root(args: argparse.Namespace) -> pathlib.Path:
 class _InstallAnswers(NamedTuple):
     wt_mode: Optional[str]
     warned_mods: Tuple[str, ...]
+    addons: Tuple[Tuple[str, Optional[str]], ...] = ()
 
 
 def _ask_install_questions(
@@ -270,7 +271,31 @@ def _ask_install_questions(
             ):
                 modes[mod.name] = "with"
                 warned.append(mod.name)
-    return _InstallAnswers(modes["workflow-tasks"], tuple(warned))
+    return _InstallAnswers(modes["workflow-tasks"], tuple(warned), _choose_addons(args))
+
+
+def _choose_addons(args: argparse.Namespace) -> Tuple[Tuple[str, Optional[str]], ...]:
+    """Add-ons named with --with-addon, plus those the person accepts when asked."""
+    from quoin import addons  # noqa: PLC0415
+
+    chosen = [addons.parse_choice(text) for text in (getattr(args, "with_addon", None) or [])]
+    if getattr(args, "no_addons", False) or not install_prompts.is_interactive():
+        return tuple(chosen)
+    named = {name for name, _ in chosen}
+    found = addons.discovered()
+    for known in addons.offered():
+        if known.name in named:
+            continue
+        if known.name in found:
+            chosen.append((known.name, None))
+            continue
+        if install_prompts.ask_yes_no(
+            f"Also install the {known.title} add-on ({known.description})? "
+            f"It is a separate package, {known.package}.",
+            default=False,
+        ):
+            chosen.append((known.name, None))
+    return tuple(chosen)
 
 
 def _cmd_claude_install(args: argparse.Namespace) -> int:
@@ -366,6 +391,14 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
     if args.dev:
         installer.install_dev_deps()
+
+    if answers.addons:
+        from quoin import addons  # noqa: PLC0415
+
+        for name, spec in answers.addons:
+            if addons.install(name, spec) != 0:
+                print(f"quoin: warning: the {name} add-on did not install; retry with 'quoin addons install {name}'",
+                      file=sys.stderr)
 
     print("Restart Claude Code to load the plugin; its skills are named /quoin:<skill>.")
     return 0
@@ -549,6 +582,26 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         return 1
 
     print("doctor: all checks passed")
+    return 0
+
+
+def _cmd_addons(args: argparse.Namespace) -> int:
+    """`quoin addons [install NAME[=SPEC] | remove NAME]`."""
+    from quoin import addons  # noqa: PLC0415
+
+    if args.addons_command == "install":
+        name, spec = addons.parse_choice(args.addon)
+        return addons.install(name, spec)
+    if args.addons_command == "remove":
+        addon = addons.load(args.addon)
+        if addon is None:
+            print(f"quoin: the {args.addon} add-on is not installed")
+            return 1
+        return int(addon.remove() or 0)
+    for row in addons.status():
+        state = "installed" if row["installed"] else ("available" if row["available"] else "not yet available")
+        note = f"; {row['note']}" if row["note"] and not row["installed"] else ""
+        print(f"{row['name']:<10} {state:<18} {row['package']}{note}")
     return 0
 
 
@@ -794,6 +847,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     install_p.add_argument(
+        "--with-addon",
+        action="append",
+        metavar="NAME[=SPEC]",
+        help=(
+            "Also install an add-on from its own package (repeatable), e.g. --with-addon cockpit. "
+            "SPEC is any pip requirement, such as a git URL, for an add-on not on PyPI yet. "
+            "'quoin addons' lists them."
+        ),
+    )
+    install_p.add_argument(
+        "--no-addons",
+        action="store_true",
+        help="Do not ask about add-ons.",
+    )
+    install_p.add_argument(
         "--with-workflow-tasks",
         action="store_true",
         default=False,
@@ -948,6 +1016,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Explicit-intent alias for reset; produces identical behaviour.",
     )
 
+    addons_p = sub.add_parser(
+        "addons",
+        description=(
+            "Optional add-ons that live in their own packages: list them, install one "
+            "(pip-installs its package into this environment, then runs its own install) "
+            "or remove one."
+        ),
+        help="List, install or remove add-ons (cockpit, opencode)",
+    )
+    addons_sub = addons_p.add_subparsers(dest="addons_command")
+    addons_install_p = addons_sub.add_parser("install", help="Install an add-on")
+    addons_install_p.add_argument("addon", metavar="NAME[=SPEC]")
+    addons_remove_p = addons_sub.add_parser("remove", help="Undo an add-on's own install")
+    addons_remove_p.add_argument("addon", metavar="NAME")
+
     open_p = sub.add_parser(
         "open",
         description=(
@@ -1046,6 +1129,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.models_command == "reset":
             return _models._cmd_models_reset(args)
         return _models._cmd_models_show(args)
+    elif args.command == "addons":
+        return _cmd_addons(args)
     elif args.command == "open":
         return _cmd_open(args)
     elif args.command == "run":
