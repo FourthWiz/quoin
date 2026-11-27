@@ -55,7 +55,9 @@ from pathlib import Path
 from typing import Optional
 
 from .. import proc_group
-from ..arm_identity import InitIdentityCheck
+from ..arm_identity import (
+    PLUGIN_SKILL_PREFIX, InitIdentityCheck, canonical_skills, uses_plugin_skills,
+)
 from .. import sequence_memory
 from ..config import (
     DISCOVERY_REFRESH_DISABLE_ENV, DISCOVERY_SKIPPING_ROUTES, RUN_PROFILE_ENV, BudgetSpec,
@@ -122,6 +124,7 @@ QUOIN_CLASS_RUN_PREFIX = (
     "follow its forced route, and do not fix the issue outside /run.\n\n"
 )
 ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
+PLUGIN_RUN_COMMAND = "/" + PLUGIN_SKILL_PREFIX + "run"
 
 
 def _route_session_env() -> dict:
@@ -136,14 +139,30 @@ def _route_session_env() -> dict:
     return env
 
 
-def _run_prefix() -> str:
+def _run_prefix(plugin: bool = False) -> str:
+    """The route's prompt prefix.
+
+    A plugin-era arm lists its skills as `quoin:<name>`, and a bare `/run`
+    there resolves to the CLI's own built-in `run` skill, so every mention of
+    the command names the plugin's skill instead.
+    """
     route = quoin_route_or_default()
     if route == "hard":
-        return QUOIN_HARD_RUN_PREFIX
-    if route == "r0":
-        return QUOIN_R0_RUN_PREFIX
-    forced = quoin_forced_class_or_none()
-    return QUOIN_CLASS_RUN_PREFIX.format(cls=forced) if forced else QUOIN_RUN_PREFIX
+        prefix = QUOIN_HARD_RUN_PREFIX
+    elif route == "r0":
+        prefix = QUOIN_R0_RUN_PREFIX
+    else:
+        forced = quoin_forced_class_or_none()
+        prefix = QUOIN_CLASS_RUN_PREFIX.format(cls=forced) if forced else QUOIN_RUN_PREFIX
+    return prefix.replace("/run", PLUGIN_RUN_COMMAND) if plugin else prefix
+
+
+def _arm_uses_plugin(arm_identity, arm_root: Optional[Path]) -> bool:
+    if arm_identity is not None:
+        return uses_plugin_skills(arm_identity.canonical)
+    if arm_root is not None:
+        return uses_plugin_skills(canonical_skills(arm_root))
+    return False
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
@@ -475,7 +494,13 @@ def invoke(
     # session cannot answer /run's interactive checkpoints, hence --autonomous.
     # The fixture clone's remote is stripped as belt-and-braces containment for
     # the /implement + /end_of_task capability --autonomous grants.
-    prompt = f"{_run_prefix()}{base_prompt}"
+    if quoin_install_script is None:
+        if quoin_repo_root:
+            quoin_install_script = quoin_repo_root / "quoin" / "install.sh"
+        else:
+            quoin_install_script = Path("quoin/install.sh")
+    resolved_arm_root = arm_root or quoin_install_script.resolve().parent.parent
+    prompt = f"{_run_prefix(_arm_uses_plugin(arm_identity, resolved_arm_root))}{base_prompt}"
 
     result: dict = {
         "prompt": prompt,
@@ -495,15 +520,7 @@ def invoke(
         "extra": {},
     }
 
-    # Resolve quoin install script path
-    if quoin_install_script is None:
-        if quoin_repo_root:
-            quoin_install_script = quoin_repo_root / "quoin" / "install.sh"
-        else:
-            quoin_install_script = Path("quoin/install.sh")
-
     gate_mode = _gate_mode()
-    resolved_arm_root = arm_root or quoin_install_script.resolve().parent.parent
 
     # Read the commit this arm's OWN worktree is actually at, BEFORE
     # installing anything (D-14's required assertion) — the worktree's HEAD

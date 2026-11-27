@@ -548,3 +548,40 @@ def test_quoin_rows_without_a_plan_are_invalid_and_never_judged(world, capsys):
     assert validity["valid"] is False
     assert "quoin arm did not run the pipeline in 3/3 sessions" in validity["invalid_reasons"]
     _no_leftovers(w)
+
+
+def _plugin_arm_repo(tmp_path):
+    """A git checkout of a plugin-era arm: an installer naming the plugin and the files it ships."""
+    root = tmp_path / "plugin_arm"
+    (root / "src" / "quoin").mkdir(parents=True)
+    (root / "src" / "quoin" / "installer.py").write_text(
+        'PLUGIN_NAME = "quoin"\nMARKETPLACE_NAME = "quoin"\nPLUGIN_ID = "quoin@quoin"\n'
+        'PLUGIN_PATHS = (".claude-plugin", "adapters/claude/skills", "hooks")\n'
+    )
+    src = root / "quoin"
+    (src / ".claude-plugin").mkdir(parents=True)
+    (src / ".claude-plugin" / "plugin.json").write_text('{"name": "quoin", "version": "1.0.0"}')
+    for name in ("run", "review", "run_hard"):
+        (src / "adapters" / "claude" / "skills" / name).mkdir(parents=True)
+        (src / "adapters" / "claude" / "skills" / name / "SKILL.md").write_text(name)
+    (src / "hooks").mkdir()
+    (src / "hooks" / "rules.sh").write_text("echo rules")
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "arm"]):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    return root, head
+
+
+def test_a_plugin_arm_runs_through_the_plugin_run_skill(world):
+    w = world
+    root, head = _plugin_arm_repo(w["tmp"])
+    assert _run(w, "--skip-judge", **{"--arm-root": str(root), "--expected-quoin-commit": head}) == 0
+    starts = _starts(w)
+    quoin = [s for s in starts if _arm_of(s) == "quoin-claude"]
+    plain = [s for s in starts if _arm_of(s) == "simple-claude"]
+    assert len(quoin) == len(plain) == len(w["tasks"])
+    assert all(s["argv"][-1].startswith("/quoin:run --autonomous ") for s in quoin)
+    assert all("/quoin:run" not in s["argv"][-1] for s in plain)
+    _no_leftovers(w)

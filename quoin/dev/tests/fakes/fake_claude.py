@@ -141,6 +141,26 @@ opts.update(scenario.get("runs", {}).get(str(run_no), {}))
 config = os.environ["CLAUDE_CONFIG_DIR"]
 skills_dir = os.path.join(config, "skills")
 skills = sorted(os.listdir(skills_dir)) if os.path.isdir(skills_dir) else []
+# An installed plugin's skills are listed under its namespace, loaded from the
+# directory marketplace when one is registered.
+registry_path = os.path.join(config, "plugins", "installed_plugins.json")
+try:
+    registry = json.load(open(registry_path)).get("plugins") or {}
+except (OSError, ValueError, AttributeError):
+    registry = {}
+try:
+    markets = json.load(open(os.path.join(config, "plugins", "known_marketplaces.json")))
+except (OSError, ValueError):
+    markets = {}
+plugins = []
+for plugin_id, entries in sorted(registry.items()):
+    name, _, market = plugin_id.partition("@")
+    install = entries[0].get("installPath") if entries else None
+    skill_root = os.path.join(install or "", "adapters", "claude", "skills")
+    if os.path.isdir(skill_root):
+        skills += sorted(name + ":" + d for d in os.listdir(skill_root))
+    plugins.append({"name": name, "source": plugin_id,
+                    "path": (markets.get(market) or {}).get("installLocation") or install})
 arm = "quoin" if skills else "plain"
 
 
@@ -163,14 +183,15 @@ else:
     for event_name in sorted((settings.get("hooks") or {})):
         emit({"type": "system", "subtype": "hook_started", "hook_event": event_name})
     emit({"type": "system", "subtype": "init", "apiKeySource": "none",
-          "skills": skills + ["run", "debug", "code-review"], "plugins": [], "mcp_servers": [],
+          "skills": skills + ["run", "debug", "code-review"], "plugins": plugins, "mcp_servers": [],
           "memory_paths": {"auto": os.path.join(os.path.realpath(config), "projects", "p", "memory") + "/"},
           "claude_code_version": "0.0.0"})
 
 # State a real CLI session leaves in its config directory.
 os.makedirs(os.path.join(config, "plugins"), exist_ok=True)
 json.dump([], open(os.path.join(config, "plugins", "blocklist.json"), "w"))
-json.dump({"version": 2, "plugins": {}}, open(os.path.join(config, "plugins", "installed_plugins.json"), "w"))
+if not os.path.exists(registry_path):
+    json.dump({"version": 2, "plugins": {}}, open(registry_path, "w"))
 json.dump({"numStartups": 1}, open(os.path.join(config, ".claude.json"), "w"))
 os.makedirs(os.path.join(config, "projects", "p"), exist_ok=True)
 open(os.path.join(config, "projects", "p", "session.jsonl"), "w").write("{}\n")

@@ -205,9 +205,49 @@ def test_install_refuses_bad_tree_without_running(tmp_path):
     assert dirty["ok"] is False and "dirty-tree" in dirty["reason"]
 
 
-def test_plugin_shaped_tree_is_refused():
-    problems = sb.check_arm_tree(REPO_ROOT, "stub")
-    assert any(p.startswith("plugin-arm:") for p in problems), problems
+def test_plugin_tree_installs_into_the_sandbox_config_dir(tmp_path):
+    root, head = _stand_in_repo(tmp_path)
+    box = sb.create_sandbox("quoin", parent=tmp_path)
+    seen = {}
+
+    def fake_run(argv, env=None, **_kw):
+        seen["argv"], seen["env"] = argv, env
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    result = sb.install_quoin(box, root, head, run=fake_run)
+    assert result["ok"] is True
+    assert seen["argv"][-4:] == ["--source-dir", str(root / "quoin"), "--scope", "user"]
+    assert seen["env"]["HOME"] == str(box.home)
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == str(box.claude_dir)
+
+
+def test_plugin_fingerprint_tracks_installed_plugin_files(tmp_path):
+    claude = tmp_path / ".claude"
+    install = claude / "plugins" / "cache" / "quoin" / "quoin" / "1"
+    (install / "hooks").mkdir(parents=True)
+    (install / "hooks" / "rules.sh").write_text("a")
+    empty = sb.plugin_fingerprint(claude)
+    (claude / "plugins" / "installed_plugins.json").write_text('{"version": 2, "plugins": {}}')
+    assert sb.plugin_fingerprint(claude) == empty
+    (claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"plugins": {"quoin@quoin": [{"scope": "user", "installPath": str(install)}]}}
+    ))
+    before = sb.plugin_fingerprint(claude)
+    assert before != empty
+    assert sb.plugin_fingerprint(claude) == before
+    (install / "hooks" / "rules.sh").write_text("b")
+    assert sb.plugin_fingerprint(claude) != before
+    stage = tmp_path / "stage"
+    (stage / "scripts").mkdir(parents=True)
+    (stage / "scripts" / "s.py").write_text("a")
+    (claude / "plugins" / "known_marketplaces.json").write_text(
+        json.dumps({"quoin": {"installLocation": str(stage)}}))
+    with_market = sb.plugin_fingerprint(claude)
+    (stage / "scripts" / "__pycache__").mkdir()
+    (stage / "scripts" / "__pycache__" / "s.pyc").write_bytes(b"0")
+    assert sb.plugin_fingerprint(claude) == with_market
+    (stage / "scripts" / "s.py").write_text("b")
+    assert sb.plugin_fingerprint(claude) != with_market
 
 
 def test_remove_sandbox(tmp_path):

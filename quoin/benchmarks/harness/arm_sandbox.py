@@ -138,12 +138,6 @@ def check_arm_tree(arm_root: Path, expected_commit: str) -> List[str]:
         problems.append("dirty-tree: git status failed")
     elif paths:
         problems.append("dirty-tree: " + ", ".join(paths[:5]))
-    installer = gate._load_arm_installer(arm_root)
-    if installer is not None and not hasattr(installer, "CANONICAL_SKILLS"):
-        problems.append(
-            "plugin-arm: this tree installs quoin as a Claude Code plugin; the harness "
-            "installs pre-plugin trees only (pass --arm-root of a checkout of the legacy tag)"
-        )
     return problems
 
 
@@ -160,6 +154,9 @@ def install_quoin(sandbox: Sandbox, arm_root: Path, expected_commit: str, *,
                 "stdout_tail": "", "stderr_tail": "", "installed_commit": None}
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
     env["HOME"] = str(sandbox.home)
+    # A plugin-era installer runs `claude plugin ...`, which writes to the
+    # config directory the sessions will read; pin it to the sandbox's.
+    env["CLAUDE_CONFIG_DIR"] = str(sandbox.claude_dir)
     env["PYTHONPATH"] = str(Path(arm_root) / "src")
     argv = [python, "-m", "quoin", "install", "--source-dir", str(Path(arm_root) / "quoin"),
             "--scope", "user"]
@@ -321,6 +318,60 @@ def config_fingerprint(claude_dir: Path) -> str:
         pass
     picked = {key: settings[key] for key in _IDENTITY_SETTINGS_KEYS if key in settings}
     digest.update(json.dumps(picked, sort_keys=True).encode())
+    return digest.hexdigest()
+
+
+def _hash_plugin_tree(digest, label: str, location) -> None:
+    digest.update(f"{label}\0{location}\n".encode())
+    if not location:
+        return
+    root = Path(location)
+    if os.path.islink(root) or not root.is_dir():
+        return
+    for path in _identity_files(root):
+        rel = path.relative_to(root)
+        # Interpreter caches written beside a plugin's scripts are not the arm.
+        if "__pycache__" in rel.parts or path.suffix == ".pyc":
+            continue
+        size, sha = _entry_digest(path)
+        digest.update(f"{rel}\0{size}\0{sha}\n".encode())
+
+
+def plugin_fingerprint(claude_dir: Path) -> str:
+    """Hash of every installed plugin's files and every registered marketplace's files.
+
+    For a plugin-era quoin arm the skills, hooks and scripts live in the
+    plugin's install path and in the directory marketplace a session loads it
+    from, rather than in the identity directories that `config_fingerprint`
+    reads, so a change in either is a change of arm.
+    """
+    claude_dir = Path(claude_dir)
+    digest = hashlib.sha256()
+    try:
+        known = json.loads((claude_dir / "plugins" / "known_marketplaces.json").read_text())
+    except (OSError, ValueError):
+        known = {}
+    if isinstance(known, dict):
+        for name in sorted(known):
+            entry = known[name]
+            location = entry.get("installLocation") if isinstance(entry, dict) else None
+            _hash_plugin_tree(digest, f"marketplace:{name}", location)
+    # The CLI writes an empty registry on its first session, so a missing file
+    # and an empty one are the same arm.
+    path = claude_dir / "plugins" / "installed_plugins.json"
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {"plugins": {}}
+    except (OSError, ValueError):
+        data = None
+    plugins = data.get("plugins") if isinstance(data, dict) else "<unparsable>"
+    if not isinstance(plugins, dict):
+        digest.update(json.dumps(plugins, sort_keys=True, default=str).encode())
+        return digest.hexdigest()
+    for plugin_id in sorted(plugins):
+        entries = plugins[plugin_id] if isinstance(plugins[plugin_id], list) else [plugins[plugin_id]]
+        for entry in entries:
+            install = entry.get("installPath") if isinstance(entry, dict) else None
+            _hash_plugin_tree(digest, plugin_id, install)
     return digest.hexdigest()
 
 
