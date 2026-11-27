@@ -63,6 +63,36 @@ def test_route_env_selects_heavy_pipeline_prefix(monkeypatch):
     assert quoin_claude._run_prefix().startswith("/run --autonomous hard: small: ")
 
 
+def test_plugin_arm_names_the_plugin_run_skill_on_every_route(monkeypatch):
+    # In a plugin-era arm a bare /run is the CLI's own built-in `run` skill.
+    for route in (None, "hard", "r0", "lean"):
+        if route is None:
+            monkeypatch.delenv(quoin_claude.ENV_BENCH_ROUTE, raising=False)
+        else:
+            monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, route)
+        legacy = quoin_claude._run_prefix()
+        plugin = quoin_claude._run_prefix(plugin=True)
+        assert plugin.startswith("/quoin:run --autonomous ")
+        assert "/run" not in plugin
+        assert plugin.replace("/quoin:run", "/run") == legacy
+
+
+def test_plugin_arm_identity_selects_the_plugin_prompt(tmp_path):
+    from quoin.benchmarks.harness import arm_identity as ai
+
+    canonical = ("quoin:run",)
+    identity = ai.ArmIdentity(mode=ai.QUOIN_REQUIRED, config_dir=None, canonical=canonical,
+                              distinctive=ai.distinctive_quoin_skills(canonical),
+                              arm_config_mode="symmetric")
+    init = dict(INIT, skills=["run", "quoin:run"])
+    bin_dir = make_fake_claude(tmp_path, {"steps": [{"emit": init}, {"emit": RESULT}]})
+    _invoke(quoin_claude, tmp_path, bin_dir, cap=5.5, session_env=_session_env(bin_dir),
+            arm_identity=identity)
+    prompt = read_log(bin_dir)[0]["argv"][-1]
+    assert prompt.startswith("/quoin:run --autonomous This session")
+    assert prompt.endswith(_build_prompt(TASK))
+
+
 def test_r0_route_forces_the_plain_r0_route_with_a_short_prompt(monkeypatch):
     monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "r0")
     assert quoin_claude._run_prefix() == quoin_claude.QUOIN_R0_RUN_PREFIX

@@ -1159,7 +1159,6 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
         RUN_PROFILE_ENV, BudgetSpec, HarnessConfig, quoin_forced_class_or_none, quoin_route,
     )
     from quoin.benchmarks.harness.session_state import is_judge_pending
-    from quoin.benchmarks.scripts import run_three_arm_gate as gate
     from quoin.benchmarks.scripts.check_invariants import check_invariants
 
     tasks, tier_names, tiered, cap = pre.tasks, pre.tier_names, pre.tiered, pre.cap
@@ -1189,8 +1188,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             install = arm_sandbox.install_quoin(quoin_box, arm_root, expected)
             if not install.get("ok"):
                 return _refuse("quoin-install", str(install.get("reason")))
-            installer = gate._load_arm_installer(arm_root)
-            canonical = tuple(installer.CANONICAL_SKILLS) if installer is not None else ()
+            canonical = arm_identity.canonical_skills(arm_root)
             plain_problems = arm_identity.check_plain_sandbox(plain.home)
             if plain_problems:
                 return _refuse(arm_identity.PLAIN_REASON, "; ".join(plain_problems))
@@ -1215,6 +1213,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             }
             plain_print = arm_sandbox.config_fingerprint(plain.claude_dir)
             quoin_print = arm_sandbox.config_fingerprint(quoin_box.claude_dir)
+            quoin_plugin_print = arm_sandbox.plugin_fingerprint(quoin_box.claude_dir)
 
             def recheck_plain():
                 out = []
@@ -1228,6 +1227,8 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
                 out = []
                 if arm_sandbox.config_fingerprint(quoin_box.claude_dir) != quoin_print:
                     out.append("quoin config directory changed since the install")
+                if arm_sandbox.plugin_fingerprint(quoin_box.claude_dir) != quoin_plugin_print:
+                    out.append("installed plugins changed since the install")
                 return out
 
             configs = {

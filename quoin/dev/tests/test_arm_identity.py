@@ -270,3 +270,173 @@ def test_expected_set_is_the_constant_not_the_source_tree():
     # A stray source directory (a sync-conflict copy) does not change what is expected.
     assert set(_canonical()) <= on_disk | set(_canonical())
     assert not (stray & set(_canonical()))
+
+
+def _plugin_arm(tmp_path):
+    """A minimal plugin-era arm: an installer naming the plugin and its runtime paths."""
+    arm = tmp_path / "parm"
+    (arm / "src" / "quoin").mkdir(parents=True)
+    (arm / "src" / "quoin" / "installer.py").write_text(
+        'PLUGIN_ID = "quoin@quoin"\n'
+        'PLUGIN_PATHS = (".claude-plugin", "adapters/claude/skills", "hooks")\n'
+    )
+    src = arm / "quoin"
+    (src / ".claude-plugin").mkdir(parents=True)
+    (src / ".claude-plugin" / "plugin.json").write_text('{"name": "quoin", "version": "1.0.0"}')
+    for name in ("run", "review"):
+        (src / "adapters" / "claude" / "skills" / name).mkdir(parents=True)
+        (src / "adapters" / "claude" / "skills" / name / "SKILL.md").write_text(name)
+    (src / "adapters" / "claude" / "skills" / "notes").mkdir()
+    (src / "hooks").mkdir()
+    (src / "hooks" / "rules.sh").write_text("echo rules")
+    (src / "dev").mkdir()
+    (src / "dev" / "not-shipped.txt").write_text("x")
+    return arm
+
+
+def _plugin_home(tmp_path, arm):
+    """A sandbox home laid out as `quoin install` and `claude plugin install` leave it."""
+    import shutil
+
+    home = tmp_path / "phome"
+    claude = home / ".claude"
+    stage = home / ".local" / "share" / "quoin" / "plugin"
+    install = claude / "plugins" / "cache" / "quoin" / "quoin" / "1.0.0-abc"
+    for copy in (stage, install):
+        for rel in (".claude-plugin", "adapters/claude/skills", "hooks"):
+            shutil.copytree(arm / "quoin" / rel, copy / rel)
+        (copy / ".claude-plugin" / "plugin.json").write_text('{"name": "quoin", "version": "1.0.0+abc"}')
+    (claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"quoin@quoin": [{"scope": "user", "installPath": str(install)}]}}
+    ))
+    (claude / "plugins" / "known_marketplaces.json").write_text(json.dumps(
+        {"quoin": {"source": {"source": "directory", "path": str(stage)}, "installLocation": str(stage)}}
+    ))
+    (claude / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {"quoin@quoin": True},
+        "extraKnownMarketplaces": {"quoin": {"source": {"source": "directory", "path": str(stage)}}},
+    }))
+    return home, install
+
+
+def test_plugin_tree_canonical_names_are_namespaced(tmp_path):
+    arm = _plugin_arm(tmp_path)
+    assert ai.canonical_skills(arm) == ("quoin:review", "quoin:run")
+    assert ai.uses_plugin_skills(ai.canonical_skills(arm))
+    # Namespaced names never collide with the CLI's own skills.
+    assert ai.distinctive_quoin_skills(ai.canonical_skills(arm)) == {"quoin:review", "quoin:run"}
+    assert ai.canonical_skills(LEGACY_ARM) == _canonical()
+    assert not ai.uses_plugin_skills(_canonical())
+    repo = ai.canonical_skills(REPO_ROOT)
+    assert "quoin:run" in repo and all(name.startswith("quoin:") for name in repo)
+
+
+def test_plugin_sandbox_passes_and_detects_problems(tmp_path):
+    arm = _plugin_arm(tmp_path)
+    home, install = _plugin_home(tmp_path, arm)
+    assert ai.check_quoin_sandbox(home, arm) == []
+
+    (install / "hooks" / "rules.sh").write_text("echo changed")
+    assert any("differ" in p for p in ai.check_quoin_sandbox(home, arm))
+    (install / "hooks" / "rules.sh").write_text("echo rules")
+    (install / "adapters" / "claude" / "skills" / "run" / "SKILL.md").unlink()
+    assert any("missing" in p for p in ai.check_quoin_sandbox(home, arm))
+
+
+def test_plugin_sandbox_checks_the_marketplace_copy_and_manifest(tmp_path):
+    arm = _plugin_arm(tmp_path)
+    home, install = _plugin_home(tmp_path, arm)
+    stage = home / ".local" / "share" / "quoin" / "plugin"
+    (stage / "hooks" / "rules.sh").write_text("echo changed")
+    assert any(p.startswith("marketplace copy: plugin files differ") for p in ai.check_quoin_sandbox(home, arm))
+    (stage / "hooks" / "rules.sh").write_text("echo rules")
+    (install / ".mcp.json").write_text("{}")
+    assert any("does not ship: .mcp.json" in p for p in ai.check_quoin_sandbox(home, arm))
+    (install / ".mcp.json").unlink()
+    (install / ".claude-plugin" / "plugin.json").write_text(
+        '{"name": "quoin", "version": "9", "mcpServers": {"x": {}}}')
+    assert any("plugin.json differs" in p for p in ai.check_quoin_sandbox(home, arm))
+    (install / ".claude-plugin" / "plugin.json").write_text('{"name": "quoin", "version": "2.0.0+zz"}')
+    (install / "hooks" / "__pycache__").mkdir()
+    (install / "hooks" / "__pycache__" / "x.pyc").write_bytes(b"0")
+    assert ai.check_quoin_sandbox(home, arm) == []
+
+
+def test_plugin_sandbox_requires_enabled_in_sandbox_install(tmp_path):
+    arm = _plugin_arm(tmp_path)
+    home, install = _plugin_home(tmp_path, arm)
+    settings = home / ".claude" / "settings.json"
+    original = settings.read_text()
+    settings.write_text(json.dumps({"enabledPlugins": {"quoin@quoin": False}}))
+    assert any("does not enable" in p for p in ai.check_quoin_sandbox(home, arm))
+    settings.write_text(json.dumps({"enabledPlugins": {"quoin@quoin": True, "other@m": True}}))
+    assert any("unexpected plugins" in p for p in ai.check_quoin_sandbox(home, arm))
+    assert ai.check_quoin_sandbox(home, arm, exact=False) == []
+    settings.write_text(original)
+    registry = home / ".claude" / "plugins" / "installed_plugins.json"
+    data = json.loads(registry.read_text())
+    data["plugins"]["other@m"] = [{"scope": "user", "installPath": str(install)}]
+    registry.write_text(json.dumps(data))
+    assert any("unexpected plugins installed: other@m" in p for p in ai.check_quoin_sandbox(home, arm))
+    del data["plugins"]["other@m"]
+    registry.write_text(json.dumps(data))
+    known = home / ".claude" / "plugins" / "known_marketplaces.json"
+    markets = json.loads(known.read_text())
+    known.write_text(json.dumps(dict(markets, evil={"installLocation": "/x"})))
+    assert any("unexpected marketplaces registered: evil" in p for p in ai.check_quoin_sandbox(home, arm))
+    known.write_text(json.dumps(markets))
+    elsewhere = tmp_path / "elsewhere"
+    import shutil
+
+    shutil.copytree(install, elsewhere)
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"plugins": {"quoin@quoin": [{"scope": "user", "installPath": str(elsewhere)}]}}
+    ))
+    assert any("outside the sandbox" in p for p in ai.check_quoin_sandbox(home, arm))
+
+
+def test_plugin_sandbox_flags_user_level_skills(tmp_path):
+    arm = _plugin_arm(tmp_path)
+    home, _ = _plugin_home(tmp_path, arm)
+    (home / ".claude" / "skills" / "run").mkdir(parents=True)
+    assert any("unexpected skills: run" in p for p in ai.check_quoin_sandbox(home, arm))
+    assert ai.check_quoin_sandbox(home, arm, exact=False) == []
+    assert ai.extra_skills(home, arm) == ["run"]
+
+
+def test_init_check_accepts_plugin_skill_names(tmp_path):
+    canonical = ("quoin:review", "quoin:run")
+    identity = ai.ArmIdentity(
+        mode=ai.QUOIN_REQUIRED, config_dir=None, canonical=canonical,
+        distinctive=ai.distinctive_quoin_skills(canonical), arm_config_mode="symmetric",
+    )
+    init = {"type": "system", "subtype": "init", "skills": ["run", "review", "quoin:run"]}
+    check = ai.InitIdentityCheck(identity)
+    assert check.observe(init) == ai.QUOIN_REASON
+    assert "quoin:review" in check.detail
+    check = ai.InitIdentityCheck(identity)
+    assert check.observe(dict(init, skills=["run", "quoin:run", "quoin:review"])) is None
+    plain = ai.InitIdentityCheck(ai.ArmIdentity(
+        mode=ai.QUOIN_FREE, config_dir=None, canonical=canonical,
+        distinctive=ai.distinctive_quoin_skills(canonical), arm_config_mode="symmetric",
+    ))
+    assert plain.observe(dict(init, skills=["run", "quoin:run"])) == ai.PLAIN_REASON
+
+
+def test_init_check_requires_the_quoin_plugin_from_the_sandbox(tmp_path):
+    canonical = ("quoin:run",)
+    box = tmp_path / "box"
+    identity = ai.ArmIdentity(
+        mode=ai.QUOIN_REQUIRED, config_dir=box / ".claude", canonical=canonical,
+        distinctive=ai.distinctive_quoin_skills(canonical), arm_config_mode="symmetric",
+    )
+    builtin = {"name": "cc-plugin-x", "path": "builtin", "source": "cc-plugin-x@builtin"}
+    ours = {"name": "quoin", "path": str(box / ".local" / "share" / "quoin" / "plugin")}
+    init = {"type": "system", "subtype": "init", "skills": ["quoin:run"], "plugins": [ours, builtin]}
+    assert ai.InitIdentityCheck(identity).observe(init) is None
+    check = ai.InitIdentityCheck(identity)
+    assert check.observe(dict(init, plugins=[ours, {"name": "other", "path": str(box)}])) == ai.QUOIN_REASON
+    assert check.detail == "unexpected-plugin:other"
+    check = ai.InitIdentityCheck(identity)
+    assert check.observe(dict(init, plugins=[{"name": "quoin", "path": "/operator/plugin"}])) == ai.QUOIN_REASON
+    assert check.detail.startswith("plugin-loaded-outside-sandbox")
